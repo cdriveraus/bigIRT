@@ -3,17 +3,15 @@ if(FALSE){
   dat <- bigIRT:::IRTsim(Nsubs = 100,Nitems = 100,Nscales = 1)
 
   #fit using combined approach by fixing ability sd (fixed discrimination parameters, so 1pl model)
-  fitc <- bigIRT:::fitIRT(dat$dat,Adata = c(dat$A),AbilitySD=1,cores=1)
+  system.time(fitc <- bigIRT:::fitIRT(dat$dat,Adata = c(dat$A),AbilitySD=1,cores=1))
   plot(fitc$pars$B,dat$B)
   abline(0,1)
   plot(fitc$pars$A,dat$A)
   plot(c(fitc$pars$Ability),dat$Ability)
 
-  #fix ability to 0 then estimate with max likelihood (no prior)
-  fit <- bigIRT:::fitIRT(dat$dat,Adata = c(dat$A),BSD = 1000,Abilitydata = matrix(0,nrow(dat$Ability),ncol(dat$Ability)),cores=1)
-  fit <- bigIRT:::fitIRT(dat$dat,Adata = c(dat$A),Bdata = fit$pars$B,AbilitySD=1000,cores=1)
-  fit <- bigIRT:::fitIRT(dat$dat,Adata = c(dat$A),BSD = 1000,Abilitydata = fit$pars$Ability,cores=1)
 
+  #fit using joint approach by fixing ability sd (fixed discrimination parameters, so 1pl model)
+  system.time(fit <- bigIRT:::fitIRT(dat$dat,Adata = c(dat$A),AbilitySD=1,cores=1,jml=TRUE))
   plot(fit$pars$B,dat$B)
   abline(0,1)
   plot(fit$pars$A,dat$A)
@@ -66,7 +64,7 @@ if(FALSE){
 #'
 #' @examples
 fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',Adata=NA,Bdata=NA,Abilitydata=NA,
-  AMean=1,ASD=0.001,BMean=0,BSD=1000, AbilityMean=0,AbilitySD=1,iter=2000,cores=6){
+  AMean=1,ASD=0.001,BMean=0,BSD=1000, AbilityMean=0,AbilitySD=1,iter=2000,cores=6,jml=FALSE){
 
 
   if(all(is.na(Adata))) Adata <- array(numeric(),dim=c(0))
@@ -89,5 +87,26 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',Adata=
     AMean=AMean,ASD=ASD,BMean=BMean,BSD=BSD,AbilityMean=AbilityMean,AbilitySD=AbilitySD,
     fixedA=as.integer(length(Adata > 0)),fixedB=as.integer(length(Bdata > 0)),fixedAbility=as.integer(length(Abilitydata > 0)))
 
-  optimIRT(sm = bigIRT:::stanmodels$`2pl`,standata=sdat,Niter=iter,cores=cores)
+
+  if(!jml){
+    fit <- optimIRT(sm = bigIRT:::stanmodels$`2pl`,standata=sdat,Niter=iter,cores=cores)
+  } else {
+    #fix ability to 0 then estimate with max likelihood (no prior)
+    sdat$Abilitydata = matrix(0,sdat$Nsubs,sdat$Nscales)
+    sdat$fixedAbility = 1L
+    fit <- optimIRT(sm = bigIRT:::stanmodels$`2pl`,standata=sdat,Niter=iter,cores=cores)
+    sdat$fixedAbility = 0L
+    sdat$fixedB = 1L
+    sdat$Bdata <- fit$pars$B
+    sdat$Abilitydata <- Abilitydata
+    fit <- optimIRT(sm = bigIRT:::stanmodels$`2pl`,standata=sdat,Niter=iter,cores=cores)
+    sdat$fixedB = 0L
+    sdat$fixedAbility = 1L
+    sdat$Bdata <- Bdata
+    sdat$Abilitydata <- fit$pars$Ability
+    fit <- optimIRT(sm = bigIRT:::stanmodels$`2pl`,standata=sdat,Niter=iter,cores=cores)
+  }
+
+  return(fit)
+
 }

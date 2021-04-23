@@ -497,7 +497,7 @@ public:
                             "assigning variable AbilityNobs");
             }
             current_statement_begin__ = 61;
-            stan::math::assign(p, elt_divide(1.0, add(1.0, stan::math::exp(elt_multiply(stan::model::rvalue(A, stan::model::cons_list(stan::model::index_multi(stan::model::rvalue(item, stan::model::cons_list(stan::model::index_min_max(start, end), stan::model::nil_index_list()), "item")), stan::model::nil_index_list()), "A"), add(AbilityNobs, stan::model::rvalue(B, stan::model::cons_list(stan::model::index_multi(stan::model::rvalue(item, stan::model::cons_list(stan::model::index_min_max(start, end), stan::model::nil_index_list()), "item")), stan::model::nil_index_list()), "B")))))));
+            stan::math::assign(p, elt_divide(1.0, add(1.0, stan::math::exp(elt_multiply(stan::model::rvalue(A, stan::model::cons_list(stan::model::index_multi(stan::model::rvalue(item, stan::model::cons_list(stan::model::index_min_max(start, end), stan::model::nil_index_list()), "item")), stan::model::nil_index_list()), "A"), subtract(AbilityNobs, stan::model::rvalue(B, stan::model::cons_list(stan::model::index_multi(stan::model::rvalue(item, stan::model::cons_list(stan::model::index_min_max(start, end), stan::model::nil_index_list()), "item")), stan::model::nil_index_list()), "B")))))));
             current_statement_begin__ = 67;
             stan::model::assign(p, 
                         stan::model::cons_list(stan::model::index_multi(correct), stan::model::nil_index_list()), 
@@ -735,7 +735,7 @@ public:
                             "assigning variable AbilityNobs");
             }
             current_statement_begin__ = 61;
-            stan::math::assign(p, elt_divide(1.0, add(1.0, stan::math::exp(elt_multiply(stan::model::rvalue(A, stan::model::cons_list(stan::model::index_multi(stan::model::rvalue(item, stan::model::cons_list(stan::model::index_min_max(start, end), stan::model::nil_index_list()), "item")), stan::model::nil_index_list()), "A"), add(AbilityNobs, stan::model::rvalue(B, stan::model::cons_list(stan::model::index_multi(stan::model::rvalue(item, stan::model::cons_list(stan::model::index_min_max(start, end), stan::model::nil_index_list()), "item")), stan::model::nil_index_list()), "B")))))));
+            stan::math::assign(p, elt_divide(1.0, add(1.0, stan::math::exp(elt_multiply(stan::model::rvalue(A, stan::model::cons_list(stan::model::index_multi(stan::model::rvalue(item, stan::model::cons_list(stan::model::index_min_max(start, end), stan::model::nil_index_list()), "item")), stan::model::nil_index_list()), "A"), subtract(AbilityNobs, stan::model::rvalue(B, stan::model::cons_list(stan::model::index_multi(stan::model::rvalue(item, stan::model::cons_list(stan::model::index_min_max(start, end), stan::model::nil_index_list()), "item")), stan::model::nil_index_list()), "B")))))));
             current_statement_begin__ = 67;
             stan::model::assign(p, 
                         stan::model::cons_list(stan::model::index_multi(correct), stan::model::nil_index_list()), 
