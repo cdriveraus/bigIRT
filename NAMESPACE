@@ -1,0 +1,4 @@
+import(Rcpp)
+import(methods)
+importFrom(rstan, sampling)
+useDynLib(bigIRT, .registration = TRUE)
