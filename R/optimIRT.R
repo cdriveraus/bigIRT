@@ -72,7 +72,7 @@ optimIRT <- function(sm, standata, cores=6, split=TRUE,verbose=1,plot=10,Niter=2
 
   singletarget<-function(parm,gradnoise=TRUE) {
     a=Sys.time()
-    out<- try(log_prob(smf,upars=parm,adjust_transform=TRUE,gradient=TRUE),silent = FALSE)
+    out<- try(rstan::log_prob(smf,upars=parm,adjust_transform=TRUE,gradient=TRUE),silent = FALSE)
 
     if('try-error' %in% class(out) || is.nan(out)) {
       out=-1e100
@@ -191,7 +191,7 @@ optimIRT <- function(sm, standata, cores=6, split=TRUE,verbose=1,plot=10,Niter=2
   }
 
 
-  if(cores==1) npars=get_num_upars(smf) else npars=parallel::clusterCall(clms,function(x) eval(parse(text='rstan::get_num_upars(smf)')))[[1]]
+  if(cores==1) npars=rstan::get_num_upars(smf) else npars=parallel::clusterCall(clms,function(x) eval(parse(text='rstan::get_num_upars(smf)')))[[1]]
   init=rnorm(npars,0,.01)
   #target(init)
 

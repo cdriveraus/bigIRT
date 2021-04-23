@@ -1,5 +1,21 @@
 
 # Nsubs=100;Nitems=200;Nscales=3;ASD=0;AMean=1;BSD=1;BMean=0;AbilitySD=1;AbilityMean=1
+#' Title
+#'
+#' @param Nsubs
+#' @param Nitems
+#' @param Nscales
+#' @param ASD
+#' @param AMean
+#' @param BSD
+#' @param BMean
+#' @param AbilitySD
+#' @param AbilityMean
+#'
+#' @return
+#' @export
+#'
+#' @examples
 IRTsim <- function(Nsubs=100,Nitems=200,Nscales=3,ASD=0,AMean=1,BSD=1,BMean=0,AbilitySD=1,AbilityMean=0){
 
   Ability <- matrix(rnorm(Nsubs*Nscales,AbilityMean,AbilitySD),Nsubs)

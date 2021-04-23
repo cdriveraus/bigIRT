@@ -1,38 +1,70 @@
 if(FALSE){
-dat <- bigIRT:::IRTsim(Nsubs = 1000,Nitems = 1000,Nscales = 1)
-library(rstan)
-#combined
-fitc <- bigIRT:::fitIRT(dat$dat,Adata = rep(1,1000),cores=6)
-plot(fitc$pars$B,-dat$B)
-abline(0,1)
-plot(fitc$pars$A,dat$A)
-plot(c(fitc$pars$Ability),dat$Ability)
-#fix ability first
-fit <- bigIRT:::fitIRT(dat$dat,Adata = rep(1,1000),Abilitydata = matrix(0,1000,1),cores=6)
-fit <- bigIRT:::fitIRT(dat$dat,Adata = rep(1,1000),Bdata = fit$pars$B,cores=6)
-plot(fit$pars$B,-dat$B)
-abline(0,1)
-plot(fit$pars$A,dat$A)
-plot(c(fit$pars$Abilitypars),dat$Ability)
-abline(0,1)
-#comparison of combined vs step approach
-plot(fitc$pars$B,-dat$B)
-points(fit$pars$B,-dat$B,col='red')
-abline(a = 0,b=1)
+  #Generate some data
+  dat <- bigIRT:::IRTsim(Nsubs = 100,Nitems = 100,Nscales = 1)
 
-plot(dat$Ability,(fitc$pars$Ability-dat$Ability)^2)
-points(dat$Ability,(fit$pars$Ability-dat$Ability)^2,col='red')
-abline(a = 0,b=1)
-sqrt(mean((fitc$pars$Ability-dat$Ability)^2)) #rms error combined
-sqrt(mean((fit$pars$Ability-dat$Ability)^2)) #vs step
+  #fit using combined approach by fixing ability sd (fixed discrimination parameters, so 1pl model)
+  fitc <- bigIRT:::fitIRT(dat$dat,Adata = c(dat$A),AbilitySD=1,cores=1)
+  plot(fitc$pars$B,dat$B)
+  abline(0,1)
+  plot(fitc$pars$A,dat$A)
+  plot(c(fitc$pars$Ability),dat$Ability)
+
+  #fix ability to 0 then estimate with max likelihood (no prior)
+  fit <- bigIRT:::fitIRT(dat$dat,Adata = c(dat$A),BSD = 1000,Abilitydata = matrix(0,nrow(dat$Ability),ncol(dat$Ability)),cores=1)
+  fit <- bigIRT:::fitIRT(dat$dat,Adata = c(dat$A),Bdata = fit$pars$B,AbilitySD=1000,cores=1)
+  fit <- bigIRT:::fitIRT(dat$dat,Adata = c(dat$A),BSD = 1000,Abilitydata = fit$pars$Ability,cores=1)
+
+  plot(fit$pars$B,dat$B)
+  abline(0,1)
+  plot(fit$pars$A,dat$A)
+  plot(c(fit$pars$Ability),dat$Ability)
+  abline(0,1)
+
+  #comparison of combined vs step approach
+  plot(fitc$pars$B,dat$B)
+  points(fit$pars$B,dat$B,col='red')
+  abline(a = 0,b=1)
+
+  #error vs ability
+  plot(dat$Ability,(fitc$pars$Ability-dat$Ability)^2)
+  points(dat$Ability,(fit$pars$Ability-dat$Ability)^2,col='red')
+
+  sqrt(mean((fitc$pars$Ability-dat$Ability)^2)) #rms error combined
+  sqrt(mean((fit$pars$Ability-dat$Ability)^2)) #vs step
+
+  #correlations
+  cor(data.frame(True=dat$Ability,Combined=fitc$pars$Ability,Stepwise=fit$pars$Ability))
 
 
 
-score='score'; item='Item'; scale='Scale';Adata=c();Bdata=c();Abilitydata=c();
+  score='score'; item='Item'; scale='Scale';Adata=c();Bdata=c();Abilitydata=c();
   AMean=1;ASD=0;BMean=0;BSD=1000; AbilityMean=0;AbilitySD=1;iter=2000;cores=6;id='id'
 
 }
 
+#' Title
+#'
+#' @param dat
+#' @param score
+#' @param id
+#' @param item
+#' @param scale
+#' @param Adata
+#' @param Bdata
+#' @param Abilitydata
+#' @param AMean
+#' @param ASD
+#' @param BMean
+#' @param BSD
+#' @param AbilityMean
+#' @param AbilitySD
+#' @param iter
+#' @param cores
+#'
+#' @return
+#' @export
+#'
+#' @examples
 fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',Adata=NA,Bdata=NA,Abilitydata=NA,
   AMean=1,ASD=0.001,BMean=0,BSD=1000, AbilityMean=0,AbilitySD=1,iter=2000,cores=6){
 

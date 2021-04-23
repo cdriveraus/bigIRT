@@ -60,7 +60,7 @@ transformed parameters{
 
   p= 1.0 ./ ( 1.0 + exp(
     (A[item[start:end]] .* (
-      AbilityNobs+
+      AbilityNobs-
       B[item[start:end]]
       ))));
 
