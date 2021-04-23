@@ -12,5 +12,38 @@
 #'
 #' @references
 #' Stan Development Team (NA). RStan: the R interface to Stan. R package version 2.26.1. https://mc-stan.org
+#'@examples
+#' #Generate some data
+#'  abline(0,1)
+#'  dat <- bigIRT:::IRTsim(Nsubs = 100,Nitems = 100,Nscales = 1)
 #'
+#'  #fit using combined approach by fixing ability sd (fixed discrimination parameters, so 1pl model)
+#'  system.time(fitc <- bigIRT:::fitIRT(dat$dat,Adata = c(dat$A),AbilitySD=1,cores=1))
+#'  plot(fitc$pars$B,dat$B)
+#'  abline(0,1)
+#'  plot(fitc$pars$A,dat$A)
+#'  plot(c(fitc$pars$Ability),dat$Ability)
+#'
+#'
+#'  #fit using joint approach by fixing ability sd (fixed discrimination parameters, so 1pl model)
+#'  system.time(fit <- bigIRT:::fitIRT(dat$dat,Adata = c(dat$A),AbilitySD=1,cores=1,jml=TRUE))
+#'  plot(fit$pars$B,dat$B)
+#'  abline(0,1)
+#'  plot(fit$pars$A,dat$A)
+#'  plot(c(fit$pars$Ability),dat$Ability)
+#'
+#'  #comparison of combined vs step approach
+#'  plot(fitc$pars$B,dat$B)
+#'  points(fit$pars$B,dat$B,col='red')
+#'  abline(a = 0,b=1)
+#'
+#'  #error vs ability
+#'  plot(dat$Ability,(fitc$pars$Ability-dat$Ability)^2)
+#'  points(dat$Ability,(fit$pars$Ability-dat$Ability)^2,col='red')
+#'
+#'  sqrt(mean((fitc$pars$Ability-dat$Ability)^2)) #rms error combined
+#'  sqrt(mean((fit$pars$Ability-dat$Ability)^2)) #vs step
+#'
+#'  #correlations
+#'  cor(data.frame(True=dat$Ability,Combined=fitc$pars$Ability,Stepwise=fit$pars$Ability))
 NULL
