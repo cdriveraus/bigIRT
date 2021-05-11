@@ -16,11 +16,13 @@
 #' @export
 #'
 #' @examples
-IRTsim <- function(Nsubs=100,Nitems=200,Nscales=3,ASD=0,AMean=1,BSD=1,BMean=0,AbilitySD=1,AbilityMean=0){
+IRTsim <- function(Nsubs=100,Nitems=200,Nscales=3,ASD=0,AMean=1,BSD=1,BMean=0,logitCSD=1,logitCMean=-2,AbilitySD=1,AbilityMean=0){
 
   Ability <- matrix(rnorm(Nsubs*Nscales,AbilityMean,AbilitySD),Nsubs)
   A <- matrix(rnorm(Nitems*Nscales,AMean,ASD),Nitems)
   B <- matrix(rnorm(Nitems*Nscales,BMean,BSD),Nitems)
+  logitC <- matrix(rnorm(Nitems*Nscales,logitCMean,logitCSD),Nitems)
+  C <- ctsem:::inv_logit(logitC)
 
 
   for(si in 1:Nscales){
@@ -32,9 +34,10 @@ IRTsim <- function(Nsubs=100,Nitems=200,Nscales=3,ASD=0,AMean=1,BSD=1,BMean=0,Ab
       A = rep(A[,si],times=Nsubs),B=rep(B[,si],times=Nsubs),
       pcorrect=0,score=0)
 
-    simdat$p=1-1/(1+exp(
-      A[simdat$Item-(si-1)*Nitems,si] * (#discrimination of item=
-        Ability[simdat$id,si] - #ability
+    simdat$p= C[simdat$Item-(si-1)*Nitems,si]+
+      (1-C[simdat$Item-(si-1)*Nitems,si]) / (1+exp(
+      -A[simdat$Item-(si-1)*Nitems,si] * #discrimination of item=
+        (Ability[simdat$id,si] - #ability
         B[simdat$Item-(si-1)*Nitems,si]) #item difficulty
     ))
 simdat$score <- rbinom(n = simdat$p,size = 1,
@@ -42,5 +45,5 @@ simdat$score <- rbinom(n = simdat$p,size = 1,
 
 if(si==1) dat <- simdat else dat <- rbind(dat,simdat)
   }
-  return(list(Ability=Ability,A=A,B=B, dat=dat))
+  return(list(Ability=Ability,A=A,B=B, C=C,dat=dat))
 }

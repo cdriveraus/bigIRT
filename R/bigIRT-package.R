@@ -13,37 +13,32 @@
 #' @references
 #' Stan Development Team (NA). RStan: the R interface to Stan. R package version 2.26.1. https://mc-stan.org
 #'@examples
-#' #Generate some data
-#'  abline(0,1)
-#'  dat <- bigIRT:::IRTsim(Nsubs = 100,Nitems = 100,Nscales = 1)
+#' #Generate some data (here 2pl model
+#' require(data.table)
+#' dat <- bigIRT:::IRTsim(Nsubs = 5000,Nitems = 100,Nscales = 1,
+#'   logitCMean = -10,logitCSD = 0,AMean = 1,ASD = .3,
+#'   BMean=0,BSD = .5,
+#'   AbilityMean = 0,AbilitySD = 1)
 #'
-#'  #fit using combined approach by fixing ability sd (fixed discrimination parameters, so 1pl model)
-#'  system.time(fitc <- bigIRT:::fitIRT(dat$dat,Adata = c(dat$A),AbilitySD=1,cores=1))
-#'  plot(fitc$pars$B,dat$B)
-#'  abline(0,1)
-#'  plot(fitc$pars$A,dat$A)
-#'  plot(c(fitc$pars$Ability),dat$Ability)
+#' #convert to wide for TAM
+#' wdat <- data.frame(dcast(data.table(dat$dat),formula = 'id ~ Item',value.var='score')[,-1])
 #'
 #'
-#'  #fit using joint approach by fixing ability sd (fixed discrimination parameters, so 1pl model)
-#'  system.time(fit <- bigIRT:::fitIRT(dat$dat,Adata = c(dat$A),AbilitySD=1,cores=1,jml=TRUE))
-#'  plot(fit$pars$B,dat$B)
-#'  abline(0,1)
-#'  plot(fit$pars$A,dat$A)
-#'  plot(c(fit$pars$Ability),dat$Ability)
+#' #fit using TAM
+#' require(TAM)
+#' tfit <-tam.mml.2pl(resp = wdat,est.variance = TRUE)
 #'
-#'  #comparison of combined vs step approach
-#'  plot(fitc$pars$B,dat$B)
-#'  points(fit$pars$B,dat$B,col='red')
-#'  abline(a = 0,b=1)
 #'
-#'  #error vs ability
-#'  plot(dat$Ability,(fitc$pars$Ability-dat$Ability)^2)
-#'  points(dat$Ability,(fit$pars$Ability-dat$Ability)^2,col='red')
+#' #fit using bigIRT
+#' fit <- fitIRT(dat$dat,cores=2,pl=2)
 #'
-#'  sqrt(mean((fitc$pars$Ability-dat$Ability)^2)) #rms error combined
-#'  sqrt(mean((fit$pars$Ability-dat$Ability)^2)) #vs step
+#' #some summary stuff:
+#' plot(dat$Ability,(fit$pars$Ability-dat$Ability)^2) #ability error given ability
+#' sqrt(mean((fit$pars$Ability-dat$Ability)^2)) #rms error stat
 #'
-#'  #correlations
-#'  cor(data.frame(True=dat$Ability,Combined=fitc$pars$Ability,Stepwise=fit$pars$Ability))
+#' #correlations of estimated vs true
+#' cor(data.frame(True=dat$Ability,Est=fit$pars$Ability))
+#' cor(data.frame(True=dat$A,Est=fit$pars$A))
+#' cor(data.frame(True=dat$B,Est=fit$pars$B))
+#'
 NULL

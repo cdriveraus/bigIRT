@@ -12,6 +12,8 @@ IRTsim(
   AMean = 1,
   BSD = 1,
   BMean = 0,
+  logitCSD = 1,
+  logitCMean = -2,
   AbilitySD = 1,
   AbilityMean = 0
 )

@@ -15,7 +15,8 @@ Roxygen: list(markdown = TRUE)
 RoxygenNote: 7.1.1
 Biarch: true
 Depends: 
-    R (>= 3.4.0)
+    R (>= 3.4.0),
+    data.table
 Imports: 
     methods,
     Rcpp (>= 0.12.0),
@@ -24,7 +25,8 @@ Imports:
     rstantools (>= 2.1.1),
     mize,
     ctsem,
-    parallel
+    parallel,
+    data.table
 LinkingTo: 
     BH (>= 1.66.0),
     Rcpp (>= 0.12.0),

@@ -10,26 +10,59 @@ fitIRT(
   id = "id",
   item = "Item",
   scale = "Scale",
+  pl = 1,
   Adata = NA,
   Bdata = NA,
+  Cdata = NA,
   Abilitydata = NA,
-  AMean = 1,
-  ASD = 0.001,
-  BMean = 0,
-  BSD = 1000,
-  AbilityMean = 0,
-  AbilitySD = 1,
+  AMeandat = 1,
+  ASD = 1,
+  BMeandat = 0,
+  BSD = 2,
+  logitCMeandat = -2,
+  logitCSD = 1,
+  AbilityMeandat = array(0, dim = c(length(unique(dat[[scale]])))),
+  AbilitySD = array(2, dim = c(length(unique(dat[[scale]])))),
+  AMeanSD = 0.01,
+  BMeanSD = BSD,
+  logitCMeanSD = logitCSD,
+  AbilityMeanSD = array(0.01, dim = c(length(unique(dat[[scale]])))),
   iter = 2000,
   cores = 6,
-  jml = FALSE
+  carefulfit = TRUE,
+  ebayes = TRUE,
+  ebayesmultiplier = 2,
+  estMeans = FALSE,
+  priors = TRUE,
+  ...
 )
 }
 \arguments{
-\item{cores}{}
+\item{...}{}
 }
 \value{
 
 }
 \description{
 Title
+}
+\examples{
+#Generate some data (here 2pl model
+require(data.table)
+dat <- bigIRT:::IRTsim(Nsubs = 5000,Nitems = 100,Nscales = 1,
+  logitCMean = -10,logitCSD = 0,AMean = 1,ASD = .3,
+  BMean=0,BSD = .5,
+  AbilityMean = 0,AbilitySD = 1)
+
+#convert to wide for TAM
+wdat <- data.frame(dcast(data.table(dat$dat),formula = 'id ~ Item',value.var='score')[,-1])
+
+
+#fit using TAM
+require(TAM)
+tfit <-tam.mml.2pl(resp = wdat,est.variance = TRUE)
+
+
+#fit using bigIRT
+fit <- fitIRT(dat$dat,cores=2,pl=2)
 }
