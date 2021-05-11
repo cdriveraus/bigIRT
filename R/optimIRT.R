@@ -1,3 +1,16 @@
+#ctsem functions
+stan_reinitsf <- function(model, data,fast=FALSE){
+  if(fast) sf <- new(model@mk_cppmodule(model),data,0L,getcxxfun(model@dso))
+
+  if(!fast) suppressMessages(suppressWarnings((sf<-
+      rstan::sampling(model,iter=0,chains=0,init=0,data=data,check_data=FALSE,
+        control=list(max_treedepth=0),save_warmup=FALSE,test_grad=FALSE))))
+
+  return(sf)
+}
+
+
+
 
 standata_specificsubjects <- function(standata, subindices){
   standata$start <- as.integer(min(subindices))
@@ -5,11 +18,27 @@ standata_specificsubjects <- function(standata, subindices){
   return(standata)
 }
 
+makeClusterID <- function(cores){
+  benv <- new.env(parent=globalenv())
+  benv$cores <- cores
+  benv$cl <- parallel::makeCluster(spec = cores,type = "PSOCK",useXDR=FALSE,outfile='',user=NULL)
+  eval(parse(text=
+      "parallel::parLapply(cl = cl,X = 1:cores,function(x) assign('nodeid',x,env=globalenv()))"),envir = benv)
+  return(benv$cl)
+}
+
+clusterIDexport <- function(cl, vars){
+  benv <- new.env(parent=globalenv())
+  benv$cl <- cl
+  lookframe <- parent.frame()
+  tmp<-lapply(vars,function(x) benv[[x]] <<- eval(parse(text=x),env=lookframe))
+  eval(parallel::clusterExport(benv$cl,vars,benv),envir=globalenv())
+}
+
 clusterIDeval <- function(cl,commands){
-  ctsem:::clusterIDexport(cl,c('commands'))
-  # print(system.time(
+    clusterIDexport(cl,c('commands'));
+    rm(commands)
     out <- parallel::clusterEvalQ(cl = cl,eval(parse(text=paste0(commands,collapse=';'))))
-    # ))
   return(out)
 }
 
@@ -62,7 +91,7 @@ optimIRT <- function(standata, cores=6, split=TRUE,
 
   if(cores==1){
     target = singletarget #we use this for importance sampling
-    smf <- ctsem:::stan_reinitsf(stanmodels$`2pl`,standata)
+    smf <- stan_reinitsf(stanmodels$`2pl`,standata)
   }
 
   if(cores > 1){ #for parallelised computation after fitting, if only single subject
@@ -92,13 +121,13 @@ optimIRT <- function(standata, cores=6, split=TRUE,
       "if(length(stanindices[[nodeid]]) < length(unique(standata[[splitby]]))) standata <- standata_specificsubjects(standata,stanindices[[nodeid]])",
       "if(!1 %in% stanindices[[nodeid]]) standata$dopriors <- 0L",
       "g = eval(parse(text=paste0('gl','obalenv()')))", #avoid spurious cran check -- assigning to global environment only on created parallel workers.
-      "assign('smf',ctsem:::stan_reinitsf(bigIRT:::stanmodels$`2pl`,standata),pos = g)",
+      "assign('smf',bigIRT:::stan_reinitsf(bigIRT:::stanmodels$`2pl`,standata),pos = g)",
       "NULL"
     )
-    cl <- ctsem:::makeClusterID(cores)
+    cl <- makeClusterID(cores)
     on.exit(try({parallel::stopCluster(cl)},silent=TRUE),add=TRUE)
     environment(parlp) <- environment(standata_specificsubjects) <- globalenv()
-    system.time(ctsem:::clusterIDexport(cl,c('cores','parlp','splitby','standata','stanindices','standata_specificsubjects')))
+    system.time(clusterIDexport(cl,c('cores','parlp','splitby','standata','stanindices','standata_specificsubjects')))
     system.time(clusterIDeval(cl,parcommands))
 
 # parallel::clusterExport(benv$clms,c('standata','splitby','standata_specificsubjects','parlp','stanindices','commands'),envir = benv)
@@ -110,7 +139,7 @@ storedLp <- c()
 
 target<-function(parm,gradnoise=TRUE){
   a=Sys.time()
-  ctsem:::clusterIDexport(cl,'parm')
+  clusterIDexport(cl,'parm')
   # parallel::clusterExport(benv$clms,varlist = 'parm',envir = environment())
   out2<- parallel::clusterEvalQ(cl,parlp(parm))
 
@@ -194,7 +223,7 @@ target<-function(parm,gradnoise=TRUE){
     }
 
     if(stochastic){
-      optimfit <- ctsem:::sgd(
+      optimfit <- sgd(
         init,
         fitfunc = target,
         itertol = 1e-3,
@@ -211,7 +240,7 @@ target<-function(parm,gradnoise=TRUE){
   # fit=optimfit
 
   try({parallel::stopCluster(clms)},silent=TRUE)
-  smf <- ctsem:::stan_reinitsf(stanmodels$`2pl`,standata)
+  smf <- stan_reinitsf(stanmodels$`2pl`,standata)
   return(list(optim=optimfit,stanfit=smf,pars=rstan::constrain_pars(object = smf, optimfit$par),dat=standata))
 
 }

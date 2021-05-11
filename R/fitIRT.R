@@ -4,12 +4,12 @@ if(FALSE){
   #Generate some data
   require(data.table)
   dat <- bigIRT:::IRTsim(Nsubs = 5000,Nitems = 100,Nscales = 1,
-    logitCMean = -10,logitCSD = .003,AMean = 1,ASD = .3,
+    logitCMean = -1,logitCSD = .3,AMean = 1,ASD = .3,
     BMean=0,BSD = .5,
     AbilityMean = 0,AbilitySD = 1)
   cdat<-dat
   wdat <- data.frame(dcast(data.table(dat$dat),formula = 'id ~ Item',value.var='score')[,-1])
-  pl=2
+  pl=3
 
   # #mirt
   # require(mirt)
@@ -342,7 +342,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     for(i in 1:length(JMLseq)){
       if(!is.null(JMLseq[[i]])){
         if(JMLseq[[i]]$ebayes %in% 'TRUE') fitML <- fit #store fit before ebayes step
-        stochastic <- TRUE#(i == length(JMLseq))
+        stochastic <- F#(i == length(JMLseq))
         fit <- JMLfit(est = JMLseq[[i]]$est,sdat = sdat, ebayes=JMLseq[[i]]$ebayes,
           fit = fit,stochastic=stochastic,
           narrowPriors = JMLseq[[i]]$narrowPriors,...)
