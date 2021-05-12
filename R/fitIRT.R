@@ -30,7 +30,7 @@ if(FALSE){
 
 
   # empirical bayes estimates for regularized final pass
-  fit <- fitIRT(dat$dat,cores=6,pl=pl,plot=F)
+  fit <- fitIRT(dat$dat,cores=6,pl=pl,plot=F,verbose=1,priors=T)
 
 
 
@@ -169,12 +169,12 @@ if(FALSE){
 #' fit <- fitIRT(dat$dat,cores=2,pl=2)
 fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   Adata=NA,Bdata=NA,Cdata=NA,Abilitydata=NA,
-  AMeandat=1,ASD=1,BMeandat=0,BSD=2, logitCMeandat=-2,logitCSD=1,
+  AMeandat=1,ASD=5,BMeandat=0,BSD=10, logitCMeandat=-2,logitCSD=10,
   AbilityMeandat=array(0,dim=c(length(unique(dat[[scale]])))),
-  AbilitySD=array(2,dim=c(length(unique(dat[[scale]])))),
+  AbilitySD=array(10,dim=c(length(unique(dat[[scale]])))),
   AMeanSD=.01,BMeanSD=BSD,logitCMeanSD=logitCSD,
   AbilityMeanSD=array(.01,dim=c(length(unique(dat[[scale]])))),
-  iter=2000,cores=6,carefulfit=TRUE,ebayes=TRUE,ebayesmultiplier=2,estMeans=FALSE,priors=TRUE,...){
+  iter=2000,cores=6,carefulfit=TRUE,ebayes=TRUE,ebayesmultiplier=2,estMeans=FALSE,priors=TRUE,outlierfix=TRUE,...){
 
 
   #add obs counts
@@ -202,6 +202,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     Nscales=Nscales,
     id=as.integer(factor(dat[[id]])),
     dopriors=as.integer(priors||ebayes),
+    outlierfix=as.integer(outlierfix),
     start=1L,
     end=as.integer(nrow(dat)),
     score=array(as.integer(dat[[score]])),
@@ -229,7 +230,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
 
       if('A' %in% est){
         if(all(!is.na(fit))) init <- c(init,fit$pars$A)
-        if(!all(!is.na(fit))) init <- c(init,rnorm(sdat$Nitems,1,.1))
+        if(!all(!is.na(fit))) init <- c(init,rnorm(sdat$Nitems,1,.2))
       } else {
         if(all(is.na(fit))) sdat$Adata = rep(1,sdat$Nitems)
         if(!all(is.na(fit))) sdat$Adata = fit$pars$A
@@ -238,7 +239,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
 
       if('B' %in% est){
         if(all(!is.na(fit))) init <- c(init,fit$pars$B)
-        if(!all(!is.na(fit))) init <- c(init,rnorm(sdat$Nitems,0,.1))
+        if(!all(!is.na(fit))) init <- c(init,rnorm(sdat$Nitems,0,.5))
       } else {
         if(all(is.na(fit))) sdat$Bdata = rep(0,sdat$Nitems)
         if(!all(is.na(fit))) sdat$Bdata = fit$pars$B
@@ -247,7 +248,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
 
       if('C' %in% est){
         if(all(!is.na(fit))) init <- c(init,logit(fit$pars$C+1e-8))
-        if(!all(!is.na(fit))) init <- c(init,rnorm(sdat$Nitems,0,.1))
+        if(!all(!is.na(fit))) init <- c(init,rnorm(sdat$Nitems,0,.5))
       } else {
         if(all(is.na(fit))) sdat$Cdata = rep(0,sdat$Nitems)
         if(!all(is.na(fit))) sdat$Cdata = fit$pars$C
@@ -256,7 +257,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
 
       if('Ability' %in% est){
         if(all(!is.na(fit))) init <- c(init,fit$pars$Ability)
-        if(!all(!is.na(fit))) init <- c(init,rnorm(sdat$Nscales * sdat$Nsubs,0,.1))
+        if(!all(!is.na(fit))) init <- c(init,rnorm(sdat$Nscales * sdat$Nsubs,0,.5))
       } else {
         if(all(is.na(fit))) sdat$Abilitydata = matrix(0,sdat$Nsubs,sdat$Nscales)
         if(!all(is.na(fit))) sdat$Abilitydata = fit$pars$Ability
@@ -277,6 +278,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
 
 
         sdat$dopriors <- 1L
+        sdat$outlierfix <- 0L
 
         # sdat$AMeandat <- mean(fit$pars$A)
         sdat$ASD <- sd(fit$pars$A[goodItems])*ebayesmultiplier
@@ -295,9 +297,9 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
       if(narrowPriors){
         sdat$dopriors <- 1L
         sdat$ASD <- .5
-        sdat$BSD <- 2
-        sdat$logitCSD <- 2
-        sdat$AbilitySD <- array(2,sdat$Nscales)
+        sdat$BSD <- 1
+        sdat$logitCSD <- 1
+        sdat$AbilitySD <- array(1,sdat$Nscales)
       }
 
       if(length(init)==0) init <- NA
@@ -309,25 +311,25 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
       fit$pars$Ability <- fit$pars$Ability / mean(fit$pars$A)
       fit$pars$A <- fit$pars$A / mean(fit$pars$A)
 
-      # try({
-      #   par(mfrow=c(2,2))
-      #   # plot(cdat$A,mitem[,1],col='blue',pch=16)
-      #   plot(cdat$A,fit$pars$A)
-      #   points(cdat$A,tfit$item_irt$alpha,col='red')
-      #   abline(0,1,col='green',lwd=2)
-      #   # plot(cdat$B,-mitem[,2],col='blue',pch=16)
-      #   plot(cdat$B,fit$pars$B)
-      #   points(cdat$B,tfit$item_irt$beta,col='red')
-      #   abline(0,1,col='green',lwd=2)
-      #   # plot(cdat$C,mitem[,3],col='blue',pch=16)
-      #   plot(cdat$C,fit$pars$C,ylim=c(0,1))
-      #   points(cdat$C,tfit$guess,col='red')
-      #   abline(0,1,col='green',lwd=2)
-      #   # plot(cdat$Ability,mability,col='blue',pch=16)
-      #   plot(cdat$Ability,fit$pars$Ability)
-      #   points(cdat$Ability,tfit$person$EAP,col='red')
-      #   abline(0,1,col='green',lwd=2)
-      # })
+      try({
+        par(mfrow=c(2,2))
+        # plot(cdat$A,mitem[,1],col='blue',pch=16)
+        plot(cdat$A,fit$pars$A)
+        points(cdat$A,tfit$item_irt$alpha,col='red')
+        abline(0,1,col='green',lwd=2)
+        # plot(cdat$B,-mitem[,2],col='blue',pch=16)
+        plot(cdat$B,fit$pars$B)
+        points(cdat$B,tfit$item_irt$beta,col='red')
+        abline(0,1,col='green',lwd=2)
+        # plot(cdat$C,mitem[,3],col='blue',pch=16)
+        plot(cdat$C,fit$pars$C,ylim=c(0,1))
+        points(cdat$C,tfit$guess,col='red')
+        abline(0,1,col='green',lwd=2)
+        # plot(cdat$Ability,mability,col='blue',pch=16)
+        plot(cdat$Ability,fit$pars$Ability)
+        points(cdat$Ability,tfit$person$EAP,col='red')
+        abline(0,1,col='green',lwd=2)
+      })
 
       return(fit)
     }

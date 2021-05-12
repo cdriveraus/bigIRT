@@ -25,6 +25,7 @@ data{
 
   //priors
   int dopriors;
+  int outlierfix;
   real ASD;
   real BSD;
   real logitCSD;
@@ -98,22 +99,27 @@ model{
     if(!fixedA){
       Apars ~ normal(AMean,ASD);
       mean(Apars) ~ normal(AMean, AMeanSD);
+      if(outlierfix) ((Apars-AMean)/sd(Apars)) ~ normal(0,2);
     }
     if(!fixedB){
       Bpars ~ normal(BMean,BSD);
       mean(Bpars) ~ normal(BMean, BMeanSD);
+      if(outlierfix) ((Bpars-BMean)/sd(Bpars)) ~ normal(0,2);
     }
     if(!fixedC){
       logitCpars ~ normal(logitCMean,logitCSD);
       mean(logitCpars) ~ normal(logitCMean, logitCMeanSD);
+      if(outlierfix) ((logitCpars-logitCMean)/sd(logitCpars)) ~ normal(0,2);
     }
     if(!fixedAbility) {
       for(i in 1:(Nscales)){
         Abilitypars[,i] ~ normal(AbilityMean[i],AbilitySD[i]);
         mean(Ability[,i]) ~ normal(AbilityMean[i],AbilityMeanSD[i]);
+        if(outlierfix) ((Abilitypars[,i]-AbilityMean[i])/sd(Abilitypars[,i])) ~ normal(0,2);
       }
     }
   }
+
 }
 generated quantities{
   vector[end-start+1] pcorrect;
