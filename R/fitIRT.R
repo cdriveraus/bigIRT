@@ -132,17 +132,32 @@ if(FALSE){
 #' @param id
 #' @param item
 #' @param scale
+#' @param pl
 #' @param Adata
 #' @param Bdata
+#' @param Cdata
 #' @param Abilitydata
 #' @param AMeandat
 #' @param ASD
 #' @param BMeandat
 #' @param BSD
+#' @param logitCMeandat
+#' @param logitCSD
 #' @param AbilityMeandat
 #' @param AbilitySD
+#' @param AMeanSD
+#' @param BMeanSD
+#' @param logitCMeanSD
+#' @param AbilityMeanSD
 #' @param iter
 #' @param cores
+#' @param carefulfit
+#' @param ebayes
+#' @param ebayesmultiplier
+#' @param estMeans
+#' @param priors
+#' @param outlierfix
+#' @param normalise
 #' @param ...
 #'
 #' @return
@@ -166,7 +181,8 @@ if(FALSE){
 #'
 #'
 #' #fit using bigIRT
-#' fit <- fitIRT(dat$dat,cores=2,pl=2)
+#' fit <- fitIRT(dat$dat,cores=2,score = 'score',id = 'id',
+#'   scale = 'Scale',item = 'Item', pl=2)
 fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   Adata=NA,Bdata=NA,Cdata=NA,Abilitydata=NA,
   AMeandat=1,ASD=5,BMeandat=0,BSD=10, logitCMeandat=-2,logitCSD=10,
@@ -174,7 +190,9 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   AbilitySD=array(10,dim=c(length(unique(dat[[scale]])))),
   AMeanSD=.01,BMeanSD=BSD,logitCMeanSD=logitCSD,
   AbilityMeanSD=array(.01,dim=c(length(unique(dat[[scale]])))),
-  iter=2000,cores=6,carefulfit=TRUE,ebayes=TRUE,ebayesmultiplier=2,estMeans=FALSE,priors=TRUE,outlierfix=TRUE,...){
+  iter=2000,cores=6,carefulfit=TRUE,ebayes=TRUE,ebayesmultiplier=2,
+  estMeans=FALSE,priors=TRUE,outlierfix=TRUE,
+  normalise=TRUE,...){
 
 
   #add obs counts
@@ -198,6 +216,8 @@ for( ci in indx) set(dat,j = ci,value = as.integer((dat[[ci]])))
 
   if(any(is.na(dat))) stop('Missings found in data!')
   if(!is.numeric(dat[[score]])) stop('Found a non-numeric score column!')
+  if(normalise && any(!is.na(c(Adata,Bdata,Cdata,Abilitydata)))) warning(
+    'With fixed values provided you may want to set normalise= FALSE',immediate. = TRUE)
 
 
   # dat[,itemMean:=mean(eval(score)),by=item]
@@ -243,7 +263,6 @@ for( ci in indx) set(dat,j = ci,value = as.integer((dat[[ci]])))
     AMeanSD=AMeanSD,BMeanSD=BMeanSD,logitCMeanSD=logitCMeanSD,AbilityMeanSD=array(AbilityMeanSD))
 
 
-
     JMLfit <- function(est, sdat, ebayes=FALSE, fit=NA,narrowPriors=FALSE,...){
       init <- c()
       sdat$dopriors = as.integer(priors)
@@ -259,7 +278,7 @@ for( ci in indx) set(dat,j = ci,value = as.integer((dat[[ci]])))
         if(all(!is.na(fit))) init <- c(init,fit$pars$A)
         if(!all(!is.na(fit))) init <- c(init,rnorm(sdat$Nitems,1,.2))
       } else {
-        if(all(is.na(fit))) sdat$Adata = rep(1,sdat$Nitems)
+        # if(all(is.na(fit))) sdat$Adata = rep(1,sdat$Nitems)
         if(!all(is.na(fit))) sdat$Adata = fit$pars$A
         sdat$fixedA = 1L
       }
@@ -268,7 +287,7 @@ for( ci in indx) set(dat,j = ci,value = as.integer((dat[[ci]])))
         if(all(!is.na(fit))) init <- c(init,fit$pars$B)
         if(!all(!is.na(fit))) init <- c(init,rnorm(sdat$Nitems,0,.5))
       } else {
-        if(all(is.na(fit))) sdat$Bdata = rep(0,sdat$Nitems)
+        # if(all(is.na(fit))) sdat$Bdata = rep(0,sdat$Nitems)
         if(!all(is.na(fit))) sdat$Bdata = fit$pars$B
         sdat$fixedB = 1L
       }
@@ -277,7 +296,7 @@ for( ci in indx) set(dat,j = ci,value = as.integer((dat[[ci]])))
         if(all(!is.na(fit))) init <- c(init,logit(fit$pars$C+1e-8))
         if(!all(!is.na(fit))) init <- c(init,rnorm(sdat$Nitems,0,.5))
       } else {
-        if(all(is.na(fit))) sdat$Cdata = rep(0,sdat$Nitems)
+        # if(all(is.na(fit))) sdat$Cdata = rep(0,sdat$Nitems)
         if(!all(is.na(fit))) sdat$Cdata = fit$pars$C
         sdat$fixedC = 1L
       }
@@ -286,7 +305,7 @@ for( ci in indx) set(dat,j = ci,value = as.integer((dat[[ci]])))
         if(all(!is.na(fit))) init <- c(init,fit$pars$Ability)
         if(!all(!is.na(fit))) init <- c(init,rnorm(sdat$Nscales * sdat$Nsubs,0,.5))
       } else {
-        if(all(is.na(fit))) sdat$Abilitydata = matrix(0,sdat$Nsubs,sdat$Nscales)
+        # if(all(is.na(fit))) sdat$Abilitydata = matrix(0,sdat$Nsubs,sdat$Nscales)
         if(!all(is.na(fit))) sdat$Abilitydata = fit$pars$Ability
         sdat$fixedAbility = 1L
       }
@@ -334,9 +353,15 @@ for( ci in indx) set(dat,j = ci,value = as.integer((dat[[ci]])))
       fit <- optimIRT(standata=sdat,Niter=iter,cores=cores,init = init,...)
 
       #normalise pars
+      if(normalise){
       fit$pars$B <- fit$pars$B / mean(fit$pars$A)
       fit$pars$Ability <- fit$pars$Ability / mean(fit$pars$A)
       fit$pars$A <- fit$pars$A / mean(fit$pars$A)
+
+      fit$pars$B <- fit$pars$B +mean(fit$pars$Ability)
+      # fit$pars$A <- fit$pars$A /(1+mean(fit$pars$Ability))
+      fit$pars$Ability <- fit$pars$Ability -mean(fit$pars$Ability)
+      }
 
       if(exists('cdat')) try({
         par(mfrow=c(2,2))
