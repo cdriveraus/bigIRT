@@ -179,8 +179,33 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
 
   #add obs counts
   if(!'data.table' %in% class(dat)) dat <- as.data.table(dat)
-  dat[,itemMean:=mean(eval(score)),by=item]
-  dat[,personMean:=mean(eval(score)),by=id]
+
+  dat <- dat[,c((id),(score),(item),(scale)),with=FALSE]
+
+  itemIndex <- data.table(original=unique(dat[[item]]))
+  scaleIndex <- data.table(original=unique(dat[[scale]]))
+  idIndex <- data.table(original=unique(dat[[id]]))
+
+
+  indx <- c(id,item,scale)
+for( ci in indx) set(dat,j = ci,value = as.integer(factor(dat[[ci]])))
+for( ci in indx) set(dat,j = ci,value = as.integer((dat[[ci]])))
+
+    itemIndex$new <- unique(dat[[item]])
+  scaleIndex$new <-unique(dat[[scale]])
+  idIndex$new <- unique(dat[[id]])
+
+
+  if(any(is.na(dat))) stop('Missings found in data!')
+  if(!is.numeric(dat[[score]])) stop('Found a non-numeric score column!')
+
+
+  # dat[,itemMean:=mean(eval(score)),by=item]
+  # dat[,personMean:=mean(eval(score)),by=id]
+
+
+
+
 
   Nitems <- length(unique(dat[[item]]))
   Nsubs=length(unique(dat[[id]]))
@@ -222,11 +247,13 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     JMLfit <- function(est, sdat, ebayes=FALSE, fit=NA,narrowPriors=FALSE,...){
       init <- c()
       sdat$dopriors = as.integer(priors)
-      if(pl < 3) est <- est[est!='C']
-      if(pl < 2) est <- est[est!='A']
+      if(pl < 3 || sdat$fixedC==1) est <- est[est!='C']
+      if(pl < 2 || sdat$fixedA==1) est <- est[est!='A']
+      if(sdat$fixedAbility==1) est <- est[est!='Ability']
+      if(sdat$fixedB==1) est <- est[est!='B']
 
       # message(paste(paste(est,collapse=', '),ebayes))
-      message(paste0(ifelse(narrowPriors,'Narrow priors ', ifelse(ebayes,'Empirical Bayes ','Free estimation ')),'step...'))
+      message(paste0(paste0(est,collapse=', '),' ',ifelse(narrowPriors,'Narrow priors ', ifelse(ebayes,'Empirical Bayes ','Free estimation ')),'step...'))
 
       if('A' %in% est){
         if(all(!is.na(fit))) init <- c(init,fit$pars$A)
@@ -273,24 +300,24 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
 
       if(ebayes){
 
-        goodItems <- which(sdat$itemMean > 0.01 & sdat$itemMean < .99)
-        goodPersons <- which(sdat$personMean > 0.01 & sdat$personMean < .99)
+        # goodItems <- which(sdat$itemMean > 0.01 & sdat$itemMean < .99)
+        # goodPersons <- which(sdat$personMean > 0.01 & sdat$personMean < .99)
 
 
         sdat$dopriors <- 1L
         sdat$outlierfix <- 0L
 
         # sdat$AMeandat <- mean(fit$pars$A)
-        sdat$ASD <- sd(fit$pars$A[goodItems])*ebayesmultiplier
+        sdat$ASD <- sd(fit$pars$A)*ebayesmultiplier
 
-        sdat$BMeandat <- mean(fit$pars$B[goodItems])
-        sdat$BSD <- sd(fit$pars$B[goodItems])*ebayesmultiplier
+        sdat$BMeandat <- mean(fit$pars$B)
+        sdat$BSD <- sd(fit$pars$B)*ebayesmultiplier
 
-        sdat$logitCMeandat <- mean(logit(fit$pars$C[goodItems]+1e-8))
-        sdat$logitCSD <- sd(logit(fit$pars$C[goodItems]+1e-8))*ebayesmultiplier
+        sdat$logitCMeandat <- mean(logit(fit$pars$C+1e-8))
+        sdat$logitCSD <- sd(logit(fit$pars$C+1e-8))*ebayesmultiplier
 
         # sdat$AbilityMeandat <- array(apply(fit$pars$Ability,2,mean))
-        sdat$AbilitySD <- array(apply(fit$pars$Ability[goodPersons,,drop=FALSE],2,sd))*ebayesmultiplier #maybe need to better account for multiple scales here, but not that important...
+        sdat$AbilitySD <- array(apply(fit$pars$Ability,2,sd))*ebayesmultiplier #maybe need to better account for multiple scales here, but not that important...
 
       }
 
@@ -311,7 +338,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
       fit$pars$Ability <- fit$pars$Ability / mean(fit$pars$A)
       fit$pars$A <- fit$pars$A / mean(fit$pars$A)
 
-      try({
+      if(exists('cdat')) try({
         par(mfrow=c(2,2))
         # plot(cdat$A,mitem[,1],col='blue',pch=16)
         plot(cdat$A,fit$pars$A)
@@ -330,6 +357,12 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
         points(cdat$Ability,tfit$person$EAP,col='red')
         abline(0,1,col='green',lwd=2)
       })
+
+      rownames(fit$pars$A) <- itemIndex$original
+      rownames(fit$pars$B) <- itemIndex$original
+      rownames(fit$pars$C) <- itemIndex$original
+      rownames(fit$pars$Ability) <- idIndex$original
+      colnames(fit$pars$Ability) <- scaleIndex$original
 
       return(fit)
     }
