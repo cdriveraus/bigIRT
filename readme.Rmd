@@ -1,0 +1,53 @@
+---
+title: "bigIRT"
+author: "Charles Driver"
+date: "12/05/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Install
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars, eval=FALSE}
+remotes::install_github('cdriveraus/bigIRT', INSTALL_opts = "--no-multiarch", dependencies = c("Depends", "Imports"))
+```
+
+## Example
+
+```{r, results=FALSE,plot=FALSE}
+library(bigIRT)
+#Generate some data (here 2pl model
+require(data.table)
+dat <- bigIRT:::IRTsim(Nsubs = 1000,Nitems = 100,Nscales = 1,
+  logitCMean = -10,logitCSD = 0,AMean = 1,ASD = .3,
+  BMean=0,BSD = .5,
+  AbilityMean = 0,AbilitySD = 1)
+
+#convert to wide for TAM
+wdat <- data.frame(dcast(data.table(dat$dat),formula = 'id ~ Item',value.var='score')[,-1])
+
+
+#fit using TAM
+require(TAM)
+tfit <-tam.mml.2pl(resp = wdat,est.variance = TRUE)
+
+
+#fit using bigIRT
+fit <- fitIRT(dat$dat,cores=2,score = 'score',id = 'id',scale = 'Scale',item = 'Item',pl=2,verbose=0,plot=0)
+
+#some summary stuff:
+plot(dat$Ability,(fit$pars$Ability-dat$Ability)^2) #ability error given ability
+sqrt(mean((fit$pars$Ability-dat$Ability)^2)) #rms error stat
+
+#correlations of estimated vs true
+cor(data.frame(True=dat$Ability,Est=fit$pars$Ability))
+cor(data.frame(True=dat$A,Est=fit$pars$A))
+cor(data.frame(True=dat$B,Est=fit$pars$B))
+```
