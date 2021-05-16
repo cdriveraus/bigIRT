@@ -3,8 +3,8 @@ if(FALSE){
 
   #Generate some data
   require(data.table)
-  dat <- bigIRT:::IRTsim(Nsubs = 5000,Nitems = 100,Nscales = 1,
-    logitCMean = -1,logitCSD = .3,AMean = 1,ASD = .3,
+  dat <- bigIRT:::IRTsim(Nsubs = 500,Nitems = 100,Nscales = 1,
+    logitCMean = -1,logitCSD = .3,logAMean = 1,logASD = .3,
     BMean=0,BSD = .5,
     AbilityMean = 0,AbilitySD = 1)
   cdat<-dat
@@ -72,7 +72,7 @@ if(FALSE){
   sqrt(mean((c(dat$C)-fit$pars$C)^2)) #bigIRT C rms
 
   #fit using combined approach by fixing ability sd (fixed discrimination parameters, so 1pl model)
-  system.time(fitc <- bigIRT:::fitIRT(dat$dat,ASD = .5,logitCSD=.2, logitCMeandat = -2, BSD=1, AbilitySD=1,cores=1,pl=3))
+  system.time(fitc <- bigIRT:::fitIRT(dat$dat,logASD = .5,logitCSD=.2, logitCMeandat = -2, BSD=1, AbilitySD=1,cores=1,pl=3))
   plot(fitc$pars$B,dat$B)
   abline(0,1,col='green')
   plot(fitc$pars$A,dat$A)
@@ -120,9 +120,6 @@ if(FALSE){
 
 
 
-  score='score'; item='Item'; scale='Scale';Adata=c();Bdata=c();Abilitydata=c();
-  AMeandat=1;ASD=0;BMeandat=0;BSD=1000; AbilityMeandat=0;AbilitySD=100;iter=2000;cores=6;id='id'
-
 }
 
 #' Title
@@ -137,8 +134,8 @@ if(FALSE){
 #' @param Bdata
 #' @param Cdata
 #' @param Abilitydata
-#' @param AMeandat
-#' @param ASD
+#' @param logAMeandat
+#' @param logASD
 #' @param BMeandat
 #' @param BSD
 #' @param logitCMeandat
@@ -167,7 +164,7 @@ if(FALSE){
 #' #Generate some data (here 2pl model
 #' require(data.table)
 #' dat <- bigIRT:::IRTsim(Nsubs = 5000,Nitems = 100,Nscales = 1,
-#'   logitCMean = -10,logitCSD = 0,AMean = 1,ASD = .3,
+#'   logitCMean = -10,logitCSD = 0,logAMean = 1,logASD = .3,
 #'   BMean=0,BSD = .5,
 #'   AbilityMean = 0,AbilitySD = 1)
 #'
@@ -185,14 +182,21 @@ if(FALSE){
 #'   scale = 'Scale',item = 'Item', pl=2)
 fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   Adata=NA,Bdata=NA,Cdata=NA,Abilitydata=NA,
-  AMeandat=1,ASD=5,BMeandat=0,BSD=10, logitCMeandat=-2,logitCSD=10,
+  logAMeandat=.542,logASD=4,BMeandat=0,BSD=10, logitCMeandat=-5,logitCSD=2,
   AbilityMeandat=array(0,dim=c(length(unique(dat[[scale]])))),
   AbilitySD=array(10,dim=c(length(unique(dat[[scale]])))),
-  AMeanSD=.01,BMeanSD=BSD,logitCMeanSD=logitCSD,
-  AbilityMeanSD=array(.01,dim=c(length(unique(dat[[scale]])))),
-  iter=2000,cores=6,carefulfit=TRUE,ebayes=TRUE,ebayesmultiplier=2,
-  estMeans=FALSE,priors=TRUE,outlierfix=TRUE,
-  normalise=TRUE,...){
+  AMeanSD=.1,BMeanSD=BSD,logitCMeanSD=logitCSD,
+  ABMeandat=0, ABSD=BSD,
+  AbilityMeanSD=array(.1,dim=c(length(unique(dat[[scale]])))),
+  iter=2000,cores=6,carefulfit=FALSE,ebayes=TRUE,ebayesmultiplier=2,
+  estMeans=FALSE,priors=TRUE,outlierfix=FALSE,outlierscale=2,
+  normalise=TRUE,AB=FALSE,...){
+
+  cfunc <- function(x) exp(-exp(-x))
+  cfunci <- function(x) -log(-log(x))
+
+  afunc <- function(x) log1p(exp(x))
+  afunci <- function(x) log(exp(x)-1)
 
 
   #add obs counts
@@ -206,10 +210,10 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
 
 
   indx <- c(id,item,scale)
-for( ci in indx) set(dat,j = ci,value = as.integer(factor(dat[[ci]])))
-for( ci in indx) set(dat,j = ci,value = as.integer((dat[[ci]])))
+  for( ci in indx) set(dat,j = ci,value = as.integer(factor(dat[[ci]])))
+  for( ci in indx) set(dat,j = ci,value = as.integer((dat[[ci]])))
 
-    itemIndex$new <- unique(dat[[item]])
+  itemIndex$new <- unique(dat[[item]])
   scaleIndex$new <-unique(dat[[scale]])
   idIndex$new <- unique(dat[[id]])
 
@@ -220,8 +224,8 @@ for( ci in indx) set(dat,j = ci,value = as.integer((dat[[ci]])))
     'With fixed values provided you may want to set normalise= FALSE',immediate. = TRUE)
 
 
-  # dat[,itemMean:=mean(eval(score)),by=item]
-  # dat[,personMean:=mean(eval(score)),by=id]
+  dat[,itemMean:=mean(eval(score)),by=item]
+  dat[,personMean:=mean(eval(score)),by=id]
 
 
 
@@ -248,6 +252,7 @@ for( ci in indx) set(dat,j = ci,value = as.integer((dat[[ci]])))
     id=as.integer(factor(dat[[id]])),
     dopriors=as.integer(priors||ebayes),
     outlierfix=as.integer(outlierfix),
+    outlierscale=outlierscale,
     start=1L,
     end=as.integer(nrow(dat)),
     score=array(as.integer(dat[[score]])),
@@ -257,159 +262,180 @@ for( ci in indx) set(dat,j = ci,value = as.integer((dat[[ci]])))
     scale=array(as.integer(factor(dat[[scale]]))),
     Adata=Adata,Bdata=Bdata,Cdata=Cdata, Abilitydata=Abilitydata,
     fixedMeans=as.integer(!estMeans),
-    AMeandat=AMeandat,ASD=ASD,BMeandat=BMeandat,BSD=BSD,logitCMeandat=logitCMeandat,logitCSD=logitCSD,AbilityMeandat=AbilityMeandat,AbilitySD=array(AbilitySD),
-    fixedA=as.integer(length(Adata) > 0),fixedB=as.integer(length(Bdata) > 0),
-    fixedC=as.integer(length(Cdata) > 0),fixedAbility=as.integer(length(Abilitydata) > 0),
-    AMeanSD=AMeanSD,BMeanSD=BMeanSD,logitCMeanSD=logitCMeanSD,AbilityMeanSD=array(AbilityMeanSD))
+    # ABMeandat=ABMeandat, ABSD=ABSD,
+    logAMeandat=logAMeandat,logASD=logASD,
+    BMeandat=BMeandat,BSD=BSD,
+    logitCMeandat=logitCMeandat,logitCSD=logitCSD,
+    AbilityMeandat=AbilityMeandat,AbilitySD=array(AbilitySD),
+    fixedA=as.integer(length(Adata) > 0),
+    fixedB=as.integer(length(Bdata) > 0),
+    fixedC=as.integer(length(Cdata) > 0),
+    fixedAbility=as.integer(length(Abilitydata) > 0),
+    AMeanSD=AMeanSD,BMeanSD=BMeanSD,logitCMeanSD=logitCMeanSD,AbilityMeanSD=array(AbilityMeanSD),
+    fixedAMean=1L,fixedBMean=1L,fixedCMean=1L,fixedAbilityMean=1L,
+    restrictAMean=1L,restrictBMean=0L,restrictCMean=0L,restrictAbilityMean=1L  )
 
 
-    JMLfit <- function(est, sdat, ebayes=FALSE, fit=NA,narrowPriors=FALSE,...){
-      init <- c()
-      sdat$dopriors = as.integer(priors)
-      if(pl < 3 || sdat$fixedC==1) est <- est[est!='C']
-      if(pl < 2 || sdat$fixedA==1) est <- est[est!='A']
-      if(sdat$fixedAbility==1) est <- est[est!='Ability']
-      if(sdat$fixedB==1) est <- est[est!='B']
+  JMLfit <- function(est, sdat, ebayes=FALSE, fit=NA,narrowPriors=FALSE,...){
+    init <- c()
+    sdat$dopriors = as.integer(priors)
+    if(pl < 3 || sdat$fixedC==1) est <- est[est!='C']
+    if(pl < 2 || sdat$fixedA==1) est <- est[est!='A']
+    if(sdat$fixedAbility==1) est <- est[est!='Ability']
+    if(sdat$fixedB==1) est <- est[est!='B']
 
-      # message(paste(paste(est,collapse=', '),ebayes))
-      message(paste0(paste0(est,collapse=', '),' ',ifelse(narrowPriors,'Narrow priors ', ifelse(ebayes,'Empirical Bayes ','Free estimation ')),'step...'))
+    # message(paste(paste(est,collapse=', '),ebayes))
+    message(paste0(paste0(est,collapse=', '),' ',ifelse(narrowPriors,'Narrow priors ', ifelse(ebayes,'Empirical Bayes ','Free estimation ')),'step...'))
 
-      if('A' %in% est){
-        if(all(!is.na(fit))) init <- c(init,fit$pars$A)
-        if(!all(!is.na(fit))) init <- c(init,rnorm(sdat$Nitems,1,.2))
-      } else {
-        # if(all(is.na(fit))) sdat$Adata = rep(1,sdat$Nitems)
-        if(!all(is.na(fit))) sdat$Adata = fit$pars$A
-        sdat$fixedA = 1L
-      }
-
-      if('B' %in% est){
-        if(all(!is.na(fit))) init <- c(init,fit$pars$B)
-        if(!all(!is.na(fit))) init <- c(init,rnorm(sdat$Nitems,0,.5))
-      } else {
-        # if(all(is.na(fit))) sdat$Bdata = rep(0,sdat$Nitems)
-        if(!all(is.na(fit))) sdat$Bdata = fit$pars$B
-        sdat$fixedB = 1L
-      }
-
-      if('C' %in% est){
-        if(all(!is.na(fit))) init <- c(init,logit(fit$pars$C+1e-8))
-        if(!all(!is.na(fit))) init <- c(init,rnorm(sdat$Nitems,0,.5))
-      } else {
-        # if(all(is.na(fit))) sdat$Cdata = rep(0,sdat$Nitems)
-        if(!all(is.na(fit))) sdat$Cdata = fit$pars$C
-        sdat$fixedC = 1L
-      }
-
-      if('Ability' %in% est){
-        if(all(!is.na(fit))) init <- c(init,fit$pars$Ability)
-        if(!all(!is.na(fit))) init <- c(init,rnorm(sdat$Nscales * sdat$Nsubs,0,.5))
-      } else {
-        # if(all(is.na(fit))) sdat$Abilitydata = matrix(0,sdat$Nsubs,sdat$Nscales)
-        if(!all(is.na(fit))) sdat$Abilitydata = fit$pars$Ability
-        sdat$fixedAbility = 1L
-      }
-
-      if(estMeans && !is.na(fit)){
-        if('A' %in% est) init <- c(init, mean(fit$pars$A))
-        if('B' %in% est) init <- c(init, mean(fit$pars$B))
-        if('C' %in% est) init <- c(init, mean(logit(fit$pars$C+1e-8)))
-        if('Ability' %in% est) init <- c(init, colMeans(fit$pars$Ability))
-      }
-
-      if(ebayes){
-
-        # goodItems <- which(sdat$itemMean > 0.01 & sdat$itemMean < .99)
-        # goodPersons <- which(sdat$personMean > 0.01 & sdat$personMean < .99)
-
-
-        sdat$dopriors <- 1L
-        sdat$outlierfix <- 0L
-
-        # sdat$AMeandat <- mean(fit$pars$A)
-        sdat$ASD <- sd(fit$pars$A)*ebayesmultiplier
-
-        sdat$BMeandat <- mean(fit$pars$B)
-        sdat$BSD <- sd(fit$pars$B)*ebayesmultiplier
-
-        sdat$logitCMeandat <- mean(logit(fit$pars$C+1e-8))
-        sdat$logitCSD <- sd(logit(fit$pars$C+1e-8))*ebayesmultiplier
-
-        # sdat$AbilityMeandat <- array(apply(fit$pars$Ability,2,mean))
-        sdat$AbilitySD <- array(apply(fit$pars$Ability,2,sd))*ebayesmultiplier #maybe need to better account for multiple scales here, but not that important...
-
-      }
-
-      if(narrowPriors){
-        sdat$dopriors <- 1L
-        sdat$ASD <- .5
-        sdat$BSD <- 1
-        sdat$logitCSD <- 1
-        sdat$AbilitySD <- array(1,sdat$Nscales)
-      }
-
-      if(length(init)==0) init <- NA
-
-      fit <- optimIRT(standata=sdat,Niter=iter,cores=cores,init = init,...)
-
-      #normalise pars
-      if(normalise){
-      fit$pars$B <- fit$pars$B / mean(fit$pars$A)
-      fit$pars$Ability <- fit$pars$Ability / mean(fit$pars$A)
-      fit$pars$A <- fit$pars$A / mean(fit$pars$A)
-
-      fit$pars$B <- fit$pars$B +mean(fit$pars$Ability)
-      # fit$pars$A <- fit$pars$A /(1+mean(fit$pars$Ability))
-      fit$pars$Ability <- fit$pars$Ability -mean(fit$pars$Ability)
-      }
-
-      if(exists('cdat')) try({
-        par(mfrow=c(2,2))
-        # plot(cdat$A,mitem[,1],col='blue',pch=16)
-        plot(cdat$A,fit$pars$A)
-        points(cdat$A,tfit$item_irt$alpha,col='red')
-        abline(0,1,col='green',lwd=2)
-        # plot(cdat$B,-mitem[,2],col='blue',pch=16)
-        plot(cdat$B,fit$pars$B)
-        points(cdat$B,tfit$item_irt$beta,col='red')
-        abline(0,1,col='green',lwd=2)
-        # plot(cdat$C,mitem[,3],col='blue',pch=16)
-        plot(cdat$C,fit$pars$C,ylim=c(0,1))
-        points(cdat$C,tfit$guess,col='red')
-        abline(0,1,col='green',lwd=2)
-        # plot(cdat$Ability,mability,col='blue',pch=16)
-        plot(cdat$Ability,fit$pars$Ability)
-        points(cdat$Ability,tfit$person$EAP,col='red')
-        abline(0,1,col='green',lwd=2)
-      })
-
-      rownames(fit$pars$A) <- itemIndex$original
-      rownames(fit$pars$B) <- itemIndex$original
-      rownames(fit$pars$C) <- itemIndex$original
-      rownames(fit$pars$Ability) <- idIndex$original
-      colnames(fit$pars$Ability) <- scaleIndex$original
-
-      return(fit)
+    if('A' %in% est){
+      if(all(!is.na(fit))) init <- c(init,fit$pars$A)
+      if(!all(!is.na(fit))) init <- c(init,rnorm(sdat$Nitems,1,.2))
+    } else {
+      # if(all(is.na(fit))) sdat$Adata = rep(1,sdat$Nitems)
+      if(!all(is.na(fit))) sdat$Adata = fit$pars$A
+      sdat$fixedA = 1L
     }
 
-    JMLseq <- list(
-      if(carefulfit) list(est=c('A','B','C','Ability'),ebayes=FALSE,narrowPriors=TRUE),
-      list(est=c('A','B','C','Ability'),ebayes=FALSE,narrowPriors=FALSE),
-      if(ebayes) list(est=c('A','B','C','Ability'),ebayes=TRUE,narrowPriors=FALSE)
-    )
-
-    fit <- NA
-    for(i in 1:length(JMLseq)){
-      if(!is.null(JMLseq[[i]])){
-        if(JMLseq[[i]]$ebayes %in% 'TRUE') fitML <- fit #store fit before ebayes step
-        stochastic <- F#(i == length(JMLseq))
-        fit <- JMLfit(est = JMLseq[[i]]$est,sdat = sdat, ebayes=JMLseq[[i]]$ebayes,
-          fit = fit,stochastic=stochastic,
-          narrowPriors = JMLseq[[i]]$narrowPriors,...)
-      }
+    if('B' %in% est){
+      if(all(!is.na(fit))) init <- c(init,fit$pars$B)
+      if(!all(!is.na(fit))) init <- c(init,rnorm(sdat$Nitems,0,.5))
+    } else {
+      # if(all(is.na(fit))) sdat$Bdata = rep(0,sdat$Nitems)
+      if(!all(is.na(fit))) sdat$Bdata = fit$pars$B
+      sdat$fixedB = 1L
     }
 
-    fit$fitML <- fitML
+    if('C' %in% est){
+      if(all(!is.na(fit))) init <- c(init,cfunci(fit$pars$C+1e-8))
+      if(!all(!is.na(fit))) init <- c(init,rnorm(sdat$Nitems,0,.5))
+    } else {
+      # if(all(is.na(fit))) sdat$Cdata = rep(0,sdat$Nitems)
+      if(!all(is.na(fit))) sdat$Cdata = fit$pars$C
+      sdat$fixedC = 1L
+    }
+
+    if('Ability' %in% est){
+      if(all(!is.na(fit))) init <- c(init,fit$pars$Ability)
+      if(!all(!is.na(fit))) init <- c(init,rnorm(sdat$Nscales * sdat$Nsubs,0,.5))
+    } else {
+      # if(all(is.na(fit))) sdat$Abilitydata = matrix(0,sdat$Nsubs,sdat$Nscales)
+      if(!all(is.na(fit))) sdat$Abilitydata = fit$pars$Ability
+      sdat$fixedAbility = 1L
+    }
+
+
+
+    if(sdat$fixedAMean==0) init <- c(init, ifelse(any(!is.na(fit)),mean(fit$pars$A),1))
+    if(sdat$fixedBMean==0) init <- c(init, ifelse(any(!is.na(fit)),mean(fit$pars$B),0))
+    if(sdat$fixedCMean==0) init <- c(init, ifelse(any(!is.na(fit)),mean(cfunci(fit$pars$C+1e-8)),0))
+    if(sdat$fixedAbilityMean==0) init <- c(init, ifelse(any(!is.na(fit)), colMeans(fit$pars$Ability),-5))
+
+
+    if(ebayes){
+
+      # goodItems <- which(sdat$itemMean > 0.01 & sdat$itemMean < .99)
+      # goodPersons <- which(sdat$personMean > 0.01 & sdat$personMean < .99)
+
+
+      sdat$dopriors <- 1L
+      sdat$outlierfix <- 0L
+
+      # sdat$restrictBMean=1L
+      # sdat$restrictCMean=1L
+
+      # sdat$ABMeandat <- mean(fit$pars$A * fit$pars$B) * ebayesmultiplier
+      # sdat$ABSD <- sd(fit$pars$A * fit$pars$B) * ebayesmultiplier
+
+      sdat$logAMeandat <- mean(afunci(fit$pars$A))
+      sdat$logASD <- sd(afunci(fit$pars$A))*ebayesmultiplier
+
+      sdat$BMeandat <- mean(fit$pars$B)
+      # sdat$BMeanSD <- .01
+      sdat$BSD <- sd(fit$pars$B)*ebayesmultiplier
+
+      sdat$logitCMeandat <- mean(cfunci(fit$pars$C+1e-8))
+      sdat$logitCSD <- sd(cfunci(fit$pars$C+1e-8))*ebayesmultiplier
+      # sdat$logitCMeanSD <- .01
+
+      sdat$AbilityMeandat <- array(apply(fit$pars$Ability,2,mean))
+      sdat$AbilitySD <- array(apply(fit$pars$Ability,2,sd))*ebayesmultiplier #maybe need to better account for multiple scales here, but not that important...
+
+    }
+
+    if(narrowPriors){
+      sdat$dopriors <- 1L
+      sdat$ASD <- .5
+      sdat$BSD <- 1
+      sdat$logitCSD <- 1
+      sdat$AbilitySD <- array(1,sdat$Nscales)
+    }
+
+    if(length(init)==0) init <- NA
+
+    fit <- optimIRT(standata=sdat,Niter=iter,cores=cores,init = init,AB=AB,...)
+
+
+
+
+    #normalise pars
+    if(!AB && normalise){
+
+      nsd <- sd(fit$pars$Ability)
+      nm <- mean(fit$pars$Ability)
+
+      fit$pars$Ability <- (fit$pars$Ability -nm)/ nsd
+      fit$pars$B <- ( fit$pars$B-nm) / nsd
+       fit$pars$A <-  fit$pars$A * nsd
+    }
+
+    if(exists('cdat')) try({
+      par(mfrow=c(2,2))
+      # plot(cdat$A,mitem[,1],col='blue',pch=16)
+      plot(cdat$A,fit$pars$A)
+      try(points(cdat$A,tfit$item_irt$alpha,col='red'))
+      abline(0,1,col='green',lwd=2)
+      # plot(cdat$B,-mitem[,2],col='blue',pch=16)
+      if(!AB) plot(cdat$B,fit$pars$B)
+      if(AB) plot(cdat$B,fit$pars$B/fit$pars$A)
+      try(points(cdat$B,tfit$item_irt$beta,col='red'))
+      abline(0,1,col='green',lwd=2)
+      # plot(cdat$C,mitem[,3],col='blue',pch=16)
+      plot(cdat$C,fit$pars$C,ylim=c(0,1))
+      try(points(cdat$C,tfit$guess,col='red'))
+      abline(0,1,col='green',lwd=2)
+      # plot(cdat$Ability,mability,col='blue',pch=16)
+      plot(cdat$Ability,fit$pars$Ability)
+      try(points(cdat$Ability,tfit$person$EAP,col='red'))
+      abline(0,1,col='green',lwd=2)
+    })
+
+    rownames(fit$pars$A) <- itemIndex$original
+    rownames(fit$pars$B) <- itemIndex$original
+    rownames(fit$pars$C) <- itemIndex$original
+    rownames(fit$pars$Ability) <- idIndex$original
+    colnames(fit$pars$Ability) <- scaleIndex$original
+
+    return(fit)
+  }
+
+  JMLseq <- list(
+    if(carefulfit) list(est=c('A','B','C','Ability'),ebayes=FALSE,narrowPriors=TRUE),
+    list(est=c('A','B','C','Ability'),ebayes=FALSE,narrowPriors=FALSE),
+    if(ebayes) list(est=c('A','B','C','Ability'),ebayes=TRUE,narrowPriors=FALSE)
+  )
+
+  fit <- NA
+  for(i in 1:length(JMLseq)){
+    if(!is.null(JMLseq[[i]])){
+      if(JMLseq[[i]]$ebayes %in% 'TRUE') fitML <- fit #store fit before ebayes step
+      stochastic <- F#(i == length(JMLseq))
+      fit <- JMLfit(est = JMLseq[[i]]$est,sdat = sdat, ebayes=JMLseq[[i]]$ebayes,
+        fit = fit,stochastic=stochastic,
+        narrowPriors = JMLseq[[i]]$narrowPriors,...)
+    }
+  }
+
+  if(ebayes) fit$fitML <- fitML
 
 
   return(fit)

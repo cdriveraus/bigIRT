@@ -1,5 +1,15 @@
+IRTcurve <- function(a,b,c,theta=seq(-3,3,.01),plot=TRUE,rescale=FALSE,add=FALSE,...){
+  theta <- sort(theta)
+  x <- c + (1-c)/(1+exp(-a*(theta-b)))
+  if(rescale) theta=scale(theta)
+  if(plot){
+  if(!add) plot(theta, x,ylim=c(0,1),main=paste0('a = ',round(a,3),', b = ',round(b,3),', c = ',round(c,3)),type='l',...)
+  if(add) points(theta, x,ylim=c(0,1),main=paste0('a = ',round(a,3),', b = ',round(b,3),', c = ',round(c,3)),type='l',...)
+  }
+  if(!plot) return(x)
+}
 
-# Nsubs=100;Nitems=200;Nscales=3;ASD=0;AMean=1;BSD=1;BMean=0;AbilitySD=1;AbilityMean=1
+
 #' Title
 #'
 #' @param Nsubs
@@ -16,7 +26,8 @@
 #' @export
 #'
 #' @examples
-IRTsim <- function(Nsubs=100,Nitems=200,Nscales=3,ASD=0,AMean=1,BSD=1,BMean=0,logitCSD=1,logitCMean=-2,AbilitySD=1,AbilityMean=0){
+IRTsim <- function(Nsubs=100,Nitems=200,Nscales=3,ASD=0,AMean=1,BSD=1,BMean=0,logitCSD=1,logitCMean=-2,AbilitySD=1,AbilityMean=0,
+  AB=FALSE){
 
   Ability <- matrix(rnorm(Nsubs*Nscales,AbilityMean,AbilitySD),Nsubs)
   A <- matrix(rnorm(Nitems*Nscales,AMean,ASD),Nitems)
@@ -34,12 +45,21 @@ IRTsim <- function(Nsubs=100,Nitems=200,Nscales=3,ASD=0,AMean=1,BSD=1,BMean=0,lo
       A = rep(A[,si],times=Nsubs),B=rep(B[,si],times=Nsubs),
       pcorrect=0,score=0)
 
-    simdat$p= C[simdat$Item-(si-1)*Nitems,si]+
+    if(!AB) simdat$p= C[simdat$Item-(si-1)*Nitems,si]+
       (1-C[simdat$Item-(si-1)*Nitems,si]) / (1+exp(
       -A[simdat$Item-(si-1)*Nitems,si] * #discrimination of item=
         (Ability[simdat$id,si] - #ability
         B[simdat$Item-(si-1)*Nitems,si]) #item difficulty
     ))
+
+    if(AB)     simdat$p= C[simdat$Item-(si-1)*Nitems,si]+
+      (1-C[simdat$Item-(si-1)*Nitems,si]) / (1+exp(
+        B[simdat$Item-(si-1)*Nitems,si] -
+      A[simdat$Item-(si-1)*Nitems,si] * #discrimination of item=
+        Ability[simdat$id,si]#ability
+    ))
+
+    if(AB) B <- B/A
 simdat$score <- rbinom(n = simdat$p,size = 1,
   prob = simdat$p )
 

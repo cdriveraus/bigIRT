@@ -44,7 +44,7 @@ clusterIDeval <- function(cl,commands){
 
 
 optimIRT <- function(standata, cores=6, split=TRUE,
-  verbose=0,plot=0,tol=1e-5,Niter=2000,askmore=FALSE,stochastic=FALSE,init=NA){
+  verbose=0,plot=0,tol=1e-5,Niter=2000,askmore=FALSE,stochastic=FALSE,init=NA, AB=FALSE){
   # verbose=1
   # cores=8
   # plot=10
@@ -91,7 +91,9 @@ optimIRT <- function(standata, cores=6, split=TRUE,
 
   if(cores==1){
     target = singletarget #we use this for importance sampling
-    smf <- stan_reinitsf(stanmodels$`2pl`,standata)
+    if(AB) smf <- stan_reinitsf(stanmodels$irtAB,standata)
+    if(!AB) smf <- stan_reinitsf(stanmodels$`2pl`,standata)
+
   }
 
   if(cores > 1){ #for parallelised computation after fitting, if only single subject
@@ -121,7 +123,8 @@ optimIRT <- function(standata, cores=6, split=TRUE,
       "if(length(stanindices[[nodeid]]) < length(unique(standata[[splitby]]))) standata <- standata_specificsubjects(standata,stanindices[[nodeid]])",
       "if(!1 %in% stanindices[[nodeid]]) standata$dopriors <- 0L",
       "g = eval(parse(text=paste0('gl','obalenv()')))", #avoid spurious cran check -- assigning to global environment only on created parallel workers.
-      "assign('smf',bigIRT:::stan_reinitsf(bigIRT:::stanmodels$`2pl`,standata),pos = g)",
+      if(AB) "assign('smf',bigIRT:::stan_reinitsf(bigIRT:::stanmodels$irtAB,standata),pos = g)",
+      if(!AB) "assign('smf',bigIRT:::stan_reinitsf(bigIRT:::stanmodels$`2pl`,standata),pos = g)",
       "NULL"
     )
     cl <- makeClusterID(cores)
@@ -240,7 +243,8 @@ target<-function(parm,gradnoise=TRUE){
   # fit=optimfit
 
   try({parallel::stopCluster(clms)},silent=TRUE)
-  smf <- stan_reinitsf(stanmodels$`2pl`,standata)
+  if(AB) smf <- stan_reinitsf(stanmodels$irtAB,standata)
+  if(!AB) smf <- stan_reinitsf(stanmodels$`2pl`,standata)
   return(list(optim=optimfit,stanfit=smf,pars=rstan::constrain_pars(object = smf, optimfit$par),dat=standata))
 
 }

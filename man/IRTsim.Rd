@@ -15,7 +15,8 @@ IRTsim(
   logitCSD = 1,
   logitCMean = -2,
   AbilitySD = 1,
-  AbilityMean = 0
+  AbilityMean = 0,
+  AB = FALSE
 )
 }
 \arguments{

@@ -23,14 +23,25 @@ data{
   vector[fixedC ? Nitems : 0] Cdata;
   matrix[fixedAbility ? Nsubs : 0, fixedAbility ? Nscales : 0] Abilitydata;
 
+  int fixedAMean;
+  int fixedBMean;
+  int fixedCMean;
+  int fixedAbilityMean;
+
+  int restrictAMean;
+  int restrictBMean;
+  int restrictCMean;
+  int restrictAbilityMean;
+
   //priors
   int dopriors;
   int outlierfix;
-  real ASD;
+  real outlierscale;
+  real logASD;
   real BSD;
   real logitCSD;
   vector[Nscales] AbilitySD;
-  real AMeandat;
+  real logAMeandat;
   real BMeandat;
   real logitCMeandat;
   vector[Nscales] AbilityMeandat;
@@ -43,10 +54,6 @@ transformed data{
   int Nincorrect = end-start+1-sum(score[start:end]);
   int incorrect[Nincorrect];
   int counter=0;
-  int fixedAMean = fixedA || fixedMeans;
-  int fixedBMean = fixedB || fixedMeans;
-  int fixedCMean = fixedC || fixedMeans;
-  int fixedAbilityMean = fixedAbility || fixedMeans;
 
   for(i in start:end){
     if(score[i]==0){
@@ -56,11 +63,11 @@ transformed data{
   }
 }
 parameters{
-  vector[fixedA ? 0 : Nitems] Apars;
+  vector[fixedA ? 0 : Nitems] logApars;
   vector[fixedB ? 0 : Nitems] Bpars;
   vector[fixedC ? 0 : Nitems] logitCpars;
   matrix[fixedAbility ? 0: Nsubs , fixedAbility ? 0 : Nscales] Abilitypars;
-  vector[fixedAMean ? 0 : 1] AMeanpar;
+  vector[fixedAMean ? 0 : 1] logAMeanpar;
   vector[fixedBMean ? 0 : 1] BMeanpar;
   vector[fixedCMean ? 0 : 1] logitCMeanpar;
   vector[fixedAbilityMean ? 0 : Nscales] AbilityMeanpar;
@@ -68,11 +75,11 @@ parameters{
 transformed parameters{
   vector[end-start+1] p;
   vector[end-start+1] AbilityNobs;
-  vector[Nitems] A = fixedA ? Adata : Apars;
+  vector[Nitems] A = fixedA ? Adata : log1p_exp(logApars);
   vector[Nitems] B= fixedB ? Bdata : Bpars;
-  vector[Nitems] C= fixedC ? Cdata : inv_logit(logitCpars);
+  vector[Nitems] C= fixedC ? Cdata : exp(-exp(-logitCpars));
   matrix[Nsubs,Nscales] Ability;
-  real AMean = fixedAMean ? AMeandat : AMeanpar[1];
+  real logAMean = fixedAMean ? logAMeandat : logAMeanpar[1];
   real BMean = fixedBMean ? BMeandat : BMeanpar[1];
   real logitCMean = fixedCMean ? logitCMeandat : logitCMeanpar[1];
   vector[Nscales] AbilityMean = fixedAbilityMean ? AbilityMeandat : AbilityMeanpar;
@@ -95,28 +102,26 @@ transformed parameters{
 }
 model{
   target+= sum(log(p+1e-6));
-  if(dopriors){
-    if(!fixedA){
-      Apars ~ normal(AMean,ASD);
-      mean(Apars) ~ normal(AMean, AMeanSD);
-      if(outlierfix) ((Apars-AMean)/sd(Apars)) ~ normal(0,2);
-    }
-    if(!fixedB){
-      Bpars ~ normal(BMean,BSD);
-      mean(Bpars) ~ normal(BMean, BMeanSD);
-      if(outlierfix) ((Bpars-BMean)/sd(Bpars)) ~ normal(0,2);
-    }
-    if(!fixedC){
-      logitCpars ~ normal(logitCMean,logitCSD);
-      mean(logitCpars) ~ normal(logitCMean, logitCMeanSD);
-      if(outlierfix) ((logitCpars-logitCMean)/sd(logitCpars)) ~ normal(0,2);
-    }
-    if(!fixedAbility) {
-      for(i in 1:(Nscales)){
-        Abilitypars[,i] ~ normal(AbilityMean[i],AbilitySD[i]);
-        mean(Ability[,i]) ~ normal(AbilityMean[i],AbilityMeanSD[i]);
-        if(outlierfix) ((Abilitypars[,i]-AbilityMean[i])/sd(Abilitypars[,i])) ~ normal(0,2);
-      }
+  if(!fixedA){
+    if(dopriors) logApars ~ normal(logAMean,logASD);
+    if(restrictAMean) mean(A) ~ normal(log1p_exp(logAMean), AMeanSD);
+    if(outlierfix) ((logApars-logAMean)/sd(logApars)) ~ normal(0,outlierscale);
+  }
+  if(!fixedB){
+    if(dopriors) Bpars ~ normal(BMean,BSD);
+    if(restrictBMean) mean(Bpars) ~ normal(BMean, BMeanSD);
+    if(outlierfix) ((Bpars-BMean)/sd(Bpars)) ~ normal(0,outlierscale);
+  }
+  if(!fixedC){
+    if(dopriors) logitCpars ~ normal(logitCMean,logitCSD);
+    if(restrictCMean) mean(logitCpars) ~ normal(logitCMean, logitCMeanSD);
+    if(outlierfix) ((logitCpars-logitCMean)/sd(logitCpars)) ~ normal(0,outlierscale);
+  }
+  if(!fixedAbility) {
+    for(i in 1:(Nscales)){
+      if(dopriors) Abilitypars[,i] ~ normal(AbilityMean[i],AbilitySD[i]);
+      if(restrictAbilityMean) mean(Ability[,i]) ~ normal(AbilityMean[i],AbilityMeanSD[i]);
+      if(outlierfix) ((Abilitypars[,i]-AbilityMean[i])/sd(Abilitypars[,i])) ~ normal(0,outlierscale);
     }
   }
 

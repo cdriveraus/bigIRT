@@ -15,17 +15,19 @@ fitIRT(
   Bdata = NA,
   Cdata = NA,
   Abilitydata = NA,
-  AMeandat = 1,
-  ASD = 1,
+  logAMeandat = 0.542,
+  logASD = 2,
   BMeandat = 0,
-  BSD = 2,
-  logitCMeandat = -2,
-  logitCSD = 1,
+  BSD = 5,
+  logitCMeandat = -5,
+  logitCSD = 2,
   AbilityMeandat = array(0, dim = c(length(unique(dat[[scale]])))),
-  AbilitySD = array(2, dim = c(length(unique(dat[[scale]])))),
+  AbilitySD = array(5, dim = c(length(unique(dat[[scale]])))),
   AMeanSD = 0.01,
   BMeanSD = BSD,
   logitCMeanSD = logitCSD,
+  ABMeandat = 0,
+  ABSD = BSD,
   AbilityMeanSD = array(0.01, dim = c(length(unique(dat[[scale]])))),
   iter = 2000,
   cores = 6,
@@ -34,6 +36,10 @@ fitIRT(
   ebayesmultiplier = 2,
   estMeans = FALSE,
   priors = TRUE,
+  outlierfix = TRUE,
+  outlierscale = 2,
+  normalise = TRUE,
+  AB = FALSE,
   ...
 )
 }
@@ -50,7 +56,7 @@ Title
 #Generate some data (here 2pl model
 require(data.table)
 dat <- bigIRT:::IRTsim(Nsubs = 5000,Nitems = 100,Nscales = 1,
-  logitCMean = -10,logitCSD = 0,AMean = 1,ASD = .3,
+  logitCMean = -10,logitCSD = 0,logAMean = 1,logASD = .3,
   BMean=0,BSD = .5,
   AbilityMean = 0,AbilitySD = 1)
 
@@ -64,5 +70,6 @@ tfit <-tam.mml.2pl(resp = wdat,est.variance = TRUE)
 
 
 #fit using bigIRT
-fit <- fitIRT(dat$dat,cores=2,pl=2)
+fit <- fitIRT(dat$dat,cores=2,score = 'score',id = 'id',
+  scale = 'Scale',item = 'Item', pl=2)
 }
