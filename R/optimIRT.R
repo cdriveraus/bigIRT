@@ -52,7 +52,7 @@ optimIRT <- function(standata, cores=6, split=TRUE,
   # askmore=FALSE
   split=TRUE
   # standata=sdat
-  standata$rowIndex <- 1:standata$Nobs
+  standata$rowIndex <- array(as.integer(1:standata$Nobs))
 
 
 
@@ -92,7 +92,7 @@ optimIRT <- function(standata, cores=6, split=TRUE,
   if(cores==1){
     target = singletarget #we use this for importance sampling
     if(AB) smf <- stan_reinitsf(stanmodels$irtAB,standata)
-    if(!AB) smf <- stan_reinitsf(stanmodels$`2pl`,standata)
+    if(!AB) smf <- stan_reinitsf(stanmodels$irt,standata)
 
   }
 
@@ -124,7 +124,7 @@ optimIRT <- function(standata, cores=6, split=TRUE,
       "if(!1 %in% stanindices[[nodeid]]) standata$dopriors <- 0L",
       "g = eval(parse(text=paste0('gl','obalenv()')))", #avoid spurious cran check -- assigning to global environment only on created parallel workers.
       if(AB) "assign('smf',bigIRT:::stan_reinitsf(bigIRT:::stanmodels$irtAB,standata),pos = g)",
-      if(!AB) "assign('smf',bigIRT:::stan_reinitsf(bigIRT:::stanmodels$`2pl`,standata),pos = g)",
+      if(!AB) "assign('smf',bigIRT:::stan_reinitsf(bigIRT:::stanmodels$irt,standata),pos = g)",
       "NULL"
     )
     cl <- makeClusterID(cores)
@@ -191,7 +191,7 @@ target<-function(parm,gradnoise=TRUE){
 
   if(cores==1) npars=rstan::get_num_upars(smf)
   # if(cores > 1) npars=parallel::clusterEvalQ(benv$clms, eval(rstan::get_num_upars(smf),envir = globalenv()))[[1]]
-  if(cores > 1) npars=clusterIDeval(cl, 'rstan::get_num_upars(smf)')
+  if(cores > 1) npars=clusterIDeval(cl, 'rstan::get_num_upars(smf)')[[1]]
   if(is.na(init[1])) init=rnorm(npars,0,.01)
   #target(init)
 
@@ -244,7 +244,7 @@ target<-function(parm,gradnoise=TRUE){
 
   try({parallel::stopCluster(clms)},silent=TRUE)
   if(AB) smf <- stan_reinitsf(stanmodels$irtAB,standata)
-  if(!AB) smf <- stan_reinitsf(stanmodels$`2pl`,standata)
+  if(!AB) smf <- stan_reinitsf(stanmodels$irt,standata)
   return(list(optim=optimfit,stanfit=smf,pars=rstan::constrain_pars(object = smf, optimfit$par),dat=standata))
 
 }

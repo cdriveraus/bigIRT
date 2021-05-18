@@ -42,13 +42,15 @@ IRTsim <- function(Nsubs=100,Nitems=200,Nscales=3,ASD=0,AMean=1,BSD=1,BMean=0,lo
       Item=rep( ((si-1)*Nitems+1):(si*Nitems),times=Nsubs),
       Scale=si,
       Ability=rep(Ability[,si],each=Nitems),
-      A = rep(A[,si],times=Nsubs),B=rep(B[,si],times=Nsubs),
+      A = rep(A[,si],times=Nsubs),
+      B=rep(B[,si],times=Nsubs),
+      C=rep(C[,si],times=Nsubs),
       pcorrect=0,score=0)
 
     if(!AB) simdat$p= C[simdat$Item-(si-1)*Nitems,si]+
       (1-C[simdat$Item-(si-1)*Nitems,si]) / (1+exp(
       -A[simdat$Item-(si-1)*Nitems,si] * #discrimination of item=
-        (Ability[simdat$id,si] - #ability
+        (Ability[simdat$id,si] - #Ability
         B[simdat$Item-(si-1)*Nitems,si]) #item difficulty
     ))
 
@@ -56,7 +58,7 @@ IRTsim <- function(Nsubs=100,Nitems=200,Nscales=3,ASD=0,AMean=1,BSD=1,BMean=0,lo
       (1-C[simdat$Item-(si-1)*Nitems,si]) / (1+exp(
         B[simdat$Item-(si-1)*Nitems,si] -
       A[simdat$Item-(si-1)*Nitems,si] * #discrimination of item=
-        Ability[simdat$id,si]#ability
+        Ability[simdat$id,si]#Ability
     ))
 
     if(AB) B <- B/A
