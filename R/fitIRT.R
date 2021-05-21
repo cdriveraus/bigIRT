@@ -3,13 +3,13 @@ if(FALSE){
 
   #Generate some data
   require(data.table)
-  dat <- bigIRT:::IRTsim(Nsubs = 500,Nitems = 10,Nscales = 1,
-    logitCMean = -1,logitCSD = .3,logAMean = 1,logASD = .3,
+  dat <- bigIRT:::IRTsim(Nsubs = 20,Nitems = 100,Nscales = 1,
+    logitCMean = -10,logitCSD = .03,AMean = 1,ASD = .03,
     BMean=0,BSD = .5,
     AbilityMean = 0,AbilitySD = 1)
   cdat<-dat
   wdat <- data.frame(dcast(data.table(dat$dat),formula = 'id ~ Item',value.var='score')[,-1])
-  pl=3
+  pl=1
 
   # #mirt
   # require(mirt)
@@ -26,11 +26,12 @@ if(FALSE){
     guess=rep(.1,ncol(wdat),control=list(msteps=20,fac.oldxsi=.6,increment.factor=1.6))))#, acceleration="Ramsay")))
   if(pl==2) ttam <- system.time(tfit <-tam.mml.2pl(resp = wdat,est.variance = TRUE))
   if(pl==1) ttam <- system.time(tfit <-tam.mml(resp = wdat,est.variance = TRUE))
+  tamAbility <- IRT.factor.scores(tfit,type = 'WLE')
   tfit$guess
 
 
   # empirical bayes estimates for regularized final pass
-  fit <- fitIRT(dat$dat,cores=6,pl=pl,plot=F,verbose=1,priors=T)
+  fit <- fitIRT(dat$dat,cores=1,pl=1,plot=F,verbose=1,priors=T)
 
 
 
@@ -123,11 +124,11 @@ if(FALSE){
 }
 
 
-  cfunc <- function(x) exp(-exp(-x))
-  cfunci <- function(x) -log(-log(x))
+cfunc <- function(x) exp(-exp(-x))
+cfunci <- function(x) -log(-log(x))
 
-  afunc <- function(x) log1p(exp(x))
-  afunci <- function(x) log(exp(x)-1)
+afunc <- function(x) log1p(exp(x))
+afunci <- function(x) log(exp(x)-1)
 
 
 #' Title
@@ -198,7 +199,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   iter=2000,cores=6,carefulfit=FALSE,
   ebayes=TRUE,ebayesmultiplier=2,ebayesFromFixed=FALSE,
   estMeans=FALSE,priors=TRUE,
-  normalise=TRUE,...){
+  normalise=TRUE,normaliseScale=1,normaliseMean=0,...){
 
 
 
@@ -207,9 +208,9 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
 
   dat <- dat[,c((id),(score),(item),(scale)),with=FALSE]
 
-  itemIndex <- data.table(original=unique(dat[[item]]))
-  scaleIndex <- data.table(original=unique(dat[[scale]]))
-  idIndex <- data.table(original=unique(dat[[id]]))
+  itemIndex <- data.table(original=dat[[item]][!duplicated(dat[[item]])])
+  scaleIndex <- data.table(original=dat[[scale]][!duplicated(dat[[scale]])])
+  idIndex <- data.table(original=dat[[id]][!duplicated(dat[[id]])])
 
 
   indx <- c(id,item,scale)
@@ -218,8 +219,8 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
 
   itemIndex$new <- dat[[item]][!duplicated(dat[[item]])]
   itemIndex$scale <- dat[[scale]][!duplicated(dat[[item]])]
-  scaleIndex$new <-unique(dat[[scale]])
-  idIndex$new <- unique(dat[[id]])
+  scaleIndex$new <-dat[[scale]][!duplicated(dat[[scale]])]
+  idIndex$new <- dat[[id]][!duplicated(dat[[id]])]
 
   itemIndex=itemIndex[order(new),]
   scaleIndex=scaleIndex[order(new),]
@@ -298,13 +299,13 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   #which scale is each Ability par for
   Abilityparsscaleindex <- c(col(Abilityparsindex)[Abilityparsindex>0])
 
-# browser()
+  # browser()
   sdat <- c(sdat,list(
     Nobs=nrow(dat),
     Nsubs=Nsubs,
     Nitems=Nitems,
     Nscales=Nscales,
-    id=array(as.integer(factor(dat[[id]]))),
+    id=array(dat[[id]]),
     dopriors=as.integer(priors||ebayes),
     outlierfix=0L,
     outlierscale=2,
@@ -325,10 +326,10 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     end=as.integer(nrow(dat)),
     score=array(as.integer(dat[[score]])),
     incorrect=array(as.integer(which(dat[[score]]==0))),
-    item = array(as.integer(factor(dat[[item]]))),
+    item = array(dat[[item]]),
     itemMean = dat$itemMean[!duplicated(dat[[item]])],
     personMean = dat$personMean[!duplicated(dat[[id]])],
-    scale=array(as.integer(factor(dat[[scale]]))),
+    scale=array(dat[[scale]]),
     Adata=array(itemSetup$Adata),Bdata=array(itemSetup$Bdata),Cdata=array(itemSetup$Cdata),
     Abilitydata=matrix(unlist(AbilitySetup[,paste0(c(scaleIndex$original),'data'),with=FALSE]),Nsubs,Nscales),
     fixedMeans=as.integer(!estMeans),
@@ -348,6 +349,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
 
   JMLfit <- function(est, sdat, ebayes=FALSE, fit=NA,narrowPriors=FALSE,...){
     init <- NA
+    skipebayes <- FALSE
 
     message(paste0(ifelse(narrowPriors,'Narrow priors ', ifelse(ebayes,'Empirical Bayes ','Free estimation ')),'step...'))
 
@@ -369,11 +371,16 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
       sdat$BSD <- sd(fit$pars$B)*ebayesmultiplier+1e-5
 
       sdat$logitCMeandat <- mean(cfunci(fit$pars$C+1e-8))
-      sdat$logitCSD <- sd(cfunci(fit$pars$C+1e-8))*ebayesmultiplier+1e-5
+      sdat$logitCSD <- sd(cfunci(fit$pars$C+1e-8),na.rm=TRUE)*ebayesmultiplier+1e-5
+
 
       sdat$AbilityMeandat <- array(apply(fit$pars$Ability,2,mean))
       sdat$AbilitySD <- array(apply(fit$pars$Ability,2,sd))*ebayesmultiplier+1e-5 #maybe need to better account for multiple scales here, but not that important...
 
+      if(any(is.na(c(sdat$BSD,sdat$logASD,sdat$logitCSD,sdat$AbilitySD)))){
+        skipebayes <- TRUE
+        warning('NA when computing item sd parameters, ebayes set to FALSE')
+      }
     }
 
     if(narrowPriors){
@@ -384,7 +391,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
       sdat$AbilitySD <- array(1,sdat$Nscales)
     }
 
-    fit <- optimIRT(standata=sdat,Niter=iter,cores=cores,init = init,...)
+    if(!skipebayes) fit <- optimIRT(standata=sdat,Niter=iter,cores=cores,init = init,...)
 
 
 
@@ -456,13 +463,13 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
 
   #normalise pars
   if(normalise){
-    nsd <- apply(fit$pars$Ability,2,sd)
+    nsd <- apply(fit$pars$Ability,2,sd) / (normaliseScale)
     nm <- apply(fit$pars$Ability,2,mean)
 
     for(i in 1:ncol(fit$pars$Ability)){
-      fit$pars$Ability[,i] <- (fit$pars$Ability[,i] -nm[i])/ nsd[i]
+      fit$pars$Ability[,i] <- (fit$pars$Ability[,i] -nm[i])/ nsd[i] +normaliseMean
       selector <- rownames(fit$pars$B) %in% itemSetup$original[itemSetup$scale %in% i]
-      fit$pars$B[selector]  <- ( fit$pars$B[selector]-nm[i]) / nsd[i]
+      fit$pars$B[selector]  <- ( fit$pars$B[selector]-nm[i]) / nsd[i] +normaliseMean
       fit$pars$A[selector] <-  fit$pars$A[selector] * nsd[i]
     }
   }
