@@ -394,26 +394,29 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     if(ebayes){
       sdat$dopriors <- 1L
 
-      if(pl > 1){
+      if(pl > 1 &&  length(fit$pars$logApars) > 2){
         sdat$logAMeandat <- mean(fit$pars$logApars) #mean(afunci(fit$pars$A))
         sdat$logASD <- sd(fit$pars$logApars)*ebayesmultiplier+1e-5 #afunci(fit$pars$A)
       }
 
-      sdat$BMeandat <- mean(fit$pars$Bpars)
-      sdat$BSD <- sd(fit$pars$Bpars)*ebayesmultiplier+1e-5
+      if(length(fit$pars$Bpars) > 2){
+        sdat$BMeandat <- mean(fit$pars$Bpars)
+        sdat$BSD <- sd(fit$pars$Bpars)*ebayesmultiplier+1e-5
+      }
 
-      if(pl > 2){
+      if(pl > 2 && length(fit$pars$logitCpars) > 2){
         sdat$logitCMeandat <- mean(fit$pars$logitCpars) #mean(cfunci(fit$pars$C+1e-8))
         sdat$logitCSD <- sd(fit$pars$logitCpars,na.rm=TRUE) * ebayesmultiplier+1e-5 #sd(cfunci(fit$pars$C+1e-8),na.rm=TRUE)*ebayesmultiplier+1e-5
       }
 
-
-      sdat$AbilityMeandat <- array(sapply(1:Nscales,function(x){
-        mean(fit$pars$Abilitypars[sdat$Abilityparsscaleindex %in% x])
-      }))
-      sdat$AbilitySD <- array(sapply(1:Nscales,function(x){
-        sd(fit$pars$Abilitypars[sdat$Abilityparsscaleindex %in% x],na.rm=TRUE)
-      })) * ebayesmultiplier + 1e-5
+      if(length(fit$pars$Abilitypars) > 2){
+        sdat$AbilityMeandat <- array(sapply(1:Nscales,function(x){
+          mean(fit$pars$Abilitypars[sdat$Abilityparsscaleindex %in% x])
+        }))
+        sdat$AbilitySD <- array(sapply(1:Nscales,function(x){
+          sd(fit$pars$Abilitypars[sdat$Abilityparsscaleindex %in% x],na.rm=TRUE)
+        })) * ebayesmultiplier + 1e-5
+      }
 
       if(any(is.na(c(sdat$BSD,sdat$logASD,sdat$logitCSD,sdat$AbilitySD)))){
         skipebayes <- TRUE
