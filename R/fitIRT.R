@@ -3,13 +3,13 @@ if(FALSE){
 
   #Generate some data
   require(data.table)
-  dat <- bigIRT:::IRTsim(Nsubs = 20,Nitems = 100,Nscales = 1,
+  dat <- bigIRT:::IRTsim(Nsubs = 2000,Nitems = 100,Nscales = 1,
     logitCMean = -10,logitCSD = .03,AMean = 1,ASD = .03,
     BMean=0,BSD = .5,
     AbilityMean = 0,AbilitySD = 1)
   cdat<-dat
   wdat <- data.frame(dcast(data.table(dat$dat),formula = 'id ~ Item',value.var='score')[,-1])
-  pl=1
+  pl=2
 
   # #mirt
   # require(mirt)
@@ -208,12 +208,21 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   dat <- dat[,c((id),(score),(item),(scale),itemPreds,personPreds),with=FALSE]
 
   #drop problem people and items
-  dat[,itemMean:=mean(eval(score)),by=item]
-  if(any(dat$itemMean %in% c(0,1))) warning('Dropping items with all 0 or 1',immediate. = TRUE)
-  dat <- dat[itemMean > 0 & itemMean < 1,]
-  dat[,personMean:=mean(eval(score)),by=id]
-  if(any(dat$personMean %in% c(0,1))) warning('Dropping subjects with all 0 or 1',immediate. = TRUE)
-  dat <-dat[personMean > 0 & personMean < 1,]
+  dropping=TRUE
+  while(dropping){
+    dropping <- FALSE
+    dat[,itemMean:=mean(eval(score)),by=Item]
+    if(any(dat$itemMean %in% c(0,1))){
+      dropping <- TRUE
+      warning('Dropping items with all 0 or 1',immediate. = TRUE)
+      dat <- dat[itemMean > 0 & itemMean < 1,]
+    }
+    if(any(dat$personMean %in% c(0,1))){
+      warning('Dropping subjects with all 0 or 1',immediate. = TRUE)
+      dropping <- TRUE
+      dat <-dat[personMean > 0 & personMean < 1,]
+    }
+  }
 
 
 
@@ -385,24 +394,24 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
 
       if(pl > 1){
         sdat$logAMeandat <- mean(fit$pars$logApars) #mean(afunci(fit$pars$A))
-      sdat$logASD <- sd(fit$pars$logApars)*ebayesmultiplier+1e-5 #afunci(fit$pars$A)
+        sdat$logASD <- sd(fit$pars$logApars)*ebayesmultiplier+1e-5 #afunci(fit$pars$A)
       }
 
       sdat$BMeandat <- mean(fit$pars$Bpars)
       sdat$BSD <- sd(fit$pars$Bpars)*ebayesmultiplier+1e-5
 
       if(pl > 2){
-      sdat$logitCMeandat <- mean(fit$pars$logitCpars) #mean(cfunci(fit$pars$C+1e-8))
-      sdat$logitCSD <- sd(fit$pars$logitCpars,na.rm=TRUE) * ebayesmultiplier+1e-5 #sd(cfunci(fit$pars$C+1e-8),na.rm=TRUE)*ebayesmultiplier+1e-5
+        sdat$logitCMeandat <- mean(fit$pars$logitCpars) #mean(cfunci(fit$pars$C+1e-8))
+        sdat$logitCSD <- sd(fit$pars$logitCpars,na.rm=TRUE) * ebayesmultiplier+1e-5 #sd(cfunci(fit$pars$C+1e-8),na.rm=TRUE)*ebayesmultiplier+1e-5
       }
 
 
       sdat$AbilityMeandat <- array(sapply(1:Nscales,function(x){
         mean(fit$pars$Abilitypars[sdat$Abilityparsscaleindex %in% x])
-        }))
+      }))
       sdat$AbilitySD <- array(sapply(1:Nscales,function(x){
         sd(fit$pars$Abilitypars[sdat$Abilityparsscaleindex %in% x],na.rm=TRUE)
-        })) * ebayesmultiplier + 1e-5
+      })) * ebayesmultiplier + 1e-5
 
       if(any(is.na(c(sdat$BSD,sdat$logASD,sdat$logitCSD,sdat$AbilitySD)))){
         skipebayes <- TRUE
