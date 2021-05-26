@@ -209,15 +209,16 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
 
   #drop problem people and items
   dropping=TRUE
+  scorevar99999=score
   while(dropping){
     dropping <- FALSE
-    dat[,itemMean:=mean(get(score)),by=item]
+    dat[,itemMean:=mean(get(scorevar99999)),by=item]
     if(any(dat$itemMean %in% c(0,1))){
       dropping <- TRUE
       warning('Dropping items with all 0 or 1',immediate. = TRUE)
       dat <- dat[itemMean > 0 & itemMean < 1,]
     }
-    dat[,personMean:= mean(get(score)),by=id]
+    dat[,personMean:= mean(get(scorevar99999)),by=id]
     if(any(dat$personMean %in% c(0,1))){
       warning('Dropping subjects with all 0 or 1',immediate. = TRUE)
       dropping <- TRUE
