@@ -3,7 +3,7 @@ if(FALSE){
 
   #Generate some data
   require(data.table)
-  dat <- bigIRT:::IRTsim(Nsubs = 2000,Nitems = 100,Nscales = 1,
+  dat <- bigIRT:::IRTsim(Nsubs = 200,Nitems = 100,Nscales = 1,
     logitCMean = -10,logitCSD = .03,AMean = 1,ASD = .03,
     BMean=0,BSD = .5,
     AbilityMean = 0,AbilitySD = 1)
@@ -211,12 +211,13 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   dropping=TRUE
   while(dropping){
     dropping <- FALSE
-    dat[,itemMean:=mean(eval(score)),by=Item]
+    dat[,itemMean:=mean(get(score)),by=item]
     if(any(dat$itemMean %in% c(0,1))){
       dropping <- TRUE
       warning('Dropping items with all 0 or 1',immediate. = TRUE)
       dat <- dat[itemMean > 0 & itemMean < 1,]
     }
+    dat[,personMean:= mean(get(score)),by=id]
     if(any(dat$personMean %in% c(0,1))){
       warning('Dropping subjects with all 0 or 1',immediate. = TRUE)
       dropping <- TRUE
