@@ -26,13 +26,23 @@ IRTcurve <- function(a,b,c,theta=seq(-3,3,.01),plot=TRUE,rescale=FALSE,add=FALSE
 #' @export
 #'
 #' @examples
-IRTsim <- function(Nsubs=100,Nitems=200,Nscales=3,ASD=0,AMean=1,BSD=1,BMean=0,logitCSD=1,logitCMean=-2,AbilitySD=1,AbilityMean=0,
+IRTsim <- function(Nsubs=100,Nitems=200,Nscales=3,
+  ASD=0,AMean=1,BSD=1,BMean=0,logitCSD=1,logitCMean=-2,AbilitySD=1,AbilityMean=0,
+  itemPreds=NA, AitemPredEffects=NA,BitemPredEffects=NA,logitCitemPredEffects=NA,
   AB=FALSE){
 
   Ability <- matrix(rnorm(Nsubs*Nscales,AbilityMean,AbilitySD),Nsubs)
   A <- matrix(rnorm(Nitems*Nscales,AMean,ASD),Nitems)
   B <- matrix(rnorm(Nitems*Nscales,BMean,BSD),Nitems)
   logitC <- matrix(rnorm(Nitems*Nscales,logitCMean,logitCSD),Nitems)
+
+  if(!all(is.na(itemPreds))){
+    if(all(!is.na(AitemPredEffects))) A <- A + apply(itemPreds,1,function(x) sum(AitemPredEffects*x))
+    if(all(!is.na(BitemPredEffects))) B <- B + apply(itemPreds,1,function(x) sum(BitemPredEffects*x))
+    if(all(!is.na(logitCitemPredEffects))) logitC <- logitC + apply(itemPreds,1,function(x) sum(logitCitemPredEffects*x))
+  }
+
+
   C <- ctsem:::inv_logit(logitC)
 
 
@@ -67,5 +77,8 @@ simdat$score <- rbinom(n = simdat$p,size = 1,
 
 if(si==1) dat <- simdat else dat <- rbind(dat,simdat)
   }
+
+  if(!all(is.na(itemPreds))) dat <- merge.data.table(as.data.table(dat),data.table(Item=1:Nitems,itemPreds),id.vars='id',all=TRUE)
+
   return(list(Ability=Ability,A=A,B=B, C=C,dat=dat))
 }

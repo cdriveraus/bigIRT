@@ -12,6 +12,12 @@ data{
   int item[Nobs];
   int scale[Nobs];
 
+  int NitemPreds;
+  int NpersonPreds;
+
+  vector[Nitems] itemPreds[NitemPreds];
+  vector[NpersonPreds] personPreds [Nsubs];
+
   int NfixedA;
   int NfixedB;
   int NfixedC;
@@ -79,9 +85,14 @@ parameters{
   vector[fixedBMean ? 0 : 1] BMeanpar;
   vector[fixedCMean ? 0 : 1] logitCMeanpar;
   vector[fixedAbilityMean ? 0 : Nscales] AbilityMeanpar;
+  vector[(Nitems-NfixedA) ? NitemPreds : 0] logAbeta;
+  vector[(Nitems-NfixedB) ? NitemPreds : 0] Bbeta;
+  vector[(Nitems-NfixedC) ? NitemPreds : 0] logitCbeta;
+  vector[(Nsubs*Nscales-NfixedAbility) ? NpersonPreds : 0] Abilitybeta[Nscales];
 }
 transformed parameters{
   vector[end-start+1] p;
+  matrix[Nsubs,Nscales] Ability;
   vector[end-start+1] AbilityNobs;
   vector[Nitems] A;
   vector[Nitems] B;
@@ -94,24 +105,42 @@ transformed parameters{
   A[fixedA] = Adata[fixedA];
   B[fixedB] = Bdata[fixedB];
   C[fixedC] = Cdata[fixedC];
-  A[notfixedA] = log1p_exp(logApars);
+
+  A[notfixedA] = logApars;
   B[notfixedB] = Bpars;
-  C[notfixedC] = inv_logit(logitCpars);
+  C[notfixedC] = logitCpars;
 
+  if(NitemPreds > 0){
+    for(i in 1:NitemPreds) if(num_elements(logAbeta)) A[notfixedA] += (itemPreds[i,notfixedA]' * logAbeta[i])';
+    for(i in 1:NitemPreds) if(num_elements(Bbeta)) B[notfixedB] += (itemPreds[i,notfixedB]' * Bbeta[i])';
+    for(i in 1:NitemPreds) if(num_elements(logitCbeta)) C[notfixedC] += (itemPreds[i,notfixedC]' * logitCbeta[i])';
+  }
 
+  A[notfixedA] = log1p_exp(A[notfixedA]);
+  C[notfixedC] = inv_logit(C[notfixedC]);
 
-    for(i in start:end){
-      AbilityNobs[i-start+1] = fixedAbilityLogical[id[i], scale[i]] ? Abilitydata[id[i],scale[i]] :
-      Abilitypars[Abilityparsindex[id[i],scale[i]]];
+  for(i in 1:Nsubs){
+    for(j in 1:Nscales){
+      if(fixedAbilityLogical[i,j]==1) Ability[i,j] = Abilitydata[i,j]; else{
+        Ability[i,j] = Abilitypars[Abilityparsindex[i,j]];
+        if(NpersonPreds) Ability[i,j] += personPreds[i,]' * Abilitybeta[j,];
+      }
     }
+  }
 
-    p= C[item[start:end]] + (1.0-C[item[start:end]]) ./ ( 1.0 + exp(
-      (-A[item[start:end]] .* (
-        AbilityNobs-
-        B[item[start:end]]
-        ))));
 
-        p[incorrect] = 1-p[incorrect];
+  for(i in start:end){
+    // AbilityNobs[i-start+1] = fixedAbilityLogical[id[i], scale[i]] ? Abilitydata[id[i],scale[i]] : Abilitypars[Abilityparsindex[id[i],scale[i]]];
+    AbilityNobs[i-start+1] = Ability[id[i],scale[i]];
+  }
+
+  p= C[item[start:end]] + (1.0-C[item[start:end]]) ./ ( 1.0 + exp(
+    (-A[item[start:end]] .* (
+      AbilityNobs-
+      B[item[start:end]]
+      ))));
+
+      p[incorrect] = 1-p[incorrect];
 
 }
 model{
@@ -134,18 +163,11 @@ model{
   }
 }
 generated quantities{
-vector[end-start+1] pcorrect;
-matrix[Nsubs,Nscales] Ability;
-for(i in start:end){
-  if(score[i]==0) pcorrect[i-start+1] = 1-p[i-start+1]; else pcorrect[i-start+1]=p[i-start+1];
-}
-
-for(i in 1:Nsubs){
-  for(j in 1:Nscales){
-    if(fixedAbilityLogical[i,j]==1) Ability[i,j] = Abilitydata[i,j]; else{
-      Ability[i,j] = Abilitypars[Abilityparsindex[i,j]];
-    }
+  vector[end-start+1] pcorrect;
+  for(i in start:end){
+    if(score[i]==0) pcorrect[i-start+1] = 1-p[i-start+1]; else pcorrect[i-start+1]=p[i-start+1];
   }
-}
+
+
 }
 

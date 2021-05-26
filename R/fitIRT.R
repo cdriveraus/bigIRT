@@ -142,7 +142,7 @@ afunci <- function(x) log(exp(x)-1)
 #' @param Adata
 #' @param Bdata
 #' @param Cdata
-#' @param AbilityDat
+#' @param personDat
 #' @param logAMeandat
 #' @param logASD
 #' @param BMeandat
@@ -189,9 +189,9 @@ afunci <- function(x) log(exp(x)-1)
 #' fit <- fitIRT(dat$dat,cores=2,score = 'score',id = 'id',
 #'   scale = 'Scale',item = 'Item', pl=2)
 fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
-  AbilityDat=NA,
-  itemDat=NA,
-  logAMeandat=.542,logASD=1,BMeandat=0,BSD=2, logitCMeandat=-4,logitCSD=2,
+  personDat=NA, personPreds=character(),
+  itemDat=NA, itemPreds=character(),
+  logAMeandat=.542,logASD=.5,BMeandat=0,BSD=2, logitCMeandat=-4,logitCSD=2,
   AbilityMeandat=array(0,dim=c(length(unique(dat[[scale]])))),
   AbilitySD=array(2,dim=c(length(unique(dat[[scale]])))),
   AMeanSD=.1,BMeanSD=BSD,logitCMeanSD=logitCSD,
@@ -205,8 +205,17 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
 
   #add obs counts
   if(!'data.table' %in% class(dat)) dat <- as.data.table(dat)
+  dat <- dat[,c((id),(score),(item),(scale),itemPreds,personPreds),with=FALSE]
 
-  dat <- dat[,c((id),(score),(item),(scale)),with=FALSE]
+  #drop problem people and items
+  dat[,itemMean:=mean(eval(score)),by=item]
+  if(any(dat$itemMean %in% c(0,1))) warning('Dropping items with all 0 or 1',immediate. = TRUE)
+  dat <- dat[itemMean > 0 & itemMean < 1,]
+  dat[,personMean:=mean(eval(score)),by=id]
+  if(any(dat$personMean %in% c(0,1))) warning('Dropping subjects with all 0 or 1',immediate. = TRUE)
+  dat <-dat[personMean > 0 & personMean < 1,]
+
+
 
   itemIndex <- data.table(original=dat[[item]][!duplicated(dat[[item]])])
   scaleIndex <- data.table(original=dat[[scale]][!duplicated(dat[[scale]])])
@@ -229,12 +238,11 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
 
   if(any(is.na(dat))) stop('Missings found in data! Probably just remove the row/s...')
   if(!is.numeric(dat[[score]])) stop('Found a non-numeric score column!')
-  if(normalise && any(!is.na(c(itemDat,AbilityDat)))) warning(
+  if(normalise && any(!is.na(c(itemDat,personDat)))) warning(
     'With fixed values provided you might want to set normalise= FALSE',immediate. = TRUE)
 
 
-  dat[,itemMean:=mean(eval(score)),by=item]
-  dat[,personMean:=mean(eval(score)),by=id]
+
 
 
 
@@ -246,7 +254,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
 
   sdat <-list()
   if(ebayesFromFixed){ #do this before dropping unnecessary items from itemSetup / AbilitySetup
-    AbilityDat <- as.data.table(AbilityDat)
+    personDat <- as.data.table(personDat)
     itemDat <- as.data.table(itemDat)
     sdat$dopriors <- 1L
 
@@ -259,15 +267,15 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     sdat$logitCMeandat <- mean(cfunci(itemDat$C+1e-8),na.rm=TRUE)
     sdat$logitCSD <- sd(cfunci(itemDat$C+1e-8),na.rm=TRUE)*ebayesmultiplier+1e-5
 
-    sdat$AbilityMeandat <- array(apply(AbilityDat[,c(scaleIndex$original),with=FALSE],2,mean,na.rm=TRUE))
-    sdat$AbilitySD <- array(apply(AbilityDat[,c(scaleIndex$original),with=FALSE],2,sd,na.rm=TRUE))*ebayesmultiplier+1e-5 #maybe need to better account for multiple scales here, but not that important...
+    sdat$AbilityMeandat <- array(apply(personDat[,c(scaleIndex$original),with=FALSE],2,mean,na.rm=TRUE))
+    sdat$AbilitySD <- array(apply(personDat[,c(scaleIndex$original),with=FALSE],2,sd,na.rm=TRUE))*ebayesmultiplier+1e-5 #maybe need to better account for multiple scales here, but not that important...
   }
 
   itemSetup <- data.table(itemIndex,A=ifelse(pl>1,as.numeric(NA),1),B=as.numeric(NA),C=ifelse(pl>2,as.numeric(NA),0))
 
   if(!all(is.na(itemDat))){
     if(!'data.table' %in% class(itemDat)) itemDat <- as.data.table(itemDat)
-    itemDat <- itemDat[eval(item) %in% itemSetup$original,]
+    itemDat <- itemDat[get(item) %in% itemSetup$original,]
     setupRows <- match(itemDat[[item]],itemSetup$original)
     itemSetup[setupRows,c('A','B','C'):=itemDat[,c('A','B','C')]]
     if(pl<2) itemSetup[,'A':=1]
@@ -279,11 +287,11 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   AbilitySetup <- data.table(idIndex)
   AbilitySetup[,c(scaleIndex$original):=as.numeric(NA)]
 
-  if(!all(is.na(AbilityDat))){
-    if(!'data.table' %in% class(AbilityDat)) AbilityDat <- as.data.table(AbilityDat)
-    AbilityDat <- AbilityDat[eval(id) %in% AbilitySetup$original,]
-    setupRows <- match(AbilityDat[[id]],AbilitySetup$original)
-    AbilitySetup[setupRows,c(scaleIndex$original):=AbilityDat[,c(scaleIndex$original),with=FALSE]]
+  if(!all(is.na(personDat))){
+    if(!'data.table' %in% class(personDat)) personDat <- as.data.table(personDat)
+    personDat <- personDat[get(id) %in% AbilitySetup$original,]
+    setupRows <- match(personDat[[id]],AbilitySetup$original)
+    AbilitySetup[setupRows,c(scaleIndex$original):=personDat[,c(scaleIndex$original),with=FALSE]]
   }
   AbilitySetup[,paste0(c(scaleIndex$original),'data'):= .SD, .SDcols=c(scaleIndex$original)] #create data columns
   setnafill(AbilitySetup,fill = -99,cols = paste0(c(scaleIndex$original),'data')) #and fill with arbitrary value to avoid NA in stan
@@ -299,7 +307,18 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   #which scale is each Ability par for
   Abilityparsscaleindex <- c(col(Abilityparsindex)[Abilityparsindex>0])
 
-  # browser()
+
+
+  if(length(itemPreds)==0){
+    itemPreds <- array(0L,dim = c(Nitems,0))
+  } else itemPreds <- dat[!duplicated(dat[[item]]),itemPreds,with=FALSE]
+
+  idselect=!duplicated(dat[[id]]) #not sure why I had to do this outside the data table [], but recursive indexing failed otherwise...
+  if(length(personPreds)==0){
+    personPreds <- array(0L,dim = c(Nsubs,0))
+  } else personPreds <- dat[idselect,personPreds,with=FALSE]
+
+  #
   sdat <- c(sdat,list(
     Nobs=nrow(dat),
     Nsubs=Nsubs,
@@ -332,8 +351,8 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     scale=array(dat[[scale]]),
     Adata=array(itemSetup$Adata),Bdata=array(itemSetup$Bdata),Cdata=array(itemSetup$Cdata),
     Abilitydata=matrix(unlist(AbilitySetup[,paste0(c(scaleIndex$original),'data'),with=FALSE]),Nsubs,Nscales),
-    fixedMeans=as.integer(!estMeans),
-    # ABMeandat=ABMeandat, ABSD=ABSD,
+    NitemPreds=ncol(itemPreds), itemPreds=t(array(unlist(itemPreds),dim(itemPreds))),
+    NpersonPreds=ncol(personPreds), personPreds=(array(unlist(personPreds),dim(personPreds))),
     logAMeandat=logAMeandat,logASD=logASD,
     BMeandat=BMeandat,BSD=BSD,
     logitCMeandat=logitCMeandat,logitCSD=logitCSD,
@@ -364,18 +383,26 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     if(ebayes){
       sdat$dopriors <- 1L
 
-      sdat$logAMeandat <- mean(afunci(fit$pars$A))
-      sdat$logASD <- sd(afunci(fit$pars$A))*ebayesmultiplier+1e-5
+      if(pl > 1){
+        sdat$logAMeandat <- mean(fit$pars$logApars) #mean(afunci(fit$pars$A))
+      sdat$logASD <- sd(fit$pars$logApars)*ebayesmultiplier+1e-5 #afunci(fit$pars$A)
+      }
 
-      sdat$BMeandat <- mean(fit$pars$B)
-      sdat$BSD <- sd(fit$pars$B)*ebayesmultiplier+1e-5
+      sdat$BMeandat <- mean(fit$pars$Bpars)
+      sdat$BSD <- sd(fit$pars$Bpars)*ebayesmultiplier+1e-5
 
-      sdat$logitCMeandat <- mean(cfunci(fit$pars$C+1e-8))
-      sdat$logitCSD <- sd(cfunci(fit$pars$C+1e-8),na.rm=TRUE)*ebayesmultiplier+1e-5
+      if(pl > 2){
+      sdat$logitCMeandat <- mean(fit$pars$logitCpars) #mean(cfunci(fit$pars$C+1e-8))
+      sdat$logitCSD <- sd(fit$pars$logitCpars,na.rm=TRUE) * ebayesmultiplier+1e-5 #sd(cfunci(fit$pars$C+1e-8),na.rm=TRUE)*ebayesmultiplier+1e-5
+      }
 
 
-      sdat$AbilityMeandat <- array(apply(fit$pars$Ability,2,mean))
-      sdat$AbilitySD <- array(apply(fit$pars$Ability,2,sd))*ebayesmultiplier+1e-5 #maybe need to better account for multiple scales here, but not that important...
+      sdat$AbilityMeandat <- array(sapply(1:Nscales,function(x){
+        mean(fit$pars$Abilitypars[sdat$Abilityparsscaleindex %in% x])
+        }))
+      sdat$AbilitySD <- array(sapply(1:Nscales,function(x){
+        sd(fit$pars$Abilitypars[sdat$Abilityparsscaleindex %in% x],na.rm=TRUE)
+        })) * ebayesmultiplier + 1e-5
 
       if(any(is.na(c(sdat$BSD,sdat$logASD,sdat$logitCSD,sdat$AbilitySD)))){
         skipebayes <- TRUE
@@ -390,7 +417,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
       sdat$logitCSD <- 1
       sdat$AbilitySD <- array(1,sdat$Nscales)
     }
-
+    #
     if(!skipebayes) fit <- optimIRT(standata=sdat,Niter=iter,cores=cores,init = init,...)
 
 
