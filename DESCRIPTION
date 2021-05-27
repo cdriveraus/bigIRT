@@ -1,6 +1,6 @@
 Package: bigIRT
 Title: Fits item response theory models to big data
-Version: 0.0.1
+Version: 0.0.2
 Authors@R: 
     person(given = "Charles",
            family = "Driver",
