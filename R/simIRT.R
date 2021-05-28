@@ -1,4 +1,4 @@
-IRTcurve <- function(a,b,c,theta=seq(-3,3,.01),plot=TRUE,rescale=FALSE,add=FALSE,...){
+IRTcurve <- function(a,b,c,theta=seq(-3,3,.01),plot=TRUE,rescale=FALSE,add=FALSE...){
   theta <- sort(theta)
   x <- c + (1-c)/(1+exp(-a*(theta-b)))
   if(rescale) theta=scale(theta)
@@ -29,8 +29,7 @@ IRTcurve <- function(a,b,c,theta=seq(-3,3,.01),plot=TRUE,rescale=FALSE,add=FALSE
 IRTsim <- function(Nsubs=100,Nitems=200,Nscales=3,
   ASD=0,AMean=1,BSD=1,BMean=0,logitCSD=1,logitCMean=-2,AbilitySD=1,AbilityMean=0,
   itemPreds=NA, AitemPredEffects=NA,BitemPredEffects=NA,logitCitemPredEffects=NA,
-  personPreds=NA, AbilityPredEffects=NA,
-  AB=FALSE){
+  personPreds=NA, AbilityPredEffects=NA,normalise=TRUE){
 
   Ability <- matrix(rnorm(Nsubs*Nscales,AbilityMean,AbilitySD),Nsubs)
   A <- matrix(rnorm(Nitems*Nscales,AMean,ASD),Nitems)
@@ -51,6 +50,16 @@ IRTsim <- function(Nsubs=100,Nitems=200,Nscales=3,
     }
   }
 
+  if(normalise){
+    for(i in 1:ncol(Ability)){
+      normpars <- normaliseIRT(B=B[,i],
+        Ability=Ability[,i], A=A[,i])
+      B[,i] = normpars$B
+      Ability[,i] = normpars$Ability
+      A[,i] = normpars$A
+    }
+  }
+
 
     C <- ctsem:::inv_logit(logitC)
 
@@ -66,21 +75,14 @@ IRTsim <- function(Nsubs=100,Nitems=200,Nscales=3,
         C=rep(C[,si],times=Nsubs),
         pcorrect=0,score=0)
 
-      if(!AB) simdat$p= C[simdat$Item-(si-1)*Nitems,si]+
+      simdat$p= C[simdat$Item-(si-1)*Nitems,si]+
           (1-C[simdat$Item-(si-1)*Nitems,si]) / (1+exp(
             -A[simdat$Item-(si-1)*Nitems,si] * #discrimination of item=
               (Ability[simdat$id,si] - #Ability
                   B[simdat$Item-(si-1)*Nitems,si]) #item difficulty
           ))
 
-      if(AB)     simdat$p= C[simdat$Item-(si-1)*Nitems,si]+
-          (1-C[simdat$Item-(si-1)*Nitems,si]) / (1+exp(
-            B[simdat$Item-(si-1)*Nitems,si] -
-              A[simdat$Item-(si-1)*Nitems,si] * #discrimination of item=
-              Ability[simdat$id,si]#Ability
-          ))
 
-      if(AB) B <- B/A
       simdat$score <- rbinom(n = simdat$p,size = 1,
         prob = simdat$p )
 

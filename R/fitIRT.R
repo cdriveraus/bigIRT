@@ -1,3 +1,14 @@
+normaliseIRT <- function(B,Ability, A,normaliseScale=1, normaliseMean=0){
+
+  nsd <- sd(Ability) / (normaliseScale)
+  nm <- mean(Ability)
+
+  Ability <- (Ability -nm)/ nsd +normaliseMean
+  B  <- ( B-nm) / nsd +normaliseMean
+  A <-  A * nsd
+  return(list(A=A,B=B,Ability=Ability))
+}
+
 if(FALSE){
 
 
@@ -194,8 +205,8 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   logAMeandat=.542,logASD=.5,BMeandat=0,BSD=2, logitCMeandat=-4,logitCSD=2,
   AbilityMeandat=array(0,dim=c(length(unique(dat[[scale]])))),
   AbilitySD=array(2,dim=c(length(unique(dat[[scale]])))),
-  AMeanSD=.1,BMeanSD=BSD,logitCMeanSD=logitCSD,
-  AbilityMeanSD=array(.1,dim=c(length(unique(dat[[scale]])))),
+  AMeanSD=1,BMeanSD=BSD,logitCMeanSD=logitCSD,
+  AbilityMeanSD=array(1,dim=c(length(unique(dat[[scale]])))),
   iter=2000,cores=6,carefulfit=FALSE,
   ebayes=TRUE,ebayesmultiplier=2,ebayesFromFixed=FALSE,
   estMeans=FALSE,priors=TRUE,
@@ -229,6 +240,8 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
       dat <-dat[personMean > 0 & personMean < 1,]
     }
   }
+
+
 
 
 
@@ -324,14 +337,20 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
 
   if(length(itemPredsref.)==0){
     itemPreds <- array(0L,dim = c(Nitems,0))
-  } else itemPreds <- dat[!duplicated(get(itemref.)),itemPredsref.,with=FALSE]
+  } else{
+    itemPreds <- dat[!duplicated(get(itemref.)),itemPredsref.,with=FALSE]
+    itemPreds <- itemPreds[order(unique(dat[[idref.]])),]
+  }
 
   # idselect= #not sure why I had to do this outside the data table [], but recursive indexing failed otherwise...
   if(length(personPredsref.)==0){
     personPreds <- array(0L,dim = c(Nsubs,0))
-  } else personPreds <- dat[!duplicated(get(idref.)),personPredsref.,with=FALSE]
+  } else{
+    personPreds <- dat[!duplicated(get(idref.)),personPredsref.,with=FALSE]
+    personPreds <- personPreds[order(unique(dat[[idref.]])),]
+  }
 
-  #
+  # browser()
   sdat <- c(sdat,list(
     Nobs=nrow(dat),
     Nsubs=Nsubs,
@@ -371,8 +390,8 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     logitCMeandat=logitCMeandat,logitCSD=logitCSD,
     AbilityMeandat=AbilityMeandat,AbilitySD=array(AbilitySD),
     AMeanSD=AMeanSD,BMeanSD=BMeanSD,logitCMeanSD=logitCMeanSD,AbilityMeanSD=array(AbilityMeanSD),
-    fixedAMean=1L,fixedBMean=1L,fixedCMean=1L,fixedAbilityMean=1L,
-    restrictAMean=1L,restrictBMean=0L,restrictCMean=0L,restrictAbilityMean=1L  )
+    fixedAMean=0L,fixedBMean=0L,fixedCMean=1L,fixedAbilityMean=0L,
+    restrictAMean=1L,restrictBMean=1L,restrictCMean=0L,restrictAbilityMean=1L  )
   )
 
 
@@ -505,17 +524,32 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
 
 
   #normalise pars
-  if(normalise){
-    nsd <- apply(fit$pars$Ability,2,sd) / (normaliseScale)
-    nm <- apply(fit$pars$Ability,2,mean)
+    if(normalise){
 
     for(i in 1:ncol(fit$pars$Ability)){
-      fit$pars$Ability[,i] <- (fit$pars$Ability[,i] -nm[i])/ nsd[i] +normaliseMean
       selector <- rownames(fit$pars$B) %in% itemSetup$original[itemSetup$scale %in% i]
-      fit$pars$B[selector]  <- ( fit$pars$B[selector]-nm[i]) / nsd[i] +normaliseMean
-      fit$pars$A[selector] <-  fit$pars$A[selector] * nsd[i]
+
+      normpars <- normaliseIRT(B = fit$pars$B[selector],
+        Ability = fit$pars$Ability[,i],
+        A=fit$pars$A[selector],normaliseScale = normaliseScale, normaliseMean = normaliseMean)
+
+      fit$pars$Ability[,i] <- normpars$Ability
+
+      fit$pars$B[selector]  <- normpars$B
+      fit$pars$A[selector] <-  normpars$A
     }
   }
+  # if(normalise){
+  #   nsd <- apply(fit$pars$Ability,2,sd) / (normaliseScale)
+  #   nm <- apply(fit$pars$Ability,2,mean)
+  #
+  #   for(i in 1:ncol(fit$pars$Ability)){
+  #     fit$pars$Ability[,i] <- (fit$pars$Ability[,i] -nm[i])/ nsd[i] +normaliseMean
+  #     selector <- rownames(fit$pars$B) %in% itemSetup$original[itemSetup$scale %in% i]
+  #     fit$pars$B[selector]  <- ( fit$pars$B[selector]-nm[i]) / nsd[i] +normaliseMean
+  #     fit$pars$A[selector] <-  fit$pars$A[selector] * nsd[i]
+  #   }
+  # }
 
   fit$itemPars <- data.frame(item=rownames(fit$pars$B),A=fit$pars$A,B=fit$pars$B,C=fit$pars$C)
   colnames(fit$itemPars)[1] <- item
