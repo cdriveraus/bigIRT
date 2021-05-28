@@ -390,7 +390,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     logitCMeandat=logitCMeandat,logitCSD=logitCSD,
     AbilityMeandat=AbilityMeandat,AbilitySD=array(AbilitySD),
     AMeanSD=AMeanSD,BMeanSD=BMeanSD,logitCMeanSD=logitCMeanSD,AbilityMeanSD=array(AbilityMeanSD),
-    fixedAMean=0L,fixedBMean=0L,fixedCMean=1L,fixedAbilityMean=0L,
+    fixedAMean=1L,fixedBMean=1L,fixedCMean=1L,fixedAbilityMean=1L,
     restrictAMean=1L,restrictBMean=1L,restrictCMean=0L,restrictAbilityMean=1L  )
   )
 
