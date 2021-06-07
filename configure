@@ -2,7 +2,7 @@
 
 #! /bin/sh
 #"${R_HOME}/bin/Rscript" -e "bigIRT::stanconfig()"
-"${R_HOME}/bin/Rscript.exe" -e '
+"${R_HOME}/bin/Rscript" -e '
 {stanconfigure <- function (pkgdir = ".")
 {
     pkgdir <- rstantools:::.check_pkgdir(pkgdir)
