@@ -2,3 +2,27 @@
 
 #! /bin/sh
 #"${R_HOME}/bin/Rscript" -e "bigIRT::stanconfig()"
+"${R_HOME}/bin/Rscript.exe" -e '
+{stanconfigure <- function (pkgdir = ".")
+{
+    pkgdir <- rstantools:::.check_pkgdir(pkgdir)
+    stan_files <- list.files(file.path(pkgdir, "inst",
+        "stan"), full.names = TRUE, pattern = "\\.stan$")
+    if (length(stan_files) != 0) {
+        rstantools:::.add_standir(pkgdir, "R", msg = FALSE, warn = FALSE)
+        rstantools:::.add_standir(pkgdir, "src", msg = FALSE, warn = FALSE)
+        sapply(stan_files, rstantools:::.make_cc, pkgdir = pkgdir)
+        acc <- rstantools:::.setup_Makevars(pkgdir, add = TRUE)
+    }
+    else {
+        acc <- rstantools:::.setup_Makevars(pkgdir, add = FALSE)
+    }
+    acc <- any(acc) | rstantools:::.rm_cc(pkgdir)
+    Rcpp::compileAttributes(pkgdir)
+    stanmodels <- rstantools:::.update_stanmodels(pkgdir)
+    acc <- acc | rstantools:::.add_stanfile(stanmodels, pkgdir, "R",
+        "stanmodels.R")
+    invisible(acc)
+}
+;stanconfigure()
+}'
