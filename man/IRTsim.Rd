@@ -16,7 +16,13 @@ IRTsim(
   logitCMean = -2,
   AbilitySD = 1,
   AbilityMean = 0,
-  AB = FALSE
+  itemPreds = NA,
+  AitemPredEffects = NA,
+  BitemPredEffects = NA,
+  logitCitemPredEffects = NA,
+  personPreds = NA,
+  AbilityPredEffects = NA,
+  normalise = TRUE
 )
 }
 \arguments{
