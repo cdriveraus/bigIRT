@@ -339,7 +339,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     itemPreds <- array(0L,dim = c(Nitems,0))
   } else{
     itemPreds <- dat[!duplicated(get(itemref.)),itemPredsref.,with=FALSE]
-    itemPreds <- itemPreds[order(unique(dat[[idref.]])),]
+    itemPreds <- itemPreds[order(unique(dat[[itemref.]])),]
   }
 
   # idselect= #not sure why I had to do this outside the data table [], but recursive indexing failed otherwise...
@@ -350,7 +350,6 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     personPreds <- personPreds[order(unique(dat[[idref.]])),]
   }
 
-  # browser()
   sdat <- c(sdat,list(
     Nobs=nrow(dat),
     Nsubs=Nsubs,
