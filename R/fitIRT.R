@@ -202,6 +202,7 @@ afunci <- function(x) log(exp(x)-1)
 fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   personDat=NA, personPreds=character(),
   itemDat=NA, itemPreds=character(),
+  statePreds=character(),
   logAMeandat=.542,logASD=.5,BMeandat=0,BSD=2, logitCMeandat=-4,logitCSD=2,
   AbilityMeandat=array(0,dim=c(length(unique(dat[[scale]])))),
   AbilitySD=array(2,dim=c(length(unique(dat[[scale]])))),
@@ -210,23 +211,27 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   iter=2000,cores=6,carefulfit=FALSE,
   ebayes=TRUE,ebayesmultiplier=2,ebayesFromFixed=FALSE,
   estMeans=FALSE,priors=TRUE,
-  normalise=TRUE,normaliseScale=1,normaliseMean=0,...){
+  normalise=TRUE,normaliseScale=1,normaliseMean=0,
+  dropPerfectScores=TRUE,...){
 
+  sdat <-list() #initialize standata object
 
+  #setup unlikely names to use in data.table calls to avoid overlap from user defined names
   idref. <- id; scaleref. <- scale; itemref. <- item;
-  scoreref. <- score;#rm(score)
+  scoreref. <- score;
   personPredsref. <- personPreds;
   itemPredsref. <- itemPreds
-  #rm(id);rm(scale);rm(item);rm(personPreds);rm(itemPreds)
+  statePredsref. <- statePreds
 
-  #add obs counts
   if(!'data.table' %in% class(dat)) dat <- as.data.table(dat)
-  dat <- dat[,c((idref.),(scoreref.),(itemref.),(scaleref.),itemPredsref.,personPredsref.),with=FALSE]
+
+  #drop unused columns from dat
+  dat <- dat[,c((idref.),(scoreref.),(itemref.),(scaleref.),
+    itemPredsref.,personPredsref.,statePredsref.),with=FALSE]
 
   #drop problem people and items
-  dropping=TRUE
-  while(dropping){
-    dropping <- FALSE
+  while(dropPerfectScores){
+    dropPerfectScores <- FALSE
     dat[,itemMean:=mean(get(scoreref.)),by=itemref.]
     if(any(dat$itemMean %in% c(0,1))){
       dropping <- TRUE
@@ -236,34 +241,36 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     dat[,personMean:= mean(get(scoreref.)),by=idref.]
     if(any(dat$personMean %in% c(0,1))){
       warning('Dropping subjects with all 0 or 1',immediate. = TRUE)
-      dropping <- TRUE
+      dropPerfectScores <- TRUE
       dat <-dat[personMean > 0 & personMean < 1,]
     }
   }
 
 
-
-
-
+  #setup indices to map user specified categories to sequential integers for stan
   itemIndex <- data.table(original=dat[[itemref.]][!duplicated(dat[[itemref.]])])
   scaleIndex <- data.table(original=dat[[scaleref.]][!duplicated(dat[[scaleref.]])])
   idIndex <- data.table(original=dat[[idref.]][!duplicated(dat[[idref.]])])
 
 
+  #convert categories to sequential integers
   indx <- c(idref.,itemref.,scaleref.)
   for( ci in indx) set(dat,j = ci,value = as.integer(factor(dat[[ci]])))
   for( ci in indx) set(dat,j = ci,value = as.integer((dat[[ci]])))
 
+  #include new sequential integers in index lists
   itemIndex$new <- dat[[itemref.]][!duplicated(dat[[itemref.]])]
   itemIndex$scale <- dat[[scaleref.]][!duplicated(dat[[itemref.]])]
   scaleIndex$new <-dat[[scaleref.]][!duplicated(dat[[scaleref.]])]
   idIndex$new <- dat[[idref.]][!duplicated(dat[[idref.]])]
 
+  #order indices by new integer
   itemIndex=itemIndex[order(new),]
   scaleIndex=scaleIndex[order(new),]
   idIndex=idIndex[order(new),]
 
 
+  #checks...
   if(any(is.na(dat))) stop('Missings found in data! Probably just remove the row/s...')
   if(!is.numeric(dat[[scoreref.]])) stop('Found a non-numeric score column!')
   if(normalise && any(!is.na(c(itemDat,personDat)))) warning(
@@ -271,17 +278,12 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
 
 
 
-
-
-
-
-
   Nitems <- length(unique(dat[[itemref.]]))
   Nsubs=length(unique(dat[[idref.]]))
   Nscales=length(unique(dat[[scaleref.]]))
 
-  sdat <-list()
-  if(ebayesFromFixed){ #do this before dropping unnecessary items from itemSetup / AbilitySetup
+  #if getting priors from fixed pars, do this before dropping unnecessary items from itemSetup / AbilitySetup
+  if(ebayesFromFixed){
     personDat <- as.data.table(personDat)
     itemDat <- as.data.table(itemDat)
     sdat$dopriors <- 1L
@@ -299,9 +301,10 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     sdat$AbilitySD <- array(apply(personDat[,c(scaleIndex$original),with=FALSE],2,sd,na.rm=TRUE))*ebayesmultiplier+1e-5 #maybe need to better account for multiple scales here, but not that important...
   }
 
+  #setup item structure to define fixed / free pars
   itemSetup <- data.table(itemIndex,A=ifelse(pl>1,as.numeric(NA),1),B=as.numeric(NA),C=ifelse(pl>2,as.numeric(NA),0))
 
-  if(!all(is.na(itemDat))){
+  if(!all(is.na(itemDat))){ #if fixed item pars
     if(!'data.table' %in% class(itemDat)) itemDat <- as.data.table(itemDat)
     itemDat <- itemDat[get(itemref.) %in% itemSetup$original,]
     setupRows <- match(itemDat[[itemref.]],itemSetup$original)
@@ -312,10 +315,11 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   itemSetup[,paste0(c('A','B','C'),'data'):= .SD, .SDcols=c('A','B','C')] #create data columns
   setnafill(itemSetup,fill = -99,cols = paste0(c('A','B','C'),'data')) #and fill with arbitrary value to avoid NA in stan
 
+  #setup person structure to define fixed / free pars
   AbilitySetup <- data.table(idIndex)
   AbilitySetup[,c(scaleIndex$original):=as.numeric(NA)]
 
-  if(!all(is.na(personDat))){
+  if(!all(is.na(personDat))){ #if fixed person pars
     if(!'data.table' %in% class(personDat)) personDat <- as.data.table(personDat)
     personDat <- personDat[get(idref.) %in% AbilitySetup$original,]
     setupRows <- match(personDat[[idref.]],AbilitySetup$original)
@@ -335,20 +339,26 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   #which scale is each Ability par for
   Abilityparsscaleindex <- c(col(Abilityparsindex)[Abilityparsindex>0])
 
+  #include predictors:
+
   if(length(itemPredsref.)==0){
-    itemPreds <- array(0L,dim = c(Nitems,0))
+    itemPreds <- array(0,dim = c(Nitems,0))
   } else{
     itemPreds <- dat[!duplicated(get(itemref.)),itemPredsref.,with=FALSE]
     itemPreds <- itemPreds[order(unique(dat[[itemref.]])),]
   }
 
-  # idselect= #not sure why I had to do this outside the data table [], but recursive indexing failed otherwise...
   if(length(personPredsref.)==0){
-    personPreds <- array(0L,dim = c(Nsubs,0))
+    personPreds <- array(0,dim = c(Nsubs,0))
   } else{
     personPreds <- dat[!duplicated(get(idref.)),personPredsref.,with=FALSE]
     personPreds <- personPreds[order(unique(dat[[idref.]])),]
   }
+
+  sdat$NstatePreds <- length(statePreds)
+  sdat$statePreds <- matrix(0, nrow(dat), sdat$NstatePreds)
+  if(sdat$NstatePreds > 0) sdat$statePreds <- as.matrix(dat[,statePredsref.,with=FALSE])
+
 
   sdat <- c(sdat,list(
     Nobs=nrow(dat),
@@ -523,7 +533,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
 
 
   #normalise pars
-    if(normalise){
+  if(normalise){
 
     for(i in 1:ncol(fit$pars$Ability)){
       selector <- rownames(fit$pars$B) %in% itemSetup$original[itemSetup$scale %in% i]

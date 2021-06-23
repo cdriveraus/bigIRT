@@ -29,7 +29,8 @@ IRTcurve <- function(a,b,c,theta=seq(-3,3,.01),plot=TRUE,rescale=FALSE,add=FALSE
 IRTsim <- function(Nsubs=100,Nitems=200,Nscales=3,
   ASD=0,AMean=1,BSD=1,BMean=0,logitCSD=1,logitCMean=-2,AbilitySD=1,AbilityMean=0,
   itemPreds=NA, AitemPredEffects=NA,BitemPredEffects=NA,logitCitemPredEffects=NA,
-  personPreds=NA, AbilityPredEffects=NA,normalise=TRUE){
+  personPreds=NA, AbilityPredEffects=NA,
+  statePreds=NA, statePredEffects=NA, normalise=TRUE){
 
   Ability <- matrix(rnorm(Nsubs*Nscales,AbilityMean,AbilitySD),Nsubs)
   A <- matrix(rnorm(Nitems*Nscales,AMean,ASD),Nitems)
@@ -49,6 +50,8 @@ IRTsim <- function(Nsubs=100,Nitems=200,Nscales=3,
       }
     }
   }
+
+
 
   if(normalise){
     for(i in 1:ncol(Ability)){
@@ -73,17 +76,27 @@ IRTsim <- function(Nsubs=100,Nitems=200,Nscales=3,
         A = rep(A[,si],times=Nsubs),
         B=rep(B[,si],times=Nsubs),
         C=rep(C[,si],times=Nsubs),
-        pcorrect=0,score=0)
+        pcorrect=0,score=0, stateEffect=0)
+
+      #
+
+      if(!all(is.na(statePreds))) {
+        for(pi in 1:ncol(statePreds)){
+        simdat$stateEffect <-  simdat$stateEffect + statePredEffects[si,pi] * statePreds[,pi,with=FALSE][[1]]
+        }
+      }
 
       simdat$p= C[simdat$Item-(si-1)*Nitems,si]+
           (1-C[simdat$Item-(si-1)*Nitems,si]) / (1+exp(
             -A[simdat$Item-(si-1)*Nitems,si] * #discrimination of item=
               (Ability[simdat$id,si] - #Ability
-                  B[simdat$Item-(si-1)*Nitems,si]) #item difficulty
+                  B[simdat$Item-(si-1)*Nitems,si] + #item difficulty
+                  simdat$stateEffect) #state effect on ability
           ))
 
 
-      simdat$score <- rbinom(n = simdat$p,size = 1,
+
+      simdat$score <- rbinom(n = nrow(simdat),size = 1,
         prob = simdat$p )
 
       if(si==1) dat <- simdat else dat <- rbind(dat,simdat)
@@ -91,6 +104,7 @@ IRTsim <- function(Nsubs=100,Nitems=200,Nscales=3,
 
     #
     dat <- as.data.table(dat)
+    if(length(statePreds) > 0) dat <- cbind(dat, statePreds)
     # browser()
     if(!all(is.na(itemPreds))) dat <- merge.data.table((dat),data.table(Item=1:Nitems,itemPreds),by=c('Item'))
     if(!all(is.na(personPreds))) dat <- merge.data.table((dat),data.table(id=1:Nsubs,personPreds),by=c('id'))

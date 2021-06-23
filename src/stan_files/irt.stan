@@ -14,9 +14,12 @@ data{
 
   int NitemPreds;
   int NpersonPreds;
+  int NstatePreds;
 
   vector[Nitems] itemPreds[NitemPreds];
-  vector[NpersonPreds] personPreds [Nsubs];
+  vector[NpersonPreds] personPreds[Nsubs];
+
+  vector[NstatePreds] statePreds[Nobs];
 
   int NfixedA;
   int NfixedB;
@@ -89,6 +92,7 @@ parameters{
   vector[(Nitems-NfixedB) ? NitemPreds : 0] Bbeta;
   vector[(Nitems-NfixedC) ? NitemPreds : 0] logitCbeta;
   vector[(Nsubs*Nscales-NfixedAbility) ? NpersonPreds : 0] Abilitybeta[Nscales];
+  vector[NstatePreds] statebeta[Nscales];
 }
 transformed parameters{
   vector[end-start+1] p;
@@ -111,9 +115,9 @@ transformed parameters{
   C[notfixedC] = logitCpars;
 
   if(NitemPreds > 0){
-    for(i in 1:NitemPreds) if(num_elements(logAbeta)) A[notfixedA] += (itemPreds[i,notfixedA]' * logAbeta[i])';
-    for(i in 1:NitemPreds) if(num_elements(Bbeta)) B[notfixedB] += (itemPreds[i,notfixedB]' * Bbeta[i])';
-    for(i in 1:NitemPreds) if(num_elements(logitCbeta)) C[notfixedC] += (itemPreds[i,notfixedC]' * logitCbeta[i])';
+    if(num_elements(logAbeta)) for(i in 1:NitemPreds) A[notfixedA] += (itemPreds[i,notfixedA]' * logAbeta[i])';
+    if(num_elements(Bbeta)) for(i in 1:NitemPreds) B[notfixedB] += (itemPreds[i,notfixedB]' * Bbeta[i])';
+    if(num_elements(logitCbeta)) for(i in 1:NitemPreds) C[notfixedC] += (itemPreds[i,notfixedC]' * logitCbeta[i])';
   }
 
   A[notfixedA] = log1p_exp(A[notfixedA]);
@@ -132,6 +136,7 @@ transformed parameters{
   for(i in start:end){
     // AbilityNobs[i-start+1] = fixedAbilityLogical[id[i], scale[i]] ? Abilitydata[id[i],scale[i]] : Abilitypars[Abilityparsindex[id[i],scale[i]]];
     AbilityNobs[i-start+1] = Ability[id[i],scale[i]];
+    if(NstatePreds) AbilityNobs[i-start+1] += statePreds[i,]' * statebeta[scale[i]];
   }
 
   p= C[item[start:end]] + (1.0-C[item[start:end]]) ./ ( 1.0 + exp(
