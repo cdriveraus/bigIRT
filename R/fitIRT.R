@@ -461,7 +461,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
       sdat$logitCSD <- 1
       sdat$AbilitySD <- array(1,sdat$Nscales)
     }
-    #
+    # browser()
     if(!skipebayes) fit <- optimIRT(standata=sdat,Niter=iter,cores=cores,init = init,...)
 
 
@@ -469,37 +469,37 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
 
 
 
-    if(exists('cdat')) try({
-      #normalise pars
-      tmp <- fit
-
-      nsd <- sd(tmp$pars$Ability)
-      nm <- mean(tmp$pars$Ability)
-
-      tmp$pars$Ability <- (tmp$pars$Ability -nm)/ nsd
-      tmp$pars$B <- ( tmp$pars$B-nm) / nsd
-      tmp$pars$A <-  tmp$pars$A * nsd
-
-
-      par(mfrow=c(2,2))
-      # plot(cdat$A,mitem[,1],col='blue',pch=16)
-      plot(cdat$A,tmp$pars$A)
-      try(points(cdat$A,tfit$item_irt$alpha,col='red'))
-      abline(0,1,col='green',lwd=2)
-      # plot(cdat$B,-mitem[,2],col='blue',pch=16)
-      plot(cdat$B,tmp$pars$B)
-      # if(AB) plot(cdat$B,fit$pars$B/fit$pars$A)
-      try(points(cdat$B,tfit$item_irt$beta,col='red'))
-      abline(0,1,col='green',lwd=2)
-      # plot(cdat$C,mitem[,3],col='blue',pch=16)
-      plot(cdat$C,tmp$pars$C,ylim=c(0,1))
-      try(points(cdat$C,tfit$guess,col='red'))
-      abline(0,1,col='green',lwd=2)
-      # plot(cdat$Ability,mAbility,col='blue',pch=16)
-      plot(cdat$Ability,tmp$pars$Ability)
-      try(points(cdat$Ability,tamAbility$theta,col='red'))
-      abline(0,1,col='green',lwd=2)
-    })
+    # if(exists('cdat')) try({
+    #   #normalise pars
+    #   tmp <- fit
+    #
+    #   nsd <- sd(tmp$pars$Ability)
+    #   nm <- mean(tmp$pars$Ability)
+    #
+    #   tmp$pars$Ability <- (tmp$pars$Ability -nm)/ nsd
+    #   tmp$pars$B <- ( tmp$pars$B-nm) / nsd
+    #   tmp$pars$A <-  tmp$pars$A * nsd
+    #
+    #
+    #   par(mfrow=c(2,2))
+    #   # plot(cdat$A,mitem[,1],col='blue',pch=16)
+    #   plot(cdat$A,tmp$pars$A)
+    #   try(points(cdat$A,tfit$item_irt$alpha,col='red'))
+    #   abline(0,1,col='green',lwd=2)
+    #   # plot(cdat$B,-mitem[,2],col='blue',pch=16)
+    #   plot(cdat$B,tmp$pars$B)
+    #   # if(AB) plot(cdat$B,fit$pars$B/fit$pars$A)
+    #   try(points(cdat$B,tfit$item_irt$beta,col='red'))
+    #   abline(0,1,col='green',lwd=2)
+    #   # plot(cdat$C,mitem[,3],col='blue',pch=16)
+    #   plot(cdat$C,tmp$pars$C,ylim=c(0,1))
+    #   try(points(cdat$C,tfit$guess,col='red'))
+    #   abline(0,1,col='green',lwd=2)
+    #   # plot(cdat$Ability,mAbility,col='blue',pch=16)
+    #   plot(cdat$Ability,tmp$pars$Ability)
+    #   try(points(cdat$Ability,tamAbility$theta,col='red'))
+    #   abline(0,1,col='green',lwd=2)
+    # })
 
 
     #check these - seems right but check again...
