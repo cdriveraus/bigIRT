@@ -182,8 +182,8 @@ afunci <- function(x) log(exp(x)-1)
 #' @examples
 #' #Generate some data (here 2pl model
 #' require(data.table)
-#' dat <- bigIRT:::IRTsim(Nsubs = 5000,Nitems = 100,Nscales = 1,
-#'   logitCMean = -10,logitCSD = 0,logAMean = 1,logASD = .3,
+#' dat <- bigIRT:::IRTsim(Nsubs = 50,Nitems = 100,Nscales = 1,
+#'   logitCMean = -10,logitCSD = 0,AMean = 1,ASD = .3,
 #'   BMean=0,BSD = .5,
 #'   AbilityMean = 0,AbilitySD = 1)
 #'
@@ -198,7 +198,7 @@ afunci <- function(x) log(exp(x)-1)
 #'
 #' #fit using bigIRT
 #' fit <- fitIRT(dat$dat,cores=2,score = 'score',id = 'id',
-#'   scale = 'Scale',item = 'Item', pl=2)
+#'   scale = 'Scale',item = 'Item', pl=2,dohess=TRUE)
 fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   personDat=NA, personPreds=character(),
   itemDat=NA, itemPreds=character(),

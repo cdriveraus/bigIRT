@@ -227,10 +227,6 @@ simItems <- function(NperScale, scaleNames, logAmu, logASD, Bmu, BSD, logitCmu, 
   return(do.call(rbind,items))
 }
 
-selectItem <- function(items, ability, targetease, samplesize=1){
-  sample(items$Item[order(abs(ability-items$B-targetease))[1:min(nrow(items),samplesize)]],size = 1) #could use expected information instead
-}
-
 IRTcurve <- function(a,b,c,theta=seq(-3,3,.01),plot=TRUE,rescale=FALSE,add=FALSE...){
   theta <- sort(theta)
   x <- c + (1-c)/(1+exp(-a*(theta-b)))

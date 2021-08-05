@@ -36,15 +36,16 @@ clusterIDexport <- function(cl, vars){
 }
 
 clusterIDeval <- function(cl,commands){
-    clusterIDexport(cl,c('commands'));
-    rm(commands)
-    out <- parallel::clusterEvalQ(cl = cl,eval(parse(text=paste0(commands,collapse=';'))))
+  clusterIDexport(cl,c('commands'));
+  rm(commands)
+  out <- parallel::clusterEvalQ(cl = cl,eval(parse(text=paste0(commands,collapse=';'))))
   return(out)
 }
 
 
+
 optimIRT <- function(standata, cores=6, split=TRUE,
-  verbose=0,plot=0,tol=1e-5,Niter=2000,askmore=FALSE,stochastic=FALSE,init=NA, AB=FALSE){
+  verbose=0,plot=0,tol=1e-5,Niter=2000,askmore=FALSE,stochastic=FALSE,init=NA,dohess=FALSE){
   # verbose=1
   # cores=8
   # plot=10
@@ -91,8 +92,7 @@ optimIRT <- function(standata, cores=6, split=TRUE,
 
   if(cores==1){
     target = singletarget #we use this for importance sampling
-    if(AB) smf <- stan_reinitsf(stanmodels$irtAB,standata)
-    if(!AB) smf <- stan_reinitsf(stanmodels$irt,standata)
+    smf <- stan_reinitsf(stanmodels$irt,standata)
 
   }
 
@@ -107,24 +107,12 @@ optimIRT <- function(standata, cores=6, split=TRUE,
       }
     }
 
-    # browser()
-    # benv <- new.env(parent = globalenv())
-    # benv$cores <- cores
-    # benv$standata <- standata
-    # benv$splitby <- splitby
-    # benv$standata_specificsubjects <- standata_specificsubjects
-    # benv$parlp <- parlp
-    # environment(benv$parlp) <- benv
-    # benv$stanindices <- stanindices
-    # benv$clms <- parallel::makeCluster(spec = cores,type = 'PSOCK')
-    # eval(parse(text="parallel::parLapply(cl = clms,X = 1:cores,function(x) assign('nodeid',x,env=globalenv()))"),envir = benv)
 
     parcommands <- list(
       "if(length(stanindices[[nodeid]]) < length(unique(standata[[splitby]]))) standata <- standata_specificsubjects(standata,stanindices[[nodeid]])",
       "if(!1 %in% stanindices[[nodeid]]) standata$dopriors <- 0L",
       "g = eval(parse(text=paste0('gl','obalenv()')))", #avoid spurious cran check -- assigning to global environment only on created parallel workers.
-      if(AB) "assign('smf',bigIRT:::stan_reinitsf(bigIRT:::stanmodels$irtAB,standata),pos = g)",
-      if(!AB) "assign('smf',bigIRT:::stan_reinitsf(bigIRT:::stanmodels$irt,standata),pos = g)",
+      "assign('smf',bigIRT:::stan_reinitsf(bigIRT:::stanmodels$irt,standata),pos = g)",
       "NULL"
     )
     cl <- makeClusterID(cores)
@@ -133,56 +121,50 @@ optimIRT <- function(standata, cores=6, split=TRUE,
     system.time(clusterIDexport(cl,c('cores','parlp','splitby','standata','stanindices','standata_specificsubjects')))
     system.time(clusterIDeval(cl,parcommands))
 
-# parallel::clusterExport(benv$clms,c('standata','splitby','standata_specificsubjects','parlp','stanindices','commands'),envir = benv)
+    iter <-0
+    storedLp <- c()
 
-# tmp<-parallel::clusterEvalQ(cl = benv$clms, lapply(commands,function(x) eval(parse(text=x),envir = globalenv())))
+    target<-function(parm,gradnoise=TRUE){
+      a=Sys.time()
+      clusterIDexport(cl,'parm')
+      out2<- parallel::clusterEvalQ(cl,parlp(parm))
 
-iter <-0
-storedLp <- c()
+      tmp<-sapply(1:length(out2),function(x) {
+        if(!is.null(attributes(out2[[x]])$err)){
+          if(length(out2) > 1 && as.logical(verbose)) message('Error on core ', x,' but continuing:')
+          message(attributes(out2[[x]])$err)
+        }
+      })
 
-target<-function(parm,gradnoise=TRUE){
-  a=Sys.time()
-  clusterIDexport(cl,'parm')
-  # parallel::clusterExport(benv$clms,varlist = 'parm',envir = environment())
-  out2<- parallel::clusterEvalQ(cl,parlp(parm))
-
-  tmp<-sapply(1:length(out2),function(x) {
-    if(!is.null(attributes(out2[[x]])$err)){
-      if(length(out2) > 1 && as.logical(verbose)) message('Error on core ', x,' but continuing:')
-      message(attributes(out2[[x]])$err)
-    }
-  })
-
-  out <- try(sum(unlist(out2)),silent=TRUE)
-  # attributes(out)$gradient <- try(apply(sapply(out2,function(x) attributes(x)$gradient,simplify='matrix'),1,sum))
-  for(i in seq_along(out2)){
-    if(i==1) attributes(out)$gradient <- attributes(out2[[1]])$gradient
-    if(i>1) attributes(out)$gradient <- attributes(out)$gradient+attributes(out2[[i]])$gradient
-  }
+      out <- try(sum(unlist(out2)),silent=TRUE)
+      for(i in seq_along(out2)){
+        if(i==1) attributes(out)$gradient <- attributes(out2[[1]])$gradient
+        if(i>1) attributes(out)$gradient <- attributes(out)$gradient+attributes(out2[[i]])$gradient
+      }
 
 
-  if('try-error' %in% class(out) || is.nan(out)) {
-    out=-1e100
-    attributes(out) <- list(gradient=rep(0,length(parm)))
-  }
+      if('try-error' %in% class(out) || is.nan(out)) {
+        out=-1e100
+        attributes(out) <- list(gradient=rep(0,length(parm)))
+      }
 
-  if(plot > 0){
-    if(out[1] > (-1e99)) storedLp <<- c(storedLp,out[1])
-    iter <<- iter+1
-    # g=log(abs(attributes(out)$gradient))*sign(attributes(out)$gradient)
-    if(iter %% plot == 0){
-      par(mfrow=c(1,1))
-      # plot(parm,xlab='param',ylab='par value',col=1:length(parm))
-      plot(tail(1:iter,500), tail(exp(storedLp/standata$Nobs),500),ylab='target',type='l') #log(1+tail(-storedLp,500)-min(tail(-storedLp,500)))
-      # plot(g,type='p',col=1:length(parm),ylab='gradient',xlab='param')
-    }
-  }
-  b=Sys.time()
+      if(plot > 0){
+        if(out[1] > (-1e99)) storedLp <<- c(storedLp,out[1])
+        iter <<- iter+1
+        # g=log(abs(attributes(out)$gradient))*sign(attributes(out)$gradient)
+        if(iter %% plot == 0){
+          par(mfrow=c(1,1))
+          # plot(parm,xlab='param',ylab='par value',col=1:length(parm))
+          plot(tail(1:iter,500), tail(exp(storedLp/standata$Nobs),500),ylab='target',type='l') #log(1+tail(-storedLp,500)-min(tail(-storedLp,500)))
+          # plot(g,type='p',col=1:length(parm),ylab='gradient',xlab='param')
+        }
+      }
+      b=Sys.time()
 
-  if(verbose > 0) print(paste0('ll=',out[1],', mean p= ',exp(out/standata$Nobs),' , iter time = ',round(b-a,5),
-    ' , core times = ',paste(sapply(out2,function(x) round(attributes(x)$time,3)),collapse=', ')))
-  return(out)
-} #end target func
+      if(verbose > 0) print(paste0('ll=',out[1],', mean p= ',exp(out/standata$Nobs),' , iter time = ',round(b-a,5),
+        ' , core times = ',paste(sapply(out2,function(x) round(attributes(x)$time,3)),collapse=', ')))
+      return(out)
+    } #end target func
 
   }#end multicore
 
@@ -240,11 +222,24 @@ target<-function(parm,gradnoise=TRUE){
       continue <- ifelse(readline('Continue optimizing?') %in% c('y','Y','T','TRUE','yes','Yes','YES'),TRUE, FALSE)
     } else continue <- FALSE
   }
-  # fit=optimfit
+
+  if(dohess){
+    jac <- matrix(NA,length(optimfit$par),length(optimfit$par))
+    basegrad <- attributes(target(optimfit$par))$gradient
+    for(i in 1:length(optimfit$par)){
+      newpar=optimfit$par
+      newpar[i] <- newpar[i] + .001
+      jac[,i] <- (attributes(target(newpar))$gradient-basegrad)/ .001
+    }
+    parcov <- try(solve(-jac))
+  } else parcov <- NULL
 
   try({parallel::stopCluster(clms)},silent=TRUE)
-  if(AB) smf <- stan_reinitsf(stanmodels$irtAB,standata)
-  if(!AB) smf <- stan_reinitsf(stanmodels$irt,standata)
-  return(list(optim=optimfit,stanfit=smf,pars=rstan::constrain_pars(object = smf, optimfit$par),dat=standata))
+    smf <- stan_reinitsf(stanmodels$irt,standata)
+  return(list(optim=optimfit,
+    parcov=parcov,
+    stanfit=smf,
+    pars=rstan::constrain_pars(object = smf, optimfit$par),
+    dat=standata))
 
 }
