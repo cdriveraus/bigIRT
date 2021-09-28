@@ -27,10 +27,10 @@ testscript <- function(){
     clarity=rnorm(NperScale,0,2),
     specificity=rnorm(NperScale,0,.2))
 
-  items <- bigIRT:::simItems(NperScale = 1000,scaleNames = colnames(sc),logAmu = inv_log1p_exp(c(3,3)),
-    logASD = c(0,.2),Bmu = c(0,0),BSD = c(3,4),logitCmu = c(-10,-10),logitCSD = c(0,0),
+  items <- bigIRT:::simItems(NperScale = 1000,scaleNames = colnames(sc),invspAmu = inv_log1p_exp(c(3,3)),
+    invspASD = c(0,.2),Bmu = c(0,0),BSD = c(3,4),logitCmu = c(-10,-10),logitCSD = c(0,0),
     covs = icovs,
-    logAbeta = matrix(c(.01,.2,0, 0,-.2,0),byrow=TRUE,2,3),
+    invspAbeta = matrix(c(.01,.2,0, 0,-.2,0),byrow=TRUE,2,3),
     Bbeta = matrix(c(1,0,.1, 0,-.2,0),byrow=TRUE,2,3),
     logitCbeta = matrix(c(.1,0,.1, 0,-.2,0),byrow=TRUE,2,3)
   )

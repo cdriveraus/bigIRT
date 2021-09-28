@@ -47,10 +47,10 @@ NperScale=1000
     clarity=rnorm(NperScale,0,2),
     specificity=rnorm(NperScale,0,.2))
 
-  items <- simItems(NperScale = 1000,scaleNames = colnames(sc),logAmu = inv_log1p_exp(c(3,3)),
-    logASD = c(0,.2),Bmu = c(0,0),BSD = c(3,4),logitCmu = c(-10,-10),logitCSD = c(0,0),
+  items <- simItems(NperScale = 1000,scaleNames = colnames(sc),invspAmu = inv_log1p_exp(c(3,3)),
+    invspASD = c(0,.2),Bmu = c(0,0),BSD = c(3,4),logitCmu = c(-10,-10),logitCSD = c(0,0),
     covs = icovs,
-    logAbeta = matrix(c(.01,.2,0, 0,-.2,0),byrow=TRUE,2,3),
+    invspAbeta = matrix(c(.01,.2,0, 0,-.2,0),byrow=TRUE,2,3),
     Bbeta = matrix(c(1,0,.1, 0,-.2,0),byrow=TRUE,2,3),
     logitCbeta = matrix(c(.1,0,.1, 0,-.2,0),byrow=TRUE,2,3)
   )
@@ -202,22 +202,22 @@ simPersons <- function(N, mu, scaleChol, covs=numeric(), beta=numeric){
 }
 
 
-simItems <- function(NperScale, scaleNames, logAmu, logASD, Bmu, BSD, logitCmu, logitCSD,
-  covs=numeric(), logAbeta, Bbeta, logitCbeta){
+simItems <- function(NperScale, scaleNames, invspAmu, invspASD, Bmu, BSD, logitCmu, logitCSD,
+  covs=numeric(), invspAbeta, Bbeta, logitCbeta){
 
   items <- lapply(1:length(scaleNames),function(i){
-    logA=rnorm(NperScale,logAmu[i],logASD[i])
+    invspA=rnorm(NperScale,invspAmu[i],invspASD[i])
     B = rnorm(NperScale,Bmu[i],BSD[i])
     logitC=rnorm(NperScale,logitCmu[i],logitCSD[i])
 
     if(length(covs) > 0){
-      logA <- c(logA + as.matrix(covs) %*% t(logAbeta[i,,drop=FALSE]))
+      invspA <- c(invspA + as.matrix(covs) %*% t(invspAbeta[i,,drop=FALSE]))
       B <- c(B + as.matrix(covs) %*% t(Bbeta[i,,drop=FALSE]))
       logitC <- c(logitC + as.matrix(covs) %*% t(logitCbeta[i,,drop=FALSE]))
     }
 
     o=data.table(check.names = FALSE,Scale = scaleNames[i],
-      A=log1p(exp(logA)),
+      A=log1p(exp(invspA)),
       B=B,
       C=inv_logit(logitC)
     )
@@ -239,7 +239,7 @@ IRTcurve <- function(a,b,c,theta=seq(-3,3,.01),plot=TRUE,rescale=FALSE,add=FALSE
 }
 
 
-#' Title
+#' Simulate IRT data
 #'
 #' @param Nsubs
 #' @param Nitems

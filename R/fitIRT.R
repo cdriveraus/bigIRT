@@ -84,7 +84,7 @@ if(FALSE){
   sqrt(mean((c(dat$C)-fit$pars$C)^2)) #bigIRT C rms
 
   #fit using combined approach by fixing Ability sd (fixed discrimination parameters, so 1pl model)
-  system.time(fitc <- bigIRT:::fitIRT(dat$dat,logASD = .5,logitCSD=.2, logitCMeandat = -2, BSD=1, AbilitySD=1,cores=1,pl=3))
+  system.time(fitc <- bigIRT:::fitIRT(dat$dat,invspASD = .5,logitCSD=.2, logitCMeandat = -2, BSD=1, AbilitySD=1,cores=1,pl=3))
   plot(fitc$pars$B,dat$B)
   abline(0,1,col='green')
   plot(fitc$pars$A,dat$A)
@@ -154,8 +154,8 @@ afunci <- function(x) log(exp(x)-1)
 #' @param Bdata
 #' @param Cdata
 #' @param personDat
-#' @param logAMeandat
-#' @param logASD
+#' @param invspAMeandat
+#' @param invspASD
 #' @param BMeandat
 #' @param BSD
 #' @param logitCMeandat
@@ -174,6 +174,7 @@ afunci <- function(x) log(exp(x)-1)
 #' @param estMeans
 #' @param priors
 #' @param normalise
+#' @param trainingRows
 #' @param ...
 #'
 #' @return
@@ -203,7 +204,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   personDat=NA, personPreds=character(),
   itemDat=NA, itemPreds=character(),
   statePreds=character(),
-  logAMeandat=.542,logASD=.5,BMeandat=0,BSD=2, logitCMeandat=-4,logitCSD=2,
+  invspAMeandat=.542,invspASD=.5,BMeandat=0,BSD=2, logitCMeandat=-4,logitCSD=2,
   AbilityMeandat=array(0,dim=c(length(unique(dat[[scale]])))),
   AbilitySD=array(2,dim=c(length(unique(dat[[scale]])))),
   AMeanSD=1,BMeanSD=BSD,logitCMeanSD=logitCSD,
@@ -212,7 +213,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   ebayes=TRUE,ebayesmultiplier=2,ebayesFromFixed=FALSE,
   estMeans=FALSE,priors=TRUE,
   normalise=TRUE,normaliseScale=1,normaliseMean=0,
-  dropPerfectScores=TRUE,...){
+  dropPerfectScores=TRUE,trainingRows=1:nrow(dat),...){
 
   sdat <-list() #initialize standata object
 
@@ -288,8 +289,8 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     itemDat <- as.data.table(itemDat)
     sdat$dopriors <- 1L
 
-    sdat$logAMeandat <- mean(afunci(itemDat$A),na.rm=TRUE)
-    sdat$logASD <- sd(afunci(itemDat$A),na.rm=TRUE)*ebayesmultiplier+1e-5
+    sdat$invspAMeandat <- mean(afunci(itemDat$A),na.rm=TRUE)
+    sdat$invspASD <- sd(afunci(itemDat$A),na.rm=TRUE)*ebayesmultiplier+1e-5
 
     sdat$BMeandat <- mean(itemDat$B,na.rm=TRUE)
     sdat$BSD <- sd(itemDat$B,na.rm=TRUE)*ebayesmultiplier+1e-5
@@ -359,6 +360,9 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   sdat$statePreds <- matrix(0, nrow(dat), sdat$NstatePreds)
   if(sdat$NstatePreds > 0) sdat$statePreds <- as.matrix(dat[,statePredsref.,with=FALSE])
 
+  trainingLogical=array(rep(0L,nrow(dat)))
+  trainingLogical[trainingRows] <- 1L
+
 
   sdat <- c(sdat,list(
     Nobs=nrow(dat),
@@ -384,6 +388,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     Abilityparsscaleindex=array(as.integer(Abilityparsscaleindex)),
     start=1L,
     end=as.integer(nrow(dat)),
+    trainingLogical=trainingLogical,
     score=array(as.integer(dat[[scoreref.]])),
     incorrect=array(as.integer(which(dat[[scoreref.]]==0))),
     item = array(dat[[itemref.]]),
@@ -394,7 +399,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     Abilitydata=matrix(unlist(AbilitySetup[,paste0(c(scaleIndex$original),'data'),with=FALSE]),Nsubs,Nscales),
     NitemPreds=ncol(itemPreds), itemPreds=t(array(unlist(itemPreds),dim(itemPreds))),
     NpersonPreds=ncol(personPreds), personPreds=(array(unlist(personPreds),dim(personPreds))),
-    logAMeandat=logAMeandat,logASD=logASD,
+    invspAMeandat=invspAMeandat,invspASD=invspASD,
     BMeandat=BMeandat,BSD=BSD,
     logitCMeandat=logitCMeandat,logitCSD=logitCSD,
     AbilityMeandat=AbilityMeandat,AbilitySD=array(AbilitySD),
@@ -424,9 +429,9 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     if(ebayes){
       sdat$dopriors <- 1L
 
-      if(pl > 1 &&  length(fit$pars$logApars) > 2){
-        sdat$logAMeandat <- mean(fit$pars$logApars) #mean(afunci(fit$pars$A))
-        sdat$logASD <- sd(fit$pars$logApars)*ebayesmultiplier+1e-5 #afunci(fit$pars$A)
+      if(pl > 1 &&  length(fit$pars$invspApars) > 2){
+        sdat$invspAMeandat <- mean(fit$pars$invspApars) #mean(afunci(fit$pars$A))
+        sdat$invspASD <- sd(fit$pars$invspApars)*ebayesmultiplier+1e-5 #afunci(fit$pars$A)
       }
 
       if(length(fit$pars$Bpars) > 2){
@@ -448,7 +453,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
         })) * ebayesmultiplier + 1e-5
       }
 
-      if(any(is.na(c(sdat$BSD,sdat$logASD,sdat$logitCSD,sdat$AbilitySD)))){
+      if(any(is.na(c(sdat$BSD,sdat$invspASD,sdat$logitCSD,sdat$AbilitySD)))){
         skipebayes <- TRUE
         warning('NA when computing item sd parameters, ebayes set to FALSE')
       }

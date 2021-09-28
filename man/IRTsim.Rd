@@ -22,6 +22,8 @@ IRTsim(
   logitCitemPredEffects = NA,
   personPreds = NA,
   AbilityPredEffects = NA,
+  statePreds = NA,
+  statePredEffects = NA,
   normalise = TRUE
 )
 }
