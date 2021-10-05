@@ -2,7 +2,7 @@
 % Please edit documentation in R/simIRT.R
 \name{IRTsim}
 \alias{IRTsim}
-\title{Title}
+\title{Simulate IRT data}
 \usage{
 IRTsim(
   Nsubs = 100,
@@ -34,5 +34,5 @@ IRTsim(
 
 }
 \description{
-Title
+Simulate IRT data
 }

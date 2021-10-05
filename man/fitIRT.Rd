@@ -40,6 +40,7 @@ fitIRT(
   normaliseScale = 1,
   normaliseMean = 0,
   dropPerfectScores = TRUE,
+  trainingRows = 1:nrow(dat),
   ...
 )
 }
