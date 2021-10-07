@@ -207,10 +207,11 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   invspAMeandat=.542,invspASD=.5,BMeandat=0,BSD=2, logitCMeandat=-4,logitCSD=2,
   AbilityMeandat=array(0,dim=c(length(unique(dat[[scale]])))),
   AbilitySD=array(2,dim=c(length(unique(dat[[scale]])))),
+  AbilityCorr=diag(1,c(length(unique(dat[[scale]])))),
   AMeanSD=1,BMeanSD=BSD,logitCMeanSD=logitCSD,
   AbilityMeanSD=array(1,dim=c(length(unique(dat[[scale]])))),
   iter=2000,cores=6,carefulfit=FALSE,
-  ebayes=TRUE,ebayesmultiplier=2,ebayesFromFixed=FALSE,
+  ebayes=TRUE,ebayesmultiplier=2,ebayesFromFixed=FALSE,ebayesiter=1,
   estMeans=FALSE,priors=TRUE,
   normalise=TRUE,normaliseScale=1,normaliseMean=0,
   dropPerfectScores=TRUE,trainingRows=1:nrow(dat),...){
@@ -249,9 +250,9 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
 
 
   #setup indices to map user specified categories to sequential integers for stan
-  itemIndex <- data.table(original=dat[[itemref.]][!duplicated(dat[[itemref.]])])
-  scaleIndex <- data.table(original=dat[[scaleref.]][!duplicated(dat[[scaleref.]])])
-  idIndex <- data.table(original=dat[[idref.]][!duplicated(dat[[idref.]])])
+  itemIndex <- data.table(original=as.character(dat[[itemref.]][!duplicated(dat[[itemref.]])]))
+  scaleIndex <- data.table(original=as.character(dat[[scaleref.]][!duplicated(dat[[scaleref.]])]))
+  idIndex <- data.table(original=as.character(dat[[idref.]][!duplicated(dat[[idref.]])]))
 
 
   #convert categories to sequential integers
@@ -300,6 +301,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
 
     sdat$AbilityMeandat <- array(apply(personDat[,c(scaleIndex$original),with=FALSE],2,mean,na.rm=TRUE))
     sdat$AbilitySD <- array(apply(personDat[,c(scaleIndex$original),with=FALSE],2,sd,na.rm=TRUE))*ebayesmultiplier+1e-5 #maybe need to better account for multiple scales here, but not that important...
+    sdat$AbilityCorr <- cor(personDat[,c(scaleIndex$original),with=FALSE],use='pairwise.complete.obs')
   }
 
   #setup item structure to define fixed / free pars
@@ -402,7 +404,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     invspAMeandat=invspAMeandat,invspASD=invspASD,
     BMeandat=BMeandat,BSD=BSD,
     logitCMeandat=logitCMeandat,logitCSD=logitCSD,
-    AbilityMeandat=AbilityMeandat,AbilitySD=array(AbilitySD),
+    AbilityMeandat=AbilityMeandat,AbilitySD=array(AbilitySD),AbilityCorr=AbilityCorr,
     AMeanSD=AMeanSD,BMeanSD=BMeanSD,logitCMeanSD=logitCMeanSD,AbilityMeanSD=array(AbilityMeanSD),
     fixedAMean=1L,fixedBMean=1L,fixedCMean=1L,fixedAbilityMean=1L,
     restrictAMean=1L,restrictBMean=1L,restrictCMean=0L,restrictAbilityMean=1L  )
@@ -445,12 +447,16 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
       }
 
       if(length(fit$pars$Abilitypars) > 2){
+
         sdat$AbilityMeandat <- array(sapply(1:Nscales,function(x){
           mean(fit$pars$Abilitypars[sdat$Abilityparsscaleindex %in% x])
         }))
+
         sdat$AbilitySD <- array(sapply(1:Nscales,function(x){
           sd(fit$pars$Abilitypars[sdat$Abilityparsscaleindex %in% x],na.rm=TRUE)
         })) * ebayesmultiplier + 1e-5
+
+        sdat$AbilityCorr= cor(fit$pars$Ability) #inconsistency here -- based on overall ability, rather than conditional ability as for sd / mean.
       }
 
       if(any(is.na(c(sdat$BSD,sdat$invspASD,sdat$logitCSD,sdat$AbilitySD)))){
@@ -525,12 +531,18 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
 
   fit <- NA
   for(i in 1:length(JMLseq)){
+    ebayescounter <- 0
+    finished=FALSE
     if(!is.null(JMLseq[[i]])){
       if(JMLseq[[i]]$ebayes %in% 'TRUE') fitML <- fit #store fit before ebayes step
+        while(!finished){
+          ebayescounter <- ebayescounter + 1
       stochastic <- F#(i == length(JMLseq))
       fit <- JMLfit(est = JMLseq[[i]]$est,sdat = sdat, ebayes=JMLseq[[i]]$ebayes,
         fit = fit,stochastic=stochastic,
         narrowPriors = JMLseq[[i]]$narrowPriors,...)
+      if(ebayescounter >= ebayesiter || !JMLseq[[i]]$ebayes) finished=TRUE
+        }
     }
   }
 

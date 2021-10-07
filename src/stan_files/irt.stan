@@ -1,7 +1,77 @@
 // Item response theory based probability model
 // Square brackets indicate object dimensions, square brackets after name indicates array of specified object.
 // Objects are all declared at the top of the relevant sections and potentially modified below.
+functions{
+ int[] which(int[] a, int condition){
+   int Nmatches = 0;
+    int zero[0];
+   int whichout[size(a)];
 
+   for(i in 1:size(a)){
+     if(a[i]==condition){
+       Nmatches += 1;
+       whichout[Nmatches] = i;
+     }
+   }
+   if(Nmatches > 0) return whichout[1:Nmatches]; else return zero;
+ }
+
+  //  matrix constraincorsqrt(vector rawcor, int d){ //converts from unconstrained lower tri vec to cor sqrt
+  // int counter = 0;
+  // matrix[d,d] o;
+  // vector[d] ss = rep_vector(0,d);
+  // vector[d] s = rep_vector(0,d);
+  // real r;
+  // real r3;
+  // real r4;
+  // real r1;
+  // real r2;
+  //
+  // for(i in 1:d){ //set upper tri to lower
+  // for(j in 1:d){
+  //   if(j > i){
+  //     counter+=1;
+  //     o[j,i] =  rawcor[counter];//inv_logit(rawcor[counter])*2-1; //divide by i for approx whole matrix equiv priors
+  //   }
+  // }
+  // }
+  //
+  // for(i in 1:d){
+  //   for(j in 1:d){
+  //     if(j > i) {
+  //       ss[i] +=square(o[j,i]);
+  //       s[i] +=o[j,i];
+  //     }
+  //     if(j < i){
+  //       ss[i] += square(o[i,j]);
+  //       s[i] += o[i,j];
+  //     }
+  //   }
+  //   s[i]+=1e-5;
+  //   ss[i]+=1e-5;
+  // }
+  //
+  //
+  // for(i in 1:d){
+  //   o[i,i]=0;
+  //   r1=sqrt(ss[i]);
+  //   r2=s[i];
+  //
+  //   r3=(fabs(r2))/(r1)-1;
+  //   r4=sqrt(log1p_exp(2*(fabs(r2)-r2-1)-4));
+  //   r=(r4*((r3))+1)*r4+1;
+  //   r=(sqrt(ss[i]+r));
+  //   for(j in 1:d){
+  //     if(j > i)  o[i,j]=o[j,i]/r;
+  //     if(j < i) o[i,j] = o[i,j] /r;
+  //   }
+  //   o[i,i]=sqrt(1-sum(square(o[i,]))+1e-5);
+  // }
+  //
+  // return o;
+  // }
+
+}
 data{ // Section specifies the user supplied data that is passed to the probability model
   int Nobs; //Total number of responses (yes or no answers) observed
   int Nitems; //Total number of unique items (questions)
@@ -60,6 +130,8 @@ data{ // Section specifies the user supplied data that is passed to the probabil
   real logitCSD; // standard deviation of the logit C parameters.
   vector[Nscales] AbilitySD; // standard deviation of the ability parameters.
 
+  matrix[Nscales,Nscales] AbilityCorr;
+
   real invspAMeandat; //mean of the inverse softplus A parameters
   real BMeandat; //mean of B parameters
   real logitCMeandat; //mean of logit C parameters
@@ -98,6 +170,8 @@ parameters{ //Section specifying free parameters to be estimated
   vector[(Nitems-NfixedC) ? NitemPreds : 0] logitCbeta;//regression weights for covariate effects on logit C params
   vector[(Nsubs*Nscales-NfixedAbility) ? NpersonPreds : 0] Abilitybeta[Nscales];//reg. weights for covariate effects on ability
   vector[NstatePreds] statebeta[Nscales];//regression weights for state predictor effects on state difficulty / ability.
+  //corr_matrix[Nscales] AbilityCorr;
+  // vector[(Nscales * Nscales - Nscales) / 2] rawcor;
 }
 
 transformed parameters{ //this section combines any user input fixed values and free parameters
@@ -113,6 +187,10 @@ transformed parameters{ //this section combines any user input fixed values and 
   real BMean = fixedBMean ? BMeandat : BMeanpar[1]; //mean of B params
   real logitCMean = fixedCMean ? logitCMeandat : logitCMeanpar[1]; //mean of logit C params
   vector[Nscales] AbilityMean = fixedAbilityMean ? AbilityMeandat : AbilityMeanpar; //means of ability parameters
+
+  // matrix[Nscales,Nscales] AbilityCorr=tcrossprod(constraincorsqrt(rawcor,Nscales));
+  matrix[Nscales,Nscales] AbilityCov = quad_form_diag(AbilityCorr,AbilitySD);
+  matrix[Nscales,Nscales] AbilityChol = cholesky_decompose(AbilityCov);
 
   //put the user supplied fixed values into the item parameter objects
   A[fixedA] = Adata[fixedA];
@@ -175,8 +253,17 @@ model{ // This section modifies the 'target' (output log probability), via 'targ
   if(NfixedC < Nitems){
     if(dopriors) logitCpars ~ normal(logitCMean,logitCSD);
   }
+
+  if(Nscales==1){
   for(i in 1:(Nscales)){
     if(dopriors) Abilitypars ~ normal(AbilityMean[Abilityparsscaleindex],AbilitySD[Abilityparsscaleindex]);
+  }
+  }
+  if(Nscales > 1 && dopriors){
+    for(i in 1:Nsubs) {
+      int selector[Nscales - sum(fixedAbilityLogical[i,])] = which(fixedAbilityLogical[i,],0); // which scales does this subject have estimated pars for
+      if(size(selector)>0) Abilitypars[Abilityparsindex[i,selector] ] ~ multi_normal_cholesky(AbilityMean[selector],AbilityChol[selector,selector] );
+    }
   }
 }
 
