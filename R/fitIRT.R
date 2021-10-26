@@ -225,6 +225,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   personDat=NA, personPreds=character(),
   itemDat=NA, itemPreds=character(),
   statePreds=character(),
+  itemSpecificBetas=FALSE,
   invspAMeandat=.542,invspASD=.5,BMeandat=0,BSD=2, logitCMeandat=-4,logitCSD=2,
   AbilityMeandat=array(0,dim=c(length(unique(dat[[scale]])))),
   AbilitySD=array(10,dim=c(length(unique(dat[[scale]])))),
@@ -274,6 +275,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     idIndex$new <- dat[[idref.]][!duplicated(dat[[idref.]])]
 
     #order indices by new integer
+
     itemIndex=itemIndex[order(new),]
     scaleIndex=scaleIndex[order(new),]
     idIndex=idIndex[order(new),]
@@ -408,6 +410,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
       Abilitydata=matrix(unlist(AbilitySetup[,paste0(c(scaleIndex$original),'data'),with=FALSE]),Nsubs,Nscales),
       NitemPreds=ncol(itemPreds), itemPreds=t(array(unlist(itemPreds),dim(itemPreds))),
       NpersonPreds=ncol(personPreds), personPreds=(array(unlist(personPreds),dim(personPreds))),
+      itemSpecificBetas=as.integer(itemSpecificBetas),
       invspAMeandat=invspAMeandat,invspASD=invspASD,
       BMeandat=BMeandat,BSD=BSD,
       logitCMeandat=logitCMeandat,logitCSD=logitCSD,

@@ -50,10 +50,11 @@ testscript <- function(){
 
 
   #simulation loops
-  nsim=6
+  nsim=1
 
   #save simulated data to disk
   setwd("/home/driver/bigIRT/testing/")
+  # setwd("c:/users/driver/seafile/mpib/bigIRT/testing/")
   write.csv(x = persons,file = 'persons.csv')
   write.csv(x = items,file = 'items.csv')
 

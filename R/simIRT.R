@@ -267,9 +267,9 @@ IRTsim <- function(Nsubs=100,Nitems=200,Nscales=3,
   logitC <- matrix(rnorm(Nitems*Nscales,logitCMean,logitCSD),Nitems)
 
   if(!all(is.na(itemPreds))){
-    if(all(!is.na(AitemPredEffects))) A <- A + apply(itemPreds,1,function(x) sum(AitemPredEffects[i,,drop=FALSE] %*% x))
-    if(all(!is.na(BitemPredEffects))) B <- B + apply(itemPreds,1,function(x) sum(BitemPredEffects[i,,drop=FALSE] %*% x))
-    if(all(!is.na(logitCitemPredEffects))) logitC <- logitC + apply(itemPreds,1,function(x) sum(logitCitemPredEffects[i,,drop=FALSE] %*% x))
+    if(all(!is.na(AitemPredEffects))) A <- A + apply(itemPreds,1,function(x) sum(AitemPredEffects * x))
+    if(all(!is.na(BitemPredEffects))) B <- B + apply(itemPreds,1,function(x) sum(BitemPredEffects * x))
+    if(all(!is.na(logitCitemPredEffects))) logitC <- logitC + apply(itemPreds,1,function(x) sum(logitCitemPredEffects * x))
   }
 
   if(!all(is.na(personPreds))){

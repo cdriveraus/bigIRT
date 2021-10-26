@@ -7,7 +7,7 @@
 #' @aliases bigIRT
 #' @useDynLib bigIRT, .registration = TRUE
 #' @import methods
-#' @import Rcpp
+#' @import Rcpp data.table mize parallel
 #' @importFrom rstan sampling
 #'
 #' @references
