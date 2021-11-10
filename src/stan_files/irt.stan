@@ -16,6 +16,12 @@ functions{
     if(Nmatches > 0) return whichout[1:Nmatches]; else return zero;
   }
 
+  int realToInt(real a){
+    real ab = round(a);
+    int b = 0;
+    while( ab > b) b+=1;
+    return(b);
+  }
 }
 data{ // Section specifies the user supplied data that is passed to the probability model
 int Nobs; //Total number of responses (yes or no answers) observed
@@ -25,6 +31,8 @@ int Nscales; //Total number of scales (e.g. German reading)
 int start; //Row of data to start computation on (for parallelisation)
 int end; //Row of data to end computation on (for parallelisation)
 int trainingLogical[Nobs]; //Which rows of data to use in target probability
+
+int rowIndexPar;
 
 int id[Nobs]; //Subject identifier for each response
 int score [Nobs]; //Binary response array
@@ -85,7 +93,7 @@ real logitCMeandat; //mean of logit C parameters
 vector[Nscales] AbilityMeandat; //mean of ability parameters
 }
 
-transformed data{ // Section contains calculations that only depend on user input data
+transformed data{ // Section contains calculations that only dependx on user input data
 vector[Nobs] scorevec = to_vector(score); //required in vector form below
 int Ntrainingset = sum(trainingLogical[start:end]);
 int trainingset[Ntrainingset];
@@ -94,7 +102,7 @@ int counter=0;
 for(i in start:end){
   if(trainingLogical[i]==1){
     counter+=1;
-    trainingset[counter] = i-start+1;
+    trainingset[counter] = i;
   }
 }
 }
@@ -119,13 +127,14 @@ vector[(Nsubs*Nscales-NfixedAbility) ? NpersonPreds : 0] Abilitybeta[Nscales];//
 vector[NstatePreds] statebeta[Nscales];//regression weights for state predictor effects on state difficulty / ability.
 //corr_matrix[Nscales] AbilityCorr;
 // vector[(Nscales * Nscales - Nscales) / 2] rawcor;
+vector[rowIndexPar ? 1:0] rowIndex;
 }
 
 transformed parameters{ //this section combines any user input fixed values and free parameters
 
-vector[end-start+1] p; //probability of observed response for responses in current parallel set
+vector[Nobs] p; //probability of observed response for responses in current parallel set
 matrix[Nsubs,Nscales] Ability; //ability matrix (potentially mix of free parameters and fixed values)
-vector[end-start+1] AbilityNobs; //relevant ability for each response in current parallel set
+vector[Nobs] AbilityNobs; //relevant ability for each response in current parallel set
 vector[Nitems] A; // item A values
 vector[Nitems] B; //item B values
 vector[Nitems] C; //item C values
@@ -168,33 +177,41 @@ A[notfixedA] = log1p_exp(A[notfixedA]);
 C[notfixedC] = inv_logit(C[notfixedC]);
 
 for(i in 1:Nsubs){ //for every subject
-for(j in 1:Nscales){ //and every scale
-if(fixedAbilityLogical[i,j]==1) Ability[i,j] = Abilitydata[i,j]; else{ //if ability is user supplied, input it
-Ability[i,j] = Abilitypars[Abilityparsindex[i,j]]; // or input the free parameter
-if(NpersonPreds) Ability[i,j] += personPreds[i,]' * Abilitybeta[j,]; //when there are person predictors, apply the effect
-}
-}
+  for(j in 1:Nscales){ //and every scale
+    if(fixedAbilityLogical[i,j]==1){
+      Ability[i,j] = Abilitydata[i,j];
+    } else{ //if ability is user supplied, input it
+      Ability[i,j] = Abilitypars[Abilityparsindex[i,j]]; // or input the free parameter
+      if(NpersonPreds) Ability[i,j] += personPreds[i,]' * Abilitybeta[j,]; //when there are person predictors, apply the effect
+    }
+  }
 }
 
+{ //local block for row index use
+  int startx = rowIndexPar ? realToInt(rowIndex[1]) : start;
+  int endx = rowIndexPar ? startx : end;
 
-for(i in start:end){ // for every response of the current parallel set (potentially all responses)
-AbilityNobs[i-start+1] = Ability[id[i],scale[i]]; //get the appropriate ability depending on subject id and scale id
-if(NstatePreds) AbilityNobs[i-start+1] += statePreds[i,]' * statebeta[scale[i]]; //if state covariate effects, apply these
+for(i in startx:endx){ // for every response of the current parallel set (potentially all responses)
+  AbilityNobs[i] = Ability[id[i],scale[i]]; //get the appropriate ability dependxing on subject id and scale id
+  if(NstatePreds) AbilityNobs[i] += statePreds[i,]' * statebeta[scale[i]]; //if state covariate effects, apply these
 }
 
 //probability computation
-p= (1.0 - scorevec[start:end])+ (2.0*scorevec[start:end]-1.0) .* (
-  C[item[start:end]] + (1.0-C[item[start:end]]) ./ ( 1.0 + exp(
-    (-A[item[start:end]] .* (
-      AbilityNobs-
-      B[item[start:end]]
+p[startx:endx]= (1.0 - scorevec[startx:endx])+ (2.0*scorevec[startx:endx]-1.0) .* (
+  C[item[startx:endx]] + (1.0-C[item[startx:endx]]) ./ ( 1.0 + exp(
+    (-A[item[startx:endx]] .* (
+      AbilityNobs[startx:endx]-
+      B[item[startx:endx]]
       )))));
+
+} //end local block of row index use
 
 }
 
 model{ // This section modifies the 'target' (output log probability), via 'target+' or '~' operators
 
-target+= sum(log(p[trainingset]+1e-6)); //add log of the likelihood (sum of individual response probabilities) to target
+if(!rowIndexPar) target+= sum(log(p[trainingset]+1e-6)); //add log of the likelihood (sum of individual response probabilities) to target
+if(rowIndexPar) target+= log(p[realToInt(rowIndex[1])]+1e-6); //add log of the likelihood (sum of individual response probabilities) to target
 
 //following sections add the prior probability model for any free parameters
 if(NfixedA < Nitems){
@@ -231,9 +248,9 @@ if(dopriors){
 }
 
 generated quantities{ //Section generates additional output that is not relevant for probability model
-vector[end-start+1] pcorrect; //probability of a correct response for each observation
+vector[Nobs] pcorrect; //probability of a correct response for each observation
 for(i in start:end){
-  if(score[i]==0) pcorrect[i-start+1] = 1-p[i-start+1]; else pcorrect[i-start+1]=p[i-start+1];
+  if(score[i]==0) pcorrect[i] = 1-p[i]; else pcorrect[i]=p[i];
 }
 
 

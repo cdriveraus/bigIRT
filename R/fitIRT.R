@@ -143,6 +143,8 @@ afunci <- function(x) log(exp(x)-1)
 
 
 dropPerfectScores <- function(dat,scoreref.='score',itemref.='Item',idref.='id'){
+  if(!'data.table' %in% class(dat)) stop('Not a data.table!')
+  dat[,.originalRow:=1:.N]
   dropping <- TRUE
   while(dropping){
     dropping <- FALSE
@@ -417,7 +419,9 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
       AbilityMeandat=AbilityMeandat,AbilitySD=array(AbilitySD),AbilityCorr=AbilityCorr,
       AMeanSD=AMeanSD,BMeanSD=BMeanSD,logitCMeanSD=logitCMeanSD,AbilityMeanSD=array(AbilityMeanSD),
       fixedAMean=1L,fixedBMean=1L,fixedCMean=1L,fixedAbilityMean=1L,
-      restrictAMean=1L,restrictBMean=1L,restrictCMean=0L,restrictAbilityMean=1L  )
+      restrictAMean=1L,restrictBMean=1L,restrictCMean=0L,restrictAbilityMean=1L,
+      rowIndexPar=0L,
+      originalRow=dat$`.originalRow`)
     )
 
 

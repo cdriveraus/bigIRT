@@ -42,6 +42,55 @@ clusterIDeval <- function(cl,commands){
   return(out)
 }
 
+#based on rstan function, very cut down, may fail in some cases...
+#' @importFrom Rcpp cpp_object_initializer
+getcxxfun <- function(object) {
+  if (length(object@dso_saved) == 0){
+    return(function(...) stop("this function should not be called"))
+  }  else  return(object@.CXXDSOMISC$cxxfun)
+}
+
+upars_names<-function(fit){
+
+  n<-with(fit$dat,{
+    n<-c()
+  if(Nitems-NfixedA) n <- c(n,paste0('a',1:(Nitems-NfixedA)))
+  if(Nitems-NfixedB) n <- c(n,paste0('b',1:(Nitems-NfixedB)))
+  if(Nitems-NfixedC) n <- c(n,paste0('c',1:(Nitems-NfixedC)))
+
+  if(Nsubs*Nscales-NfixedAbility) n <- c(n,paste0('ability',1:(Nsubs*Nscales-NfixedAbility)))
+
+  if(!fixedAMean) n <- c(n,'muA')
+ if(!fixedBMean) n <- c(n,'muB')
+ if(!fixedCMean) n <- c(n,'muC')
+ if(!fixedAbilityMean) n <- c(n,paste0('muAbility',1:Nscales))
+  return(n)
+  })
+  pardifflength=length(fit$optim$par)-length(n)
+  if(pardifflength) n <- c(n,paste0('covpar',1:pardifflength))
+  return(n)
+}
+
+scoreIRT <- function(fit, verbose=1L){
+
+  standata=fit$dat
+  standata$rowIndexPar=1L
+  standata$dopriors=0L
+  smf <- stan_reinitsf(stanmodels$irt,standata)
+  score <- matrix(NA,standata$Nobs,rstan::get_num_upars(smf))
+  for(i in 1:standata$Nobs){
+    a=Sys.time()
+    if(verbose && i %% 100 ==0) message(paste0(i,' / ', standata$Nobs))
+    standata$start <- standata$end <- i
+    # smf <- stan_reinitsf(stanmodels$irt,standata,fast = TRUE)
+    score[i,] <- rstan::grad_log_prob(smf,c(fit$optim$par,i), adjust_transform = TRUE)
+    # print(Sys.time()-a)
+  }
+  score <- score[,-ncol(score)]
+  colnames(score)  <- upars_names(fit)
+
+  return(score)
+}
 
 
 optimIRT <- function(standata, cores=6, split=TRUE,
