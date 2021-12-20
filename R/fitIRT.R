@@ -1,4 +1,113 @@
-normaliseIRT <- function(B,Ability, A,normaliseScale=1, normaliseMean=0){
+birtCheckParsOutput <- function(fit){
+  p=rep(NA,fit$dat$Nobs)
+  for(i in 1:length(p)){
+    p[i] <- fit$itemPars$C[fit$dat$item[i]] + (1.0-fit$itemPars$C[fit$dat$item[i]]) / ( 1.0 + exp(
+      (-fit$itemPars$A[fit$dat$item[i]] * (
+        fit$personPars[fit$dat$id[i], 1+fit$dat$scale[i]] -
+          fit$itemPars$B[fit$dat$item[i]]
+      ))));
+
+    if(fit$dat$score[i]==0) p[i]= 1.0-p[i];
+  }
+  return(p)
+}
+
+
+birtRunGeneratedQuantities<- function(fit){
+
+  log1p_exp=function(x) log1p(exp(x))
+
+  genq <- function(){
+    browser()
+
+    A=rep(NA,Nitems) # item A values
+    B=rep(NA,Nitems) #item B values
+    C=rep(NA,Nitems) #item C values
+      #put the user supplied fixed values into the item parameter objects
+      A[fixedA] = Adata[fixedA];
+      B[fixedB] = Bdata[fixedB];
+      C[fixedC] = Cdata[fixedC];
+
+      #put the free parameters into the item parameter objects
+      A[notfixedA] = invspApars;
+      B[notfixedB] = Bpars;
+      C[notfixedC] = logitCpars;
+
+
+      # for(i in 1:Nsubs){ #for every subject
+      #   for(j in 1:Nscales){ #and every scale
+      #     if(fixedAbilityLogical[i,j]==1){
+      #       Ability[i,j] = Abilitydata[i,j];
+      #     } else{ #if ability is user supplied, input it
+      #       Ability[i,j] = Abilitypars[Abilityparsindex[i,j]]; # or input the free parameter
+      #       if(NpersonPreds) {
+      #         predsmean=rep(0, NpersonPreds); #compute mean of person predictors
+      #         count=0;
+      #         for( ri in 1:Nobs){
+      #           if(id[i] == i){
+      #             count=count+1;
+      #             predsmean=predsmean+personPreds[i,];
+      #           }
+      #         }
+      #         predsmean= predsmean/count;
+      #         Ability[i,j] = Ability[i,j] +predsmean * Abilitybeta[j,]; #when there are person predictors, apply the effect
+      #       }
+      #     }
+      #   }
+      # }
+
+
+        for(i in 1:Nitems){ #for every item
+            count=0;
+            predsmean=rep(0,NitemPreds);
+            for( ri in 1:Nobs){
+              if(item[ri] == i){
+                count=count+1;
+                predsmean=predsmean+itemPreds[ri,];
+              }
+            }
+            predsmean= predsmean/count;
+          if(fixedAlog[i]==0){ #if free A par and item predictors, compute average item effect
+            A[i] =A[i]+ matrix(predsmean,1) %*% t(invspAbeta[ifelse(itemSpecificBetas==1,freeAref[item[i]],1),,drop=FALSE]); #when there are person predictors, apply the effect
+            A[i]=log1p_exp(A[i]);
+          }
+          if(fixedBlog[i]==0){ #if free B par and item predictors, compute average item effect
+            B[i] = B[i] + matrix(predsmean,1) %*% t(Bbeta[ifelse(itemSpecificBetas==1, freeBref[item[i]], 1),,drop=F]); #when there are person predictors, apply the effect
+          }
+        }
+
+
+#
+#       #linearised regression weights for reporting
+#       if(doApreds){
+#         if(size(Abeta)==1){
+#           Abeta[1,] = ((log1p_exp(mean(invspApars)+invspAbeta[1,]*.01))-(log1p_exp(mean(invspApars)-invspAbeta[1,]*.01)))/.02;
+#         }
+#         if(size(Abeta)>1){
+#           for(i in 1:size(Abeta)){
+#             Abeta[i,] = ((log1p(exp(invspApars[i])+invspAbeta[i,]*.01))-(log1p(exp(invspApars[i])-invspAbeta[i,]*.01)))/.02;
+#           }
+#         }
+#       }
+#
+#       if(doCpreds){
+#         if(size(Cbeta)==1)   Cbeta[1,] = ((inv_logit(mean(logitCpars))+logitCbeta[1,]*.01)-(inv_logit(mean(logitCpars))-logitCbeta[1,]*.01))/.02;
+#         if(size(Cbeta)>1){
+#           for(i in 1:size(Cbeta)){
+#             Cbeta[i,] = ((inv_logit(logitCpars[i])+logitCbeta[i,]*.01)-(inv_logit(logitCpars[i])-logitCbeta[i,]*.01))/.02;
+#           }
+#         }
+#       }
+
+  } #end internal genq function
+
+  e <- list2env(c(fit$pars,fit$dat))
+  environment(genq) <- e
+  genq()
+}
+
+
+  normaliseIRT <- function(B,Ability, A,normaliseScale=1, normaliseMean=0){
 
   nsd <- sd(Ability) / (normaliseScale)
   nm <- mean(Ability)
@@ -228,6 +337,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   itemDat=NA, itemPreds=character(),
   statePreds=character(),
   itemSpecificBetas=FALSE,
+  betaScale=10,
   invspAMeandat=.542,invspASD=.5,BMeandat=0,BSD=2, logitCMeandat=-4,logitCSD=2,
   AbilityMeandat=array(0,dim=c(length(unique(dat[[scale]])))),
   AbilitySD=array(10,dim=c(length(unique(dat[[scale]])))),
@@ -249,11 +359,14 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   itemPredsref. <- itemPreds
   statePredsref. <- statePreds
 
-  if(!'data.table' %in% class(dat)) dat <- as.data.table(dat) else dat <- data.table::copy(dat)
+  if(!'data.table' %in% class(dat)){  #drop unused columns from dat and set to data.table (copy if already data table)
+    dat <- as.data.table(dat[,c((idref.),(scoreref.),(itemref.),(scaleref.),
+    itemPredsref.,personPredsref.,statePredsref.),with=FALSE])
+    } else {
+      dat <- data.table::copy(dat[,c((idref.),(scoreref.),(itemref.),(scaleref.),
+        itemPredsref.,personPredsref.,statePredsref.),with=FALSE])
+    }
 
-  #drop unused columns from dat
-  dat <- dat[,c((idref.),(scoreref.),(itemref.),(scaleref.),
-    itemPredsref.,personPredsref.,statePredsref.),with=FALSE]
 
   #drop problem people and items
   if(dropPerfectScores)    dat <- dropPerfectScores(dat,scoreref. = scoreref.,itemref. = itemref.,idref. = idref.)
@@ -353,20 +466,34 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     #which scale is each Ability par for
     Abilityparsscaleindex <- c(col(Abilityparsindex)[Abilityparsindex>0])
 
-    #include predictors:
+    # #include short predictors:
+    #
+    # if(length(itemPredsref.)==0){
+    #   itemPreds <- array(0,dim = c(Nitems,0))
+    # } else{
+    #   itemPreds <- dat[!duplicated(get(itemref.)),itemPredsref.,with=FALSE]
+    #   itemPreds <- itemPreds[order(unique(dat[[itemref.]])),]
+    # }
+    #
+    # if(length(personPredsref.)==0){
+    #   personPreds <- array(0,dim = c(Nsubs,0))
+    # } else{
+    #   personPreds <- dat[!duplicated(get(idref.)),personPredsref.,with=FALSE]
+    #   personPreds <- personPreds[order(unique(dat[[idref.]])),]
+    # }
+
+    #include long predictors:
 
     if(length(itemPredsref.)==0){
-      itemPreds <- array(0,dim = c(Nitems,0))
+      itemPreds <- array(0,dim = c(nrow(dat),0))
     } else{
-      itemPreds <- dat[!duplicated(get(itemref.)),itemPredsref.,with=FALSE]
-      itemPreds <- itemPreds[order(unique(dat[[itemref.]])),]
+      itemPreds <- dat[,itemPredsref.,with=FALSE]
     }
 
     if(length(personPredsref.)==0){
-      personPreds <- array(0,dim = c(Nsubs,0))
+      personPreds <- array(0,dim = c(nrow(dat),0))
     } else{
-      personPreds <- dat[!duplicated(get(idref.)),personPredsref.,with=FALSE]
-      personPreds <- personPreds[order(unique(dat[[idref.]])),]
+      personPreds <- dat[,personPredsref.,with=FALSE]
     }
 
     sdat$NstatePreds <- length(statePreds)
@@ -393,6 +520,9 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
       fixedA=array(as.integer(which(!is.na(itemSetup$A)))),
       fixedB=array(as.integer(which(!is.na(itemSetup$B)))),
       fixedC=array(as.integer(which(!is.na(itemSetup$C)))),
+      fixedAlog=array(as.integer((!is.na(itemSetup$A)))),
+      fixedBlog=array(as.integer((!is.na(itemSetup$B)))),
+      fixedClog=array(as.integer((!is.na(itemSetup$C)))),
       notfixedA=array(as.integer(which(is.na(itemSetup$A)))),
       notfixedB=array(as.integer(which(is.na(itemSetup$B)))),
       notfixedC=array(as.integer(which(is.na(itemSetup$C)))),
@@ -410,9 +540,10 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
       scale=array(dat[[scaleref.]]),
       Adata=array(itemSetup$Adata),Bdata=array(itemSetup$Bdata),Cdata=array(itemSetup$Cdata),
       Abilitydata=matrix(unlist(AbilitySetup[,paste0(c(scaleIndex$original),'data'),with=FALSE]),Nsubs,Nscales),
-      NitemPreds=ncol(itemPreds), itemPreds=t(array(unlist(itemPreds),dim(itemPreds))),
+      NitemPreds=ncol(itemPreds), itemPreds=array(unlist(itemPreds),dim(itemPreds)),
       NpersonPreds=ncol(personPreds), personPreds=(array(unlist(personPreds),dim(personPreds))),
       itemSpecificBetas=as.integer(itemSpecificBetas),
+      betaScale=betaScale,
       invspAMeandat=invspAMeandat,invspASD=invspASD,
       BMeandat=BMeandat,BSD=BSD,
       logitCMeandat=logitCMeandat,logitCSD=logitCSD,
@@ -424,8 +555,10 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
       originalRow=dat$`.originalRow`)
     )
 
-
-
+    # browser()
+    sdat$freeAref=array(as.integer(cumsum(1-as.numeric(sdat$fixedAlog))))
+    sdat$freeBref=array(as.integer(cumsum(1-as.numeric(sdat$fixedBlog))))
+    sdat$freeCref=array(as.integer(cumsum(1-as.numeric(sdat$fixedClog))))
 
 
     JMLfit <- function(est, sdat, ebayes=FALSE, fit=NA,narrowPriors=FALSE,...){
