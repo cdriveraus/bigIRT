@@ -150,7 +150,7 @@ vector[Nobs] p; //probability of observed response for responses in current para
 // matrix[Nsubs,Nscales] Ability; //ability matrix (potentially mix of free parameters and fixed values)
 //vector[Nobs] AbilityNobs; //relevant ability for each response in current parallel set
 real ll;
-real D= Dpar ? 1 : 1-.1/(.1+exp(Dbase[1]));
+real D= 1.0;
 
 
 real invspAMean = fixedAMean ? invspAMeandat : invspAMeanpar[1]; //mean of inverse softplus A params
@@ -162,7 +162,7 @@ vector[Nscales] AbilityMean = fixedAbilityMean ? AbilityMeandat : AbilityMeanpar
 matrix[Nscales,Nscales] AbilityCov = quad_form_diag(AbilityCorr,AbilitySD);
 matrix[Nscales,Nscales] AbilityChol = cholesky_decompose(AbilityCov+diag_matrix(rep_vector(1e-6,Nscales)));
 
-
+if(Dpar) D = 1-.1/(.1+exp(Dbase[1]));
 
 //if there are item predictors supplied and the relevant regression weight object is larger than zero,
 //add the linear covariate effect to the relevant item parameter object (where that object contains free parameters)
