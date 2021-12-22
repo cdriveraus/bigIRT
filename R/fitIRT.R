@@ -348,7 +348,8 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   ebayes=TRUE,ebayesmultiplier=2,ebayesFromFixed=FALSE,ebayesiter=1,
   estMeans=FALSE,priors=TRUE,
   normalise=TRUE,normaliseScale=1,normaliseMean=0,
-  dropPerfectScores=TRUE,trainingRows=1:nrow(dat),...){
+  dropPerfectScores=TRUE,trainingRows=1:nrow(dat),
+  init=NA,...){
 
   sdat <-list() #initialize standata object
 
@@ -562,7 +563,6 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
 
 
     JMLfit <- function(est, sdat, ebayes=FALSE, fit=NA,narrowPriors=FALSE,...){
-      init <- NA
       skipebayes <- FALSE
 
       message(paste0(ifelse(narrowPriors,'Narrow priors ', ifelse(ebayes,'Empirical Bayes ','Free estimation ')),'step...'))
