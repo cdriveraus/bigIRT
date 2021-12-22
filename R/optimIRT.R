@@ -164,6 +164,7 @@ optimIRT <- function(standata, cores=6, split=TRUE,
       "assign('smf',bigIRT:::stan_reinitsf(bigIRT:::stanmodels$irt,standata),pos = g)",
       "NULL"
     )
+
     cl <- makeClusterID(cores)
     on.exit(try({parallel::stopCluster(cl)},silent=TRUE),add=TRUE)
     environment(parlp) <- environment(standata_specificsubjects) <- globalenv()
@@ -210,7 +211,7 @@ optimIRT <- function(standata, cores=6, split=TRUE,
       }
       b=Sys.time()
 
-      if(verbose > 0) print(paste0('ll=',out[1],', mean p= ',exp(out/standata$Nobs),' , iter time = ',round(b-a,5),
+      if(verbose > 0  && (iter %% verbose)==0) print(paste0('ll=',out[1],', mean p= ',exp(out/standata$Nobs),' , iter time = ',round(b-a,5),
         ' , core times = ',paste(sapply(out2,function(x) round(attributes(x)$time,3)),collapse=', ')))
       return(out)
     } #end target func
@@ -260,8 +261,8 @@ optimIRT <- function(standata, cores=6, split=TRUE,
       optimfit <- sgd(
         init,
         fitfunc = target,
-        itertol = 1e-3,
-        deltatol=1e-5,
+        itertol = 1e-2,
+        deltatol=1e-4,
         ndatapoints=standata$ndatapoints,plot=FALSE)
 
       init=optimfit$par
