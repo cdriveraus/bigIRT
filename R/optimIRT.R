@@ -260,6 +260,7 @@ optimIRT <- function(standata, cores=6, split=TRUE,
     if(stochastic){
       optimfit <- sgd(
         init,
+        maxiter=Niter,
         fitfunc = target,
         itertol = 1e-2,
         deltatol=1e-4,
