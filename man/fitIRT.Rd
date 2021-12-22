@@ -17,6 +17,7 @@ fitIRT(
   itemPreds = character(),
   statePreds = character(),
   itemSpecificBetas = FALSE,
+  betaScale = 10,
   invspAMeandat = 0.542,
   invspASD = 0.5,
   BMeandat = 0,
@@ -44,6 +45,8 @@ fitIRT(
   normaliseMean = 0,
   dropPerfectScores = TRUE,
   trainingRows = 1:nrow(dat),
+  init = NA,
+  Dpar = FALSE,
   ...
 )
 }
