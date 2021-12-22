@@ -684,9 +684,9 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
         if(JMLseq[[i]]$ebayes %in% 'TRUE') fitML <- fit #store fit before ebayes step
         while(!finished){
           ebayescounter <- ebayescounter + 1
-          stochastic <- F#(i == length(JMLseq))
+          # stochastic <- F#(i == length(JMLseq))
           fit <- JMLfit(est = JMLseq[[i]]$est,sdat = sdat, ebayes=JMLseq[[i]]$ebayes,
-            fit = fit,stochastic=stochastic,
+            fit = fit,,
             narrowPriors = JMLseq[[i]]$narrowPriors,...)
           if(ebayescounter >= ebayesiter || !JMLseq[[i]]$ebayes) finished=TRUE
         }
