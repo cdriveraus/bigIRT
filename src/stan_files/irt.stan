@@ -147,9 +147,7 @@ transformed parameters{ //this section combines any user input fixed values and 
 vector[Nobs] p; //probability of observed response for responses in current parallel set
 // matrix[Nsubs,Nscales] Ability; //ability matrix (potentially mix of free parameters and fixed values)
 //vector[Nobs] AbilityNobs; //relevant ability for each response in current parallel set
-vector[Nitems] At; // item A values
-vector[Nitems] Bt; //item B values
-vector[Nitems] Ct; //item C values
+real ll;
 
 
 real invspAMean = fixedAMean ? invspAMeandat : invspAMeanpar[1]; //mean of inverse softplus A params
@@ -219,10 +217,6 @@ for(i in startx:endx){
 if(!fixedAlog[item[i]]) sA=log1p_exp(sA);
 if(!fixedClog[item[i]]) sC=inv_logit(sC);
 
-At[item[i]]=sA;
-Bt[item[i]]=sB;
-Ct[item[i]]=sC;
-
 p[i]= sC + (1.0-sC) / ( 1.0 + exp(
     (-sA * (
       sAbility- //AbilityNobs[i]-
@@ -235,12 +229,13 @@ if(score[i]==0) p[i]= 1.0-p[i];//(1 - score[i]) + (2*score[i]-1) * p[i];
 
 } //end local block of row index use
 
+if(!rowIndexPar) ll= sum(log(p[trainingset]+1e-100)); //add log of the likelihood (sum of individual response probabilities) to target
+if(rowIndexPar) ll= log(p[realToInt(rowIndex[1])]+1e-100); //add log of the likelihood (sum of individual response probabilities) to target
 }
 
 model{ // This section modifies the 'target' (output log probability), via 'target+' or '~' operators
 
-if(!rowIndexPar) target+= sum(log(p[trainingset]+1e-6)); //add log of the likelihood (sum of individual response probabilities) to target
-if(rowIndexPar) target+= log(p[realToInt(rowIndex[1])]+1e-6); //add log of the likelihood (sum of individual response probabilities) to target
+target+=ll;
 
 //following sections add the prior probability model for any free parameters
 if(NfixedA < Nitems){
