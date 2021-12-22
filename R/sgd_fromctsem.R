@@ -25,7 +25,7 @@ sgd <- function(init,fitfunc,whichignore=c(),nsubjects=NA,ndatapoints=NA,plot=FA
 
   delta=deltaold=rep(0,length(pars))
   bestpars = newpars=maxpars=minpars=changepars=pars
-  gstore=parstore = deltastore=matrix(rnorm(length(bestpars)*nstore),length(bestpars),nstore)
+  # gstore=parstore = deltastore=matrix(rnorm(length(bestpars)*nstore),length(bestpars),nstore)
 
   step=rep(stepbase,length(pars))
   bestiter=1
@@ -188,8 +188,8 @@ sgd <- function(init,fitfunc,whichignore=c(),nsubjects=NA,ndatapoints=NA,plot=FA
     dgsmooth = gmemory2*dgsmooth +(1-gmemory2)*(gsmooth-oldgsmooth)
 
 
-    parstore[,1+(i-1) %% nstore] = pars
-    gstore[,1+(i-1) %% nstore] = g
+    # parstore[,1+(i-1) %% nstore] = pars
+    # gstore[,1+(i-1) %% nstore] = g
 
 
     if(i > 1) lproughness = lproughness * (roughnessmemory2) + (1-(roughnessmemory2)) * as.numeric(lp[i-1] > (lp[i]))#because accepted here, also see non accepted version
@@ -243,15 +243,15 @@ sgd <- function(init,fitfunc,whichignore=c(),nsubjects=NA,ndatapoints=NA,plot=FA
 
     # }#end if not gam
 
-    if(i > 1 && runif(1,0,1) > .95) {
-      # #slowly forget old max and mins, allow fast re exploration of space
-      rndchange <- runif(length(maxpars),0,1) > .95
-      # step[rndchange] <- stepbase
-      if(any(rndchange)){
-        maxpars[rndchange] <- max(parstore[rndchange,]+1e-6)
-        minpars[rndchange] <- min(parstore[rndchange,]-1e-6)
-      }
-    }
+    # if(i > 1 && runif(1,0,1) > .95) {
+    #   # #slowly forget old max and mins, allow fast re exploration of space
+    #   rndchange <- runif(length(maxpars),0,1) > .95
+    #   # step[rndchange] <- stepbase
+    #   if(any(rndchange)){
+    #     maxpars[rndchange] <- max(parstore[rndchange,]+1e-6)
+    #     minpars[rndchange] <- min(parstore[rndchange,]-1e-6)
+    #   }
+    # }
 
     # gmemory <- gmemory * gsmoothroughnessmod
     if(i > 25 && i %% 20 == 0) {
@@ -326,14 +326,14 @@ sgd <- function(init,fitfunc,whichignore=c(),nsubjects=NA,ndatapoints=NA,plot=FA
       lpdiff=max(tail(lp,nconvergeiter)) - min(tail(lp,nconvergeiter))
       if(lpdiff < itertol & lpdiff > 0) converged <- TRUE
       if(abs(max(diff(tail(lp,nconvergeiter)))) < deltatol) converged <- TRUE
-      if(!is.na(parsdtol)){
-        if(max(apply(parstore,1,sd)) < parsdtol) converged <- TRUE
-      }
+      # if(!is.na(parsdtol)){
+      #   if(max(apply(parstore,1,sd)) < parsdtol) converged <- TRUE
+      # }
       # if(converged) browser()
     }
   }
   out=list(itervalues = lp, value = max(lp),
-    par=bestpars,parstore=parstore,gstore=gstore,lpstore=tail(lp,nstore))
+    par=bestpars,lpstore=tail(lp,nstore))
 
   return(out)#,gstore=gstore,pstore=pstore) )
 }

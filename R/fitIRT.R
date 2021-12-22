@@ -349,7 +349,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   estMeans=FALSE,priors=TRUE,
   normalise=TRUE,normaliseScale=1,normaliseMean=0,
   dropPerfectScores=TRUE,trainingRows=1:nrow(dat),
-  init=NA,...){
+  init=NA,Dpar=FALSE,...){
 
   sdat <-list() #initialize standata object
 
@@ -521,6 +521,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
       fixedA=array(as.integer(which(!is.na(itemSetup$A)))),
       fixedB=array(as.integer(which(!is.na(itemSetup$B)))),
       fixedC=array(as.integer(which(!is.na(itemSetup$C)))),
+      Dpar = as.integer(Dpar),
       fixedAlog=array(as.integer((!is.na(itemSetup$A)))),
       fixedBlog=array(as.integer((!is.na(itemSetup$B)))),
       fixedClog=array(as.integer((!is.na(itemSetup$C)))),

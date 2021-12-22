@@ -44,6 +44,7 @@ int NpersonPreds; //Number of covariates used to predict person parameters
 int NstatePreds; //Number of covariates used to predict ability/difficulty (indistinguishable) on a per response basis
 
 int itemSpecificBetas;
+int Dpar;
 
 row_vector[NitemPreds] itemPreds[Nobs]; //Values of item predictors
 row_vector[NpersonPreds] personPreds[Nobs]; //Values of person predictors
@@ -129,6 +130,7 @@ vector[Nsubs*Nscales-NfixedAbility] Abilitypars; //free ability parameters
 vector[fixedAMean ? 0 : 1] invspAMeanpar; // mean of inverse softplus of A parameters, unless value fixed
 vector[fixedBMean ? 0 : 1] BMeanpar;//mean of B parameters, unless value fixed
 vector[fixedCMean ? 0 : 1] logitCMeanpar;//mean of logit C parameters, unless value fixed
+real Dbase[Dpar ? 1 : 0];
 vector[fixedAbilityMean ? 0 : Nscales] AbilityMeanpar;//means of ability parameters, unless values fixed
 
 //when covariate effects are included
@@ -148,6 +150,7 @@ vector[Nobs] p; //probability of observed response for responses in current para
 // matrix[Nsubs,Nscales] Ability; //ability matrix (potentially mix of free parameters and fixed values)
 //vector[Nobs] AbilityNobs; //relevant ability for each response in current parallel set
 real ll;
+real D= Dpar ? 1 : 1-.1/(.1+exp(Dbase[1]));
 
 
 real invspAMean = fixedAMean ? invspAMeandat : invspAMeanpar[1]; //mean of inverse softplus A params
@@ -217,7 +220,7 @@ for(i in startx:endx){
 if(!fixedAlog[item[i]]) sA=log1p_exp(sA);
 if(!fixedClog[item[i]]) sC=inv_logit(sC);
 
-p[i]= sC + (1.0-sC) / ( 1.0 + exp(
+p[i]= sC + (D-sC) / ( 1.0 + exp(
     (-sA * (
       sAbility- //AbilityNobs[i]-
       sB
@@ -229,8 +232,8 @@ if(score[i]==0) p[i]= 1.0-p[i];//(1 - score[i]) + (2*score[i]-1) * p[i];
 
 } //end local block of row index use
 
-if(!rowIndexPar) ll= sum(log(p[trainingset]+1e-100)); //add log of the likelihood (sum of individual response probabilities) to target
-if(rowIndexPar) ll= log(p[realToInt(rowIndex[1])]+1e-100); //add log of the likelihood (sum of individual response probabilities) to target
+if(!rowIndexPar) ll= sum(log(p[trainingset]+1e-20)); //add log of the likelihood (sum of individual response probabilities) to target
+if(rowIndexPar) ll= log(p[realToInt(rowIndex[1])]+1e-20); //add log of the likelihood (sum of individual response probabilities) to target
 }
 
 model{ // This section modifies the 'target' (output log probability), via 'target+' or '~' operators
