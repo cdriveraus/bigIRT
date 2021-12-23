@@ -125,6 +125,9 @@ optimIRT <- function(standata, cores=6, split=TRUE,
         return(out)
         }'))
 
+  iter <-0
+  storedLp <- c()
+
   singletarget<-function(parm,gradnoise=TRUE) {
     iter <<- iter+1
     a=Sys.time()
@@ -200,8 +203,7 @@ optimIRT <- function(standata, cores=6, split=TRUE,
 
 
 
-    iter <-0
-    storedLp <- c()
+
 
     target<-function(parm,gradnoise=TRUE){
       iter <<- iter+1
