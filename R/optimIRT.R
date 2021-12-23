@@ -211,7 +211,6 @@ optimIRT <- function(standata, cores=6, split=TRUE,
         }
       }
       b=Sys.time()
-print(iter %% verbose)
       if(verbose > 0  && (iter %% verbose)==0) print(paste0('ll=',out[1],', mean p= ',exp(out/standata$Nobs),' , iter time = ',round(b-a,5),
         ' , core times = ',paste(sapply(out2,function(x) round(attributes(x)$time,3)),collapse=', ')))
       return(out)
