@@ -166,11 +166,39 @@ optimIRT <- function(standata, cores=6, split=TRUE,
       "NULL"
     )
 
-    cl <- makeClusterID(cores)
-    on.exit(try({parallel::stopCluster(cl)},silent=TRUE),add=TRUE)
+
+    #first approach
+    # cl <- makeClusterID(cores)
+    # on.exit(try({parallel::stopCluster(cl)},silent=TRUE),add=TRUE)
+    # environment(parlp) <- environment(standata_specificsubjects) <- globalenv()
+    # system.time(clusterIDexport(cl,c('cores','parlp','splitby','standata','stanindices','standata_specificsubjects')))
+    # system.time(clusterIDeval(cl,parcommands))
+
+    # browser()
+    #second
+    benv <- new.env(parent=globalenv())
+    benv$cl <- NA #placeholder for flexsapply usage
     environment(parlp) <- environment(standata_specificsubjects) <- globalenv()
-    system.time(clusterIDexport(cl,c('cores','parlp','splitby','standata','stanindices','standata_specificsubjects')))
-    system.time(clusterIDeval(cl,parcommands))
+
+
+    assign(x = 'cl',
+      parallel::makeCluster(spec = cores,type = "PSOCK",useXDR=FALSE,outfile='',user=NULL),
+      envir = benv)
+    parallel::clusterExport(benv$cl,
+      c('cores','parlp','splitby','standata','stanindices','standata_specificsubjects','parcommands'),envir = environment())
+
+    benv$cores=cores
+
+    eval(parse(text=
+        "parallel::parLapply(cl = cl,X = 1:cores,function(x){
+         assign('nodeid',x,envir=globalenv())
+        })"),envir=benv)
+
+    parallel::clusterEvalQ(cl = benv$cl,expr = sapply(parcommands,function(x) eval(parse(text=x),envir = globalenv())))
+
+    on.exit(try({parallel::stopCluster(benv$cl)},silent=TRUE),add=TRUE)
+
+
 
     iter <-0
     storedLp <- c()
@@ -178,8 +206,9 @@ optimIRT <- function(standata, cores=6, split=TRUE,
     target<-function(parm,gradnoise=TRUE){
       iter <<- iter+1
       a=Sys.time()
-      clusterIDexport(cl,'parm')
-      out2<- parallel::clusterEvalQ(cl,parlp(parm))
+      # clusterIDexport(cl,'parm')
+      parallel::clusterExport(benv$cl,'parm',envir = environment())
+      out2<- parallel::clusterEvalQ(benv$cl,parlp(parm))
 
       tmp<-sapply(1:length(out2),function(x) {
         if(!is.null(attributes(out2[[x]])$err)){
@@ -223,7 +252,8 @@ optimIRT <- function(standata, cores=6, split=TRUE,
 
   if(cores==1) npars=rstan::get_num_upars(smf)
   # if(cores > 1) npars=parallel::clusterEvalQ(benv$clms, eval(rstan::get_num_upars(smf),envir = globalenv()))[[1]]
-  if(cores > 1) npars=clusterIDeval(cl, 'rstan::get_num_upars(smf)')[[1]]
+  # if(cores > 1) npars=clusterIDeval(cl, 'rstan::get_num_upars(smf)')[[1]]
+  if(cores > 1) npars=parallel::clusterEvalQ(benv$cl, rstan::get_num_upars(smf))[[1]]
   if(is.na(init[1])) init=rnorm(npars,0,.01)
   #target(init)
 
