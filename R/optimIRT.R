@@ -126,6 +126,7 @@ optimIRT <- function(standata, cores=6, split=TRUE,
         }'))
 
   singletarget<-function(parm,gradnoise=TRUE) {
+    iter <<- iter+1
     a=Sys.time()
     out<- try(rstan::log_prob(smf,upars=parm,adjust_transform=TRUE,gradient=TRUE),silent = FALSE)
 
@@ -135,7 +136,7 @@ optimIRT <- function(standata, cores=6, split=TRUE,
     }
     b=Sys.time()
     evaltime <- b-a
-    if(verbose > 0) print(paste('ll=',out[1],', prob= ',exp(out/standata$Nobs),' ,    iter time = ',round(evaltime,2)),digits=14)
+    if(verbose > 0 && (iter %% verbose)==0) print(paste('ll=',out[1],', prob= ',exp(out/standata$Nobs),' ,    iter time = ',round(evaltime,2)),digits=14)
     return(out)
   }
 
@@ -175,6 +176,7 @@ optimIRT <- function(standata, cores=6, split=TRUE,
     storedLp <- c()
 
     target<-function(parm,gradnoise=TRUE){
+      iter <<- iter+1
       a=Sys.time()
       clusterIDexport(cl,'parm')
       out2<- parallel::clusterEvalQ(cl,parlp(parm))
@@ -200,7 +202,6 @@ optimIRT <- function(standata, cores=6, split=TRUE,
 
       if(plot > 0){
         if(out[1] > (-1e99)) storedLp <<- c(storedLp,out[1])
-        iter <<- iter+1
         # g=log(abs(attributes(out)$gradient))*sign(attributes(out)$gradient)
         if(iter %% plot == 0){
           par(mfrow=c(1,1))
@@ -210,7 +211,7 @@ optimIRT <- function(standata, cores=6, split=TRUE,
         }
       }
       b=Sys.time()
-
+print(iter %% verbose)
       if(verbose > 0  && (iter %% verbose)==0) print(paste0('ll=',out[1],', mean p= ',exp(out/standata$Nobs),' , iter time = ',round(b-a,5),
         ' , core times = ',paste(sapply(out2,function(x) round(attributes(x)$time,3)),collapse=', ')))
       return(out)
