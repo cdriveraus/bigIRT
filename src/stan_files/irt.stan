@@ -214,7 +214,7 @@ for(i in startx:endx){
   if(doApreds && !fixedAlog[item[i]]) sA += (itemPreds[i,] * invspAbeta[itemSpecificBetas ? freeAref[item[i]] : 1,]);
   if(doBpreds && !fixedBlog[item[i]]) sB += (itemPreds[i,] * Bbeta[itemSpecificBetas ? freeBref[item[i]] : 1,]);
   if(doCpreds && !fixedClog[item[i]]) sC += (itemPreds[i,] * logitCbeta[itemSpecificBetas ? freeCref[item[i]] : 1,]);
-  if(NpersonPreds && !fixedAbilityLogical[id[i],scale[i]]) sAbility += personPreds[id[i],] * Abilitybeta[scale[i],];
+  if(NpersonPreds && !fixedAbilityLogical[id[i],scale[i]]) sAbility += personPreds[i,] * Abilitybeta[scale[i],];
   //if(NstatePreds && !fixedAbilityLogical[id[i],scale[i]]) sAbility += statePreds[i,] * statebeta[scale[i],];
 
 if(!fixedAlog[item[i]]) sA=log1p_exp(sA);
@@ -310,9 +310,9 @@ C[notfixedC] = logitCpars;
         row_vector[NpersonPreds] predsmean=rep_row_vector(0.0, NpersonPreds); //compute mean of person predictors
         int count=0;
         for( ri in 1:Nobs){
-          if(id[i] == i){
+          if(id[ri] == i){
             count+=1;
-            predsmean+=personPreds[i,];
+            predsmean+=personPreds[ri,];
           }
         }
         predsmean= predsmean/count;

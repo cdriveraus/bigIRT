@@ -149,7 +149,7 @@ sgd <- function(init,fitfunc,whichignore=c(),nsubjects=NA,ndatapoints=NA,plot=FA
       }
       #warmup check
       if(is.na(startnrows) &&
-          i < warmuplength && i > 1 && lpg[1] < lp[1]-5) {
+          i < warmuplength && i > 1 && lpg[1] < lp[i-1]-5) {
         accepted <- FALSE
         step = step * .1
         deltaold <- deltaold * 0
