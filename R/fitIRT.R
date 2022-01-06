@@ -554,7 +554,8 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
       fixedAMean=1L,fixedBMean=1L,fixedCMean=1L,fixedAbilityMean=1L,
       restrictAMean=1L,restrictBMean=1L,restrictCMean=0L,restrictAbilityMean=1L,
       rowIndexPar=0L,
-      originalRow=dat$`.originalRow`)
+      originalRow=dat$`.originalRow`,
+      doGenQuant=0L)
     )
 
     # browser()
@@ -725,10 +726,20 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     #   }
     # }
 
+    # browser()
     fit$itemPars <- data.frame(item=rownames(fit$pars$B),A=fit$pars$A,B=fit$pars$B,C=fit$pars$C)
     colnames(fit$itemPars)[1] <- item
+    if(ncol(itemPreds)>0){
+      colnames(fit$pars$itemPredsMean) <- colnames(itemPreds)
+      fit$itemPars <- cbind(fit$itemPars, fit$pars$itemPredsMean)
+    }
+
     fit$personPars <- data.frame(id=rownames(fit$pars$Ability),fit$pars$Ability)
     colnames(fit$personPars)[1] = id
+    if(ncol(personPreds)>0){
+      colnames(fit$pars$personPredsMean) <- colnames(personPreds)
+      fit$personPars <- cbind(fit$personPars, fit$pars$personPredsMean)
+    }
 
 
     return(fit)

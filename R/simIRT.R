@@ -227,7 +227,7 @@ simItems <- function(NperScale, scaleNames, invspAmu, invspASD, Bmu, BSD, logitC
   return(do.call(rbind,items))
 }
 
-IRTcurve <- function(a,b,c,theta=seq(-3,3,.01),plot=TRUE,rescale=FALSE,add=FALSE...){
+IRTcurve <- function(a,b,c,theta=seq(-3,3,.01),plot=TRUE,rescale=FALSE,add=FALSE,...){
   theta <- sort(theta)
   x <- c + (1-c)/(1+exp(-a*(theta-b)))
   if(rescale) theta=scale(theta)
@@ -259,7 +259,7 @@ IRTsim <- function(Nsubs=100,Nitems=200,Nscales=3,
   ASD=0,AMean=1,BSD=1,BMean=0,logitCSD=1,logitCMean=-2,AbilitySD=1,AbilityMean=0,
   itemPreds=NA, AitemPredEffects=NA,BitemPredEffects=NA,logitCitemPredEffects=NA,
   personPreds=NA, AbilityPredEffects=NA,
-  statePreds=NA, statePredEffects=NA, normalise=TRUE){
+  statePreds=NA, statePredEffects=NA, normalise=FALSE){
 
   Ability <- matrix(rnorm(Nsubs*Nscales,AbilityMean,AbilitySD),Nsubs)
   A <- matrix(rnorm(Nitems*Nscales,AMean,ASD),Nitems)

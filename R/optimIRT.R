@@ -54,17 +54,17 @@ upars_names<-function(fit){
 
   n<-with(fit$dat,{
     n<-c()
-  if(Nitems-NfixedA) n <- c(n,paste0('a',1:(Nitems-NfixedA)))
-  if(Nitems-NfixedB) n <- c(n,paste0('b',1:(Nitems-NfixedB)))
-  if(Nitems-NfixedC) n <- c(n,paste0('c',1:(Nitems-NfixedC)))
+    if(Nitems-NfixedA) n <- c(n,paste0('a',1:(Nitems-NfixedA)))
+    if(Nitems-NfixedB) n <- c(n,paste0('b',1:(Nitems-NfixedB)))
+    if(Nitems-NfixedC) n <- c(n,paste0('c',1:(Nitems-NfixedC)))
 
-  if(Nsubs*Nscales-NfixedAbility) n <- c(n,paste0('ability',1:(Nsubs*Nscales-NfixedAbility)))
+    if(Nsubs*Nscales-NfixedAbility) n <- c(n,paste0('ability',1:(Nsubs*Nscales-NfixedAbility)))
 
-  if(!fixedAMean) n <- c(n,'muA')
- if(!fixedBMean) n <- c(n,'muB')
- if(!fixedCMean) n <- c(n,'muC')
- if(!fixedAbilityMean) n <- c(n,paste0('muAbility',1:Nscales))
-  return(n)
+    if(!fixedAMean) n <- c(n,'muA')
+    if(!fixedBMean) n <- c(n,'muB')
+    if(!fixedCMean) n <- c(n,'muC')
+    if(!fixedAbilityMean) n <- c(n,paste0('muAbility',1:Nscales))
+    return(n)
   })
   pardifflength=length(fit$optim$par)-length(n)
   if(pardifflength) n <- c(n,paste0('covpar',1:pardifflength))
@@ -318,7 +318,10 @@ optimIRT <- function(standata, cores=6, split=TRUE,
   } else parcov <- NULL
 
   try({parallel::stopCluster(clms)},silent=TRUE)
-    smf <- stan_reinitsf(stanmodels$irt,standata)
+
+  standata$doGenQuant = 1L #generate extra values now
+  smf <- stan_reinitsf(stanmodels$irt,standata)
+
   return(list(optim=optimfit,
     parcov=parcov,
     stanfit=smf,

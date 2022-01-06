@@ -46,6 +46,8 @@ int NstatePreds; //Number of covariates used to predict ability/difficulty (indi
 int itemSpecificBetas;
 int Dpar;
 
+int doGenQuant;
+
 row_vector[NitemPreds] itemPreds[Nobs]; //Values of item predictors
 row_vector[NpersonPreds] personPreds[Nobs]; //Values of person predictors
 //row_vector[NstatePreds] statePreds[Nobs]; //Values of state predictors
@@ -283,7 +285,10 @@ vector[Nitems] A; // item A values
 vector[Nitems] B; //item B values
 vector[Nitems] C; //item C values
 
-if(start==1 && end==Nobs){ //only compute when single core, ie not performance orientation
+row_vector[NitemPreds] itemPredsMean[Nitems]; //Values of item predictors
+row_vector[NpersonPreds] personPredsMean[Nsubs]; //Values of person predictors
+
+if(doGenQuant){ //only compute when single core, ie not performance orientation
 
 //put the user supplied fixed values into the item parameter objects
 A[fixedA] = Adata[fixedA];
@@ -307,16 +312,16 @@ C[notfixedC] = logitCpars;
     } else{ //if ability is user supplied, input it
       Ability[i,j] = Abilitypars[Abilityparsindex[i,j]]; // or input the free parameter
       if(NpersonPreds) {
-        row_vector[NpersonPreds] predsmean=rep_row_vector(0.0, NpersonPreds); //compute mean of person predictors
         int count=0;
+        personPredsMean[i]=rep_row_vector(0.0, NpersonPreds); //init to zero, mean of person predictors
         for( ri in 1:Nobs){
           if(id[ri] == i){
             count+=1;
-            predsmean+=personPreds[ri,];
+            personPredsMean[i]+=personPreds[ri,];
           }
         }
-        predsmean= predsmean/count;
-        Ability[i,j] += predsmean * Abilitybeta[j,]; //when there are person predictors, apply the effect
+        personPredsMean[i]= personPredsMean[i]/count;
+        Ability[i,j] += personPredsMean[i] * Abilitybeta[j,]; //when there are person predictors, apply the effect
       }
     }
   }
@@ -328,27 +333,27 @@ C[notfixedC] = logitCpars;
   for(i in 1:Nitems){ //for every item
     if(doApreds || doBpreds || doCpreds) { //if any covariates, compute covariate mean
         int count=0;
-        predsmean=rep_row_vector(0.0, NitemPreds);
+        itemPredsMean[i]=rep_row_vector(0.0, NitemPreds);
         for( ri in 1:Nobs){
           if(item[ri] == i){
             count+=1;
-            predsmean+=itemPreds[ri,];
+            itemPredsMean[i]+=itemPreds[ri,];
           }
         }
-        predsmean= predsmean/count;
+        itemPredsMean[i]= itemPredsMean[i]/count;
     }
 
     if(fixedAlog[i]==0){ //if free A par and item predictors, compute average item effect
-      if(doApreds) A[i] += predsmean * invspAbeta[itemSpecificBetas ? freeAref[i] : 1,]; //when there are person predictors, apply the effect
+      if(doApreds) A[i] += itemPredsMean[i] * invspAbeta[itemSpecificBetas ? freeAref[i] : 1,]; //when there are person predictors, apply the effect
       A[i]=log1p_exp(A[i]);
     }
 
     if(fixedBlog[i]==0){ //if free B par and item predictors, compute average item effect
-      if(doBpreds)B[i] += predsmean * Bbeta[itemSpecificBetas ? freeBref[i] : 1,]; //when there are person predictors, apply the effect
+      if(doBpreds)B[i] += itemPredsMean[i] * Bbeta[itemSpecificBetas ? freeBref[i] : 1,]; //when there are person predictors, apply the effect
     }
 
     if(fixedClog[i]==0){ //if free A par and item predictors, compute average item effect
-      if(doCpreds) C[i] += predsmean * Cbeta[itemSpecificBetas ? freeCref[i] : 1,]; //when there are person predictors, apply the effect
+      if(doCpreds) C[i] += itemPredsMean[i] * Cbeta[itemSpecificBetas ? freeCref[i] : 1,]; //when there are person predictors, apply the effect
       C[i]=inv_logit(C[i]);
     }
 
