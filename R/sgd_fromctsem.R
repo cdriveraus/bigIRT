@@ -153,7 +153,7 @@ sgd <- function(init,fitfunc,whichignore=c(),nsubjects=NA,ndatapoints=NA,plot=FA
         accepted <- FALSE
         step = step * .1
         deltaold <- deltaold * 0
-        pars=bestpars
+        # pars=bestpars
 
       }
       if(plot && !accepted) {
