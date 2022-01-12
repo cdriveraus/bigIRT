@@ -353,7 +353,7 @@ C[notfixedC] = logitCpars;
     }
 
     if(fixedClog[i]==0){ //if free A par and item predictors, compute average item effect
-      if(doCpreds) C[i] += itemPredsMean[i] * Cbeta[itemSpecificBetas ? freeCref[i] : 1,]; //when there are person predictors, apply the effect
+      if(doCpreds) C[i] += itemPredsMean[i] * logitCbeta[itemSpecificBetas ? freeCref[i] : 1,]; //when there are person predictors, apply the effect
       C[i]=inv_logit(C[i]);
     }
 
@@ -367,13 +367,13 @@ if(doApreds){
   }
   if(size(Abeta)>1){
     for(i in 1:size(Abeta)){
-      Abeta[i,] = ((log1p(exp(invspApars[i])+invspAbeta[i,]*.01))-(log1p(exp(invspApars[i])-invspAbeta[i,]*.01)))/.02;
+      Abeta[i,] = ((log1p(exp(invspApars[i]+invspAbeta[i,]*.01)))-(log1p(exp(invspApars[i]-invspAbeta[i,]*.01))))/.02;
     }
   }
 }
 
 if(doCpreds){
-  if(size(Cbeta)==1)   Cbeta[1,] = ((inv_logit(mean(logitCpars))+logitCbeta[1,]*.01)-(inv_logit(mean(logitCpars))-logitCbeta[1,]*.01))/.02;
+  if(size(Cbeta)==1)   Cbeta[1,] = ((inv_logit(mean(logitCpars)+logitCbeta[1,]*.01))-(inv_logit(mean(logitCpars)-logitCbeta[1,]*.01)))/.02;
   if(size(Cbeta)>1){
     for(i in 1:size(Cbeta)){
       Cbeta[i,] = ((inv_logit(logitCpars[i])+logitCbeta[i,]*.01)-(inv_logit(logitCpars[i])-logitCbeta[i,]*.01))/.02;
