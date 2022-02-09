@@ -251,23 +251,23 @@ afunc <- function(x) log1p(exp(x))
 afunci <- function(x) log(exp(x)-1)
 
 
-dropPerfectScores <- function(dat,scoreref.='score',itemref.='Item',idref.='id'){
+dropPerfectScores <- function(dat,scoreref.='score',itemref.='Item',idref.='id',tol.=.001){
   if(!'data.table' %in% class(dat)) stop('Not a data.table!')
   dat[,.originalRow:=1:.N]
   dropping <- TRUE
   while(dropping){
     dropping <- FALSE
     dat[,itemMean:=mean(get(scoreref.)),by=itemref.]
-    if(any(dat$itemMean %in% c(0,1))){
+    if(any((abs(dat$itemMean-.5)+tol.)>= .5)){
       dropping <- TRUE
       warning('Dropping items with all 0 or 1',immediate. = TRUE)
-      dat <- dat[itemMean > 0 & itemMean < 1,]
+      dat <- dat[(abs(itemMean-.5)+tol.)< .5,]
     }
     dat[,personMean:= mean(get(scoreref.)),by=idref.]
-    if(any(dat$personMean %in% c(0,1))){
+      if(any((abs(dat$personMean-.5)+tol.)>= .5)){
       warning('Dropping subjects with all 0 or 1',immediate. = TRUE)
       dropping <- TRUE
-      dat <-dat[personMean > 0 & personMean < 1,]
+      dat <-dat[(abs(personMean-.5)+tol.)< .5,]
     }
   }
   return(dat)
