@@ -40,8 +40,13 @@ int item[Nobs]; //Item identifier for each response
 int scale[Nobs]; //Scale identifier for each response
 
 int NitemPreds; //Number of covariates used to predict item parameters
+int NAitemPreds; //Number of covariates used to predict item parameters
+int NBitemPreds; //Number of covariates used to predict item parameters
+int NCitemPreds; //Number of covariates used to predict item parameters
 int NpersonPreds; //Number of covariates used to predict person parameters
-int NstatePreds; //Number of covariates used to predict ability/difficulty (indistinguishable) on a per response basis
+int AitemPreds[NAitemPreds];
+int BitemPreds[NBitemPreds];
+int CitemPreds[NCitemPreds];
 
 int itemSpecificBetas;
 int Dpar;
@@ -136,9 +141,9 @@ real Dbase[Dpar ? 1 : 0];
 vector[fixedAbilityMean ? 0 : Nscales] AbilityMeanpar;//means of ability parameters, unless values fixed
 
 //when covariate effects are included
-vector[(Nitems-NfixedA) ? NitemPreds : 0] invspAbeta[ itemSpecificBetas ? (Nitems-NfixedA) : 1];//regression weights for covariate effects on inverse softplus A params
-vector[(Nitems-NfixedB) ? NitemPreds : 0] Bbeta[ itemSpecificBetas ? (Nitems-NfixedB) : 1];//regression weights for covariate effects on B params
-vector[(Nitems-NfixedC) ? NitemPreds : 0] logitCbeta[itemSpecificBetas ? (Nitems-NfixedC) : 1];//regression weights for covariate effects on logit C params
+vector[(Nitems-NfixedA) ? size(AitemPreds) : 0] invspAbeta[ itemSpecificBetas ? (Nitems-NfixedA) : 1];//regression weights for covariate effects on inverse softplus A params
+vector[(Nitems-NfixedB) ? size(BitemPreds) : 0] Bbeta[ itemSpecificBetas ? (Nitems-NfixedB) : 1];//regression weights for covariate effects on B params
+vector[(Nitems-NfixedC) ? size(CitemPreds) : 0] logitCbeta[itemSpecificBetas ? (Nitems-NfixedC) : 1];//regression weights for covariate effects on logit C params
 vector[(Nsubs*Nscales-NfixedAbility) ? NpersonPreds : 0] Abilitybeta[Nscales];//reg. weights for covariate effects on ability
 //vector[NstatePreds] statebeta[Nscales];//regression weights for state predictor effects on state difficulty / ability.
 //corr_matrix[Nscales] AbilityCorr;
@@ -213,9 +218,9 @@ for(i in startx:endx){
   real sC=fixedClog[item[i]] ? Cdata[item[i]] : logitCpars[freeCref[item[i]]];
   real sAbility= fixedAbilityLogical[id[i],scale[i]] ? Abilitydata[id[i],scale[i]] : Abilitypars[Abilityparsindex[id[i],scale[i]]];
 
-  if(doApreds && !fixedAlog[item[i]]) sA += (itemPreds[i,] * invspAbeta[itemSpecificBetas ? freeAref[item[i]] : 1,]);
-  if(doBpreds && !fixedBlog[item[i]]) sB += (itemPreds[i,] * Bbeta[itemSpecificBetas ? freeBref[item[i]] : 1,]);
-  if(doCpreds && !fixedClog[item[i]]) sC += (itemPreds[i,] * logitCbeta[itemSpecificBetas ? freeCref[item[i]] : 1,]);
+  if(doApreds && !fixedAlog[item[i]]) sA += (itemPreds[i,AitemPreds] * invspAbeta[itemSpecificBetas ? freeAref[item[i]] : 1,]);
+  if(doBpreds && !fixedBlog[item[i]]) sB += (itemPreds[i,BitemPreds] * Bbeta[itemSpecificBetas ? freeBref[item[i]] : 1,]);
+  if(doCpreds && !fixedClog[item[i]]) sC += (itemPreds[i,CitemPreds] * logitCbeta[itemSpecificBetas ? freeCref[item[i]] : 1,]);
   if(NpersonPreds && !fixedAbilityLogical[id[i],scale[i]]) sAbility += personPreds[i,] * Abilitybeta[scale[i],];
   //if(NstatePreds && !fixedAbilityLogical[id[i],scale[i]]) sAbility += statePreds[i,] * statebeta[scale[i],];
 
@@ -344,16 +349,16 @@ C[notfixedC] = logitCpars;
     }
 
     if(fixedAlog[i]==0){ //if free A par and item predictors, compute average item effect
-      if(doApreds) A[i] += itemPredsMean[i] * invspAbeta[itemSpecificBetas ? freeAref[i] : 1,]; //when there are person predictors, apply the effect
+      if(doApreds) A[i] += itemPredsMean[i,AitemPreds] * invspAbeta[itemSpecificBetas ? freeAref[i] : 1,]; //when there are person predictors, apply the effect
       A[i]=log1p_exp(A[i]);
     }
 
     if(fixedBlog[i]==0){ //if free B par and item predictors, compute average item effect
-      if(doBpreds)B[i] += itemPredsMean[i] * Bbeta[itemSpecificBetas ? freeBref[i] : 1,]; //when there are person predictors, apply the effect
+      if(doBpreds)B[i] += itemPredsMean[i,BitemPreds] * Bbeta[itemSpecificBetas ? freeBref[i] : 1,]; //when there are person predictors, apply the effect
     }
 
     if(fixedClog[i]==0){ //if free A par and item predictors, compute average item effect
-      if(doCpreds) C[i] += itemPredsMean[i] * logitCbeta[itemSpecificBetas ? freeCref[i] : 1,]; //when there are person predictors, apply the effect
+      if(doCpreds) C[i] += itemPredsMean[i,CitemPreds] * logitCbeta[itemSpecificBetas ? freeCref[i] : 1,]; //when there are person predictors, apply the effect
       C[i]=inv_logit(C[i]);
     }
 

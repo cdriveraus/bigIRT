@@ -21,22 +21,25 @@ cores=2
       # personPreds = matrix(rnorm(Np)), AbilityPredEffects = matrix(c(1,-0.5,.5),6,1),
       AbilityMean = 0)
 
+    dat$dat <- bigIRT::dropPerfectScores(dat$dat)
+
     persondat <- dat$dat[!duplicated(id),]
     setnames(persondat,'Ability','1')
 
     fit <- fitIRT(dat$dat,cores=cores,pl=1,plot=F,verbose=1,priors=T,
-      itemPreds = c('V1','V2','V3'),
-      personDat = persondat,
+      BitemPreds = c('V1','V2','V3'),
+      # personPreds = c('V1','V2','V3'),
+      # personDat = persondat,
       betaScale = 10,
-      normalise = F,ebayes = T,ebayesmultiplier = 2,itemSpecificBetas = F)
+      normalise = F,ebayes = F,ebayesmultiplier = 2,itemSpecificBetas = F)
 
     # apply(fit$pars$invspAbeta,1,mean)
     # apply(fit$pars$Bbeta,2,mean)
     #
     # plot(fit$pars$Bbeta[,2])
     #
-    # plot(fit$pars$Ability,dat$Ability)
-    # plot(fit$pars$B,dat$B)
+    # plot(fit$pars$Ability,dat$dat[!duplicated(id),Ability])
+     plot(fit$pars$B,dat$B)
     # plot(fit$pars$A,dat$A)
     # abline(0,1)
 

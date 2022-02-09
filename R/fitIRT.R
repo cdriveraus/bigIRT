@@ -334,8 +334,10 @@ dropPerfectScores <- function(dat,scoreref.='score',itemref.='Item',idref.='id',
 #'   scale = 'Scale',item = 'Item', pl=2,dohess=TRUE)
 fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   personDat=NA, personPreds=character(),
-  itemDat=NA, itemPreds=character(),
-  statePreds=character(),
+  itemDat=NA,
+  AitemPreds=character(),
+  BitemPreds=character(),
+  CitemPreds=character(),
   itemSpecificBetas=FALSE,
   betaScale=10,
   invspAMeandat=.542,invspASD=.5,BMeandat=0,BSD=2, logitCMeandat=-4,logitCSD=2,
@@ -353,19 +355,21 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
 
   sdat <-list() #initialize standata object
 
+  itemPreds <- unique(c(AitemPreds,BitemPreds,CitemPreds))
+
   #setup unlikely names to use in data.table calls to avoid overlap from user defined names
   idref. <- id; scaleref. <- scale; itemref. <- item;
   scoreref. <- score;
   personPredsref. <- personPreds;
   itemPredsref. <- itemPreds
-  statePredsref. <- statePreds
+  # statePredsref. <- statePreds
 
   if(!'data.table' %in% class(dat)){  #drop unused columns from dat and set to data.table (copy if already data table)
     dat <- as.data.table(dat[,c((idref.),(scoreref.),(itemref.),(scaleref.),
-    itemPredsref.,personPredsref.,statePredsref.),with=FALSE])
+    itemPredsref.,personPredsref.),with=FALSE])
     } else {
       dat <- data.table::copy(dat[,c((idref.),(scoreref.),(itemref.),(scaleref.),
-        itemPredsref.,personPredsref.,statePredsref.),with=FALSE])
+        itemPredsref.,personPredsref.),with=FALSE])
     }
 
 
@@ -497,13 +501,12 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
       personPreds <- dat[,personPredsref.,with=FALSE]
     }
 
-    sdat$NstatePreds <- length(statePreds)
-    sdat$statePreds <- matrix(0, nrow(dat), sdat$NstatePreds)
-    if(sdat$NstatePreds > 0) sdat$statePreds <- as.matrix(dat[,statePredsref.,with=FALSE])
+    # sdat$NstatePreds <- length(statePreds)
+    # sdat$statePreds <- matrix(0, nrow(dat), sdat$NstatePreds)
+    # if(sdat$NstatePreds > 0) sdat$statePreds <- as.matrix(dat[,statePredsref.,with=FALSE])
 
     trainingLogical=array(rep(0L,nrow(dat)))
     trainingLogical[trainingRows] <- 1L
-
 
     sdat <- c(sdat,list(
       Nobs=nrow(dat),
@@ -542,7 +545,12 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
       scale=array(dat[[scaleref.]]),
       Adata=array(itemSetup$Adata),Bdata=array(itemSetup$Bdata),Cdata=array(itemSetup$Cdata),
       Abilitydata=matrix(unlist(AbilitySetup[,paste0(c(scaleIndex$original),'data'),with=FALSE]),Nsubs,Nscales),
-      NitemPreds=ncol(itemPreds), itemPreds=array(unlist(itemPreds),dim(itemPreds)),
+      NitemPreds=ncol(itemPreds),
+      NAitemPreds=length(AitemPreds), NBitemPreds=length(BitemPreds), NCitemPreds=length(CitemPreds),
+      AitemPreds=array(as.integer(which(colnames(itemPreds) %in% AitemPreds))),
+      BitemPreds=array(as.integer(which(colnames(itemPreds) %in% BitemPreds))),
+      CitemPreds=array(as.integer(which(colnames(itemPreds) %in% CitemPreds))),
+      itemPreds=array(unlist(itemPreds),dim(itemPreds)),
       NpersonPreds=ncol(personPreds), personPreds=(array(unlist(personPreds),dim(personPreds))),
       itemSpecificBetas=as.integer(itemSpecificBetas),
       betaScale=betaScale,
