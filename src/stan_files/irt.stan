@@ -269,11 +269,11 @@ if(Nscales > 1 && dopriors){
   }
 }
 if(dopriors){
-  for(i in 1:NitemPreds){
-    if(doApreds) invspAbeta[,i] ~ normal(0,betaScale);
-    if(doBpreds) Bbeta[,i] ~ normal(0,betaScale);
-    if(doCpreds) logitCbeta[,i] ~ normal(0,betaScale);
-  }
+
+    if(doApreds) for(i in 1:NAitemPreds) invspAbeta[,i] ~ normal(0,betaScale);
+    if(doBpreds) for(i in 1:NBitemPreds) Bbeta[,i] ~ normal(0,betaScale);
+    if(doCpreds) for(i in 1:NCitemPreds) logitCbeta[,i] ~ normal(0,betaScale);
+
   for(i in 1:Nscales){
     if(num_elements(Abilitybeta[i,])) Abilitybeta[i,] ~ normal(0,betaScale);
     //if(num_elements(statebeta[i,])) statebeta[i,] ~ normal(0,1);
@@ -284,8 +284,8 @@ if(dopriors){
 generated quantities{ //Section generates additional output that is not relevant for probability model
 vector[Nobs] pcorrect; //probability of a correct response for each observation
 matrix[Nsubs,Nscales] Ability; //ability matrix (potentially mix of free parameters and fixed values)
-vector[(Nitems-NfixedA) ? NitemPreds : 0] Abeta[ itemSpecificBetas ? (Nitems-NfixedA) : 1];//linearised regression weights for covariate effects on A params
-vector[(Nitems-NfixedC) ? NitemPreds : 0] Cbeta[ itemSpecificBetas ? (Nitems-NfixedC) : 1];//linearised regression weights for covariate effects on A params
+vector[(Nitems-NfixedA) ? NAitemPreds : 0] Abeta[ itemSpecificBetas ? (Nitems-NfixedA) : 1];//linearised regression weights for covariate effects on A params
+vector[(Nitems-NfixedC) ? NCitemPreds : 0] Cbeta[ itemSpecificBetas ? (Nitems-NfixedC) : 1];//linearised regression weights for covariate effects on A params
 vector[Nitems] A; // item A values
 vector[Nitems] B; //item B values
 vector[Nitems] C; //item C values
