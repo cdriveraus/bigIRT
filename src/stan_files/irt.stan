@@ -115,9 +115,9 @@ transformed data{ // Section contains calculations that only dependx on user inp
 int Ntrainingset = sum(trainingLogical[start:end]);
 int trainingset[Ntrainingset];
 int counter=0;
-int doApreds = (Nitems-NfixedA) ? (NitemPreds>0) : 0;
-int doBpreds = (Nitems-NfixedB) ? (NitemPreds>0) : 0;
-int doCpreds = (Nitems-NfixedC) ? (NitemPreds>0) : 0;
+int doApreds = (Nitems-NfixedA) ? (NAitemPreds>0) : 0;
+int doBpreds = (Nitems-NfixedB) ? (NBitemPreds>0) : 0;
+int doCpreds = (Nitems-NfixedC) ? (NCitemPreds>0) : 0;
 
 for(i in start:end){
   if(trainingLogical[i]==1){
