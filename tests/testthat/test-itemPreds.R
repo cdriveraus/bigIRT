@@ -75,10 +75,11 @@ cores=2
     setnames(persondat,'Ability','1')
 
     fit <- fitIRT(dat$dat,cores=cores,pl=2,plot=F,verbose=1,priors=T,
-      itemPreds = c('V1','V2','V3'),
+      AitemPreds = c('V1','V2','V3'),
+      BitemPreds = c('V1','V2','V3'),
       personDat = persondat,
       betaScale = 10,
-      normalise = F,ebayes = F,ebayesmultiplier = 2,itemSpecificBetas = F)
+      normalise = F,ebayes = T,ebayesmultiplier = 2,itemSpecificBetas = F)
 
 
     fit$pars$Bbeta
@@ -122,7 +123,7 @@ cores=2
       BMean=0,BSD = 1,
       itemPreds = itempreds,
       logitCitemPredEffects = predBeta,
-      # BitemPredEffects = predBeta,
+      BitemPredEffects = predBeta,
       # personPreds = matrix(rnorm(Np)), AbilityPredEffects = matrix(c(1,-0.5,.5),6,1),
       AbilityMean = 0)
 
@@ -130,7 +131,8 @@ cores=2
     setnames(persondat,'Ability','1')
 
     fit <- fitIRT(dat$dat,cores=cores,pl=3,plot=F,verbose=1,priors=T,
-      itemPreds = c('V1','V2','V3'),
+      CitemPreds = c('V1','V2','V3'),
+      BitemPreds = c('V1','V2','V3'),
       personDat = persondat,
       betaScale = 10,
       normalise = F,ebayes = F,ebayesmultiplier = 2,itemSpecificBetas = F)
@@ -157,7 +159,7 @@ cores=2
       tol=.05)
 
     testthat::expect_equivalent(
-      c(fit$pars$invspAbeta),
+      c(fit$pars$logitCbeta),
       c(predBeta),
       tol=.1)
   })

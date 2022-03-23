@@ -21,7 +21,10 @@ cores=2
       personPreds = personpreds, AbilityPredEffects = t(predBeta),
       AbilityMean = 0)
 
-    dat$dat <- bigIRT:::dropPerfectScores(data.table(dat$dat))
+    dat$dat <- bigIRT:::dropPerfectScores(data.table(dat$dat),tol.=.1)
+
+    dat$dat[,percent:=mean(score),by=id]
+    range(dat$dat$percent)
 
     itemdat <- dat$dat[!duplicated(Item),]
 

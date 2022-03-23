@@ -39,44 +39,56 @@ if(identical(Sys.getenv("NOT_CRAN"), "true")& .Machine$sizeof.pointer != 4){
     if(FALSE){ #WLE comparison
       require(bigIRT)
       of <- NULL
-      for(m in c(2,2.75,4)){
+      for(m in c(2.75)){
         for(Nitems in c(5,10,20,40)){
-          for(i in 1:10){
+          for(truePL in c(1,2,3)){
+            for(fitPL in c(1,2,3)){
+              for(knownItems in c(TRUE,FALSE)){
+                for(i in 1:2){
 
-            Np=5000
-            dat <- bigIRT:::IRTsim(Nsubs = Np,Nitems = Nitems,Nscales = 1,
-              logitCMean = -20,logitCSD = .0,AMean = 1,ASD = .0,
-              BMean=0,BSD = 1,
-              AbilitySD = 1,
-              # personPreds = matrix(rnorm(Np)), AbilityPredEffects = matrix(c(1,-0.5,.5),6,1),
-              AbilityMean = 0)
+                  if(truePL==3) logitCMean = -2
 
-            # dat$dat <- dropPerfectScores(dat$dat)
+                  Np=50
+                  dat <- bigIRT:::IRTsim(Nsubs = Np,Nitems = Nitems,Nscales = 1,
+                    logitCMean = ifelse(truePL > 2,-2,-20),logitCSD = .5,AMean = 1,ASD = ifelse(truePL > 1,.2,0),
+                    BMean=0,BSD = 1,
+                    AbilitySD = 1,
+                    # personPreds = matrix(rnorm(Np)), AbilityPredEffects = matrix(c(1,-0.5,.5),6,1),
+                    AbilityMean = 0)
 
-            persondat = dat$dat[unique(id) & Item %in% '1',]
-            itemdat=dat$dat[unique(Item) & id %in% '1',]
+                  # dat$dat <- dropPerfectScores(dat$dat)
 
-            fit <- fitIRT(dat$dat,cores=1,pl=1,plot=F,verbose=0,priors=T,
-              itemDat = itemdat,dropPerfectScores = FALSE,AbilitySD = m,
-              normalise = F,ebayes = F)
+                  persondat = dat$dat[unique(id) & Item %in% '1',]
+                  itemdat=dat$dat[unique(Item) & id %in% '1',]
 
-            wdat <- data.frame(dcast(data.table(dat$dat),formula = 'id ~ Item',value.var='score'))
+                  if(knownItems) itemdat<-itemdat[0:0,]
+
+                  fit <- fitIRT(dat$dat,cores=1,pl=fitPL,plot=F,verbose=0,priors=T,
+                    itemDat = itemdat,dropPerfectScores = FALSE,AbilitySD = m,
+                    normalise = F,ebayes = F)
+
+                  wdat <- data.frame(dcast(data.table(dat$dat),formula = 'id ~ Item',value.var='score'))
 
 
-            require(TAM)
-            pl=1
-            if(pl==3) ttam <- system.time(tfit <-tam.mml.3pl(resp = wdat,est.guess = 1:ncol(wdat),
-              guess=rep(.1,ncol(wdat),control=list(msteps=20,fac.oldxsi=.6,increment.factor=1.6))))#, acceleration="Ramsay")))
-            if(pl==2) ttam <- system.time(tfit <-tam.mml.2pl(resp = wdat,est.variance = TRUE))
-            if(pl==1) tfit <-tam.mml(resp = wdat[,-1],pid = wdat$id,B.fixed = cbind(itemdat$id,1,1,itemdat$B))
+                  require(TAM)
+                  if(knownItems) B.fixed <- cbind(itemdat$id,1,1,itemdat$B) else B.fixed <- matrix(NA,ncol=4,nrow=1)
+                  pl=fitPL
+                  if(pl==3) ttam <- system.time(tfit <-tam.mml.3pl(resp = wdat,est.guess = 1:ncol(wdat),
+                    guess=rep(.1,ncol(wdat),control=list(msteps=20,fac.oldxsi=.6,increment.factor=1.6))))#, acceleration="Ramsay")))
+                  if(pl==2) ttam <- system.time(tfit <-tam.mml.2pl(resp = wdat,est.variance = TRUE))
+                  if(pl==1) tfit <-tam.mml(resp = wdat[,-1],pid = wdat$id,B.fixed = B.fixed)
 
-            tamAbility <- IRT.factor.scores(tfit,type = 'WLE')
+                  tamAbility <- IRT.factor.scores(tfit,type = 'WLE')
 
-            o <- data.frame(ebayesmulti=m,Nitems=Nitems,
-              MAPbigIRT=fit$personPars$X1,WLETAM = tamAbility$theta,Ability=persondat$Ability)
-            # rmseBIRT=sqrt(sum((persondat$Ability-fit$personPars$X1)^2)),
-            # rmseTAM=sqrt(sum((persondat$Ability-tamAbility$theta)^2)),
-            if(is.null(of)) of = o else of <- rbind(of,o)
+                  o <- data.frame(ebayesmulti=m,Nitems=Nitems,
+                    truePL=truePL,fitPL=fitPL,knownItems=knownItems,
+                    MAPbigIRT=fit$personPars$X1,WLETAM = tamAbility$theta,Ability=persondat$Ability)
+                  # rmseBIRT=sqrt(sum((persondat$Ability-fit$personPars$X1)^2)),
+                  # rmseTAM=sqrt(sum((persondat$Ability-tamAbility$theta)^2)),
+                  if(is.null(of)) of = o else of <- rbind(of,o)
+                }
+              }
+            }
           }
         }
       }
