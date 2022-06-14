@@ -253,24 +253,25 @@ afunci <- function(x) log(exp(x)-1)
 
 dropPerfectScores <- function(dat,scoreref.='score',itemref.='Item',idref.='id',tol.=.001){
   if(!'data.table' %in% class(dat)) stop('Not a data.table!')
-  dat[,.originalRow:=1:.N]
+  dt <- copy(dat)
+  dt[,.originalRow:=1:.N]
   dropping <- TRUE
   while(dropping){
     dropping <- FALSE
-    dat[,itemMean:=mean(get(scoreref.)),by=itemref.]
-    if(any((abs(dat$itemMean-.5)+tol.)>= .5)){
+    dt[,itemMean:=mean(get(scoreref.)),by=itemref.]
+    if(any((abs(dt$itemMean-.5)+tol.)>= .5)){
       dropping <- TRUE
       warning('Dropping items with all 0 or 1',immediate. = TRUE)
-      dat <- dat[(abs(itemMean-.5)+tol.)< .5,]
+      dt <- dt[(abs(itemMean-.5)+tol.)< .5,]
     }
-    dat[,personMean:= mean(get(scoreref.)),by=idref.]
-      if(any((abs(dat$personMean-.5)+tol.)>= .5)){
+    dt[,personMean:= mean(get(scoreref.)),by=idref.]
+      if(any((abs(dt$personMean-.5)+tol.)>= .5)){
       warning('Dropping subjects with all 0 or 1',immediate. = TRUE)
       dropping <- TRUE
-      dat <-dat[(abs(personMean-.5)+tol.)< .5,]
+      dt <-dt[(abs(personMean-.5)+tol.)< .5,]
     }
   }
-  return(dat)
+  return(dat[dt$originalRow,])
 }
 
 

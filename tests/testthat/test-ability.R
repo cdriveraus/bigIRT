@@ -36,98 +36,170 @@ if(identical(Sys.getenv("NOT_CRAN"), "true")& .Machine$sizeof.pointer != 4){
     #   cor(dat$Ability),
     #   tol=1e-1)
 
+
+
+
     if(FALSE){ #WLE comparison
+
+
+# sim ---------------------------------------------------------------------
+
+
+      library(future)
+      plan(strategy='multisession',workers=20)
+      # library(bigIRT)
+      require(mirt)
+      require(TAM)
       require(bigIRT)
-      of <- NULL
-      for(m in c(2.75)){
-        for(Nitems in c(5,10,20,40)){
-          for(truePL in c(1,2,3)){
-            for(fitPL in c(1,2,3)){
-              for(knownItems in c(TRUE,FALSE)){
-                for(i in 1:2){
-
-                  if(truePL==3) logitCMean = -2
-
-                  Np=50
-                  dat <- bigIRT:::IRTsim(Nsubs = Np,Nitems = Nitems,Nscales = 1,
-                    logitCMean = ifelse(truePL > 2,-2,-20),logitCSD = .5,AMean = 1,ASD = ifelse(truePL > 1,.2,0),
-                    BMean=0,BSD = 1,
-                    AbilitySD = 1,
-                    # personPreds = matrix(rnorm(Np)), AbilityPredEffects = matrix(c(1,-0.5,.5),6,1),
-                    AbilityMean = 0)
-
-                  # dat$dat <- dropPerfectScores(dat$dat)
-
-                  persondat = dat$dat[unique(id) & Item %in% '1',]
-                  itemdat=dat$dat[unique(Item) & id %in% '1',]
-
-                  if(knownItems) itemdat<-itemdat[0:0,]
-
-                  fit <- fitIRT(dat$dat,cores=1,pl=fitPL,plot=F,verbose=0,priors=T,
-                    itemDat = itemdat,dropPerfectScores = FALSE,AbilitySD = m,
-                    normalise = F,ebayes = F)
-
-                  wdat <- data.frame(dcast(data.table(dat$dat),formula = 'id ~ Item',value.var='score'))
+      doTAM <- FALSE
 
 
-                  require(TAM)
-                  if(knownItems) B.fixed <- cbind(itemdat$id,1,1,itemdat$B) else B.fixed <- matrix(NA,ncol=4,nrow=1)
-                  pl=fitPL
-                  if(pl==3) ttam <- system.time(tfit <-tam.mml.3pl(resp = wdat,est.guess = 1:ncol(wdat),
-                    guess=rep(.1,ncol(wdat),control=list(msteps=20,fac.oldxsi=.6,increment.factor=1.6))))#, acceleration="Ramsay")))
-                  if(pl==2) ttam <- system.time(tfit <-tam.mml.2pl(resp = wdat,est.variance = TRUE))
-                  if(pl==1) tfit <-tam.mml(resp = wdat[,-1],pid = wdat$id,B.fixed = B.fixed)
+      simFunc <- function(Nitems, truePL,fitpl,knownItems,priorMultiply){
+        # require(bigIRT)
+        if(truePL==3) logitCMean = -2
 
-                  tamAbility <- IRT.factor.scores(tfit,type = 'WLE')
+        Np=500
+        dat <- bigIRT:::IRTsim(Nsubs = Np,Nitems = Nitems,Nscales = 1,
+          logitCMean = ifelse(truePL > 2,-2,-20),logitCSD = .5,
+          AMean = 1,ASD = ifelse(truePL > 1,.2,0),
+          BMean=0,BSD = 1,
+          AbilitySD = 1,
+          # personPreds = matrix(rnorm(Np)), AbilityPredEffects = matrix(c(1,-0.5,.5),6,1),
+          AbilityMean = 0)
 
-                  o <- data.frame(ebayesmulti=m,Nitems=Nitems,
-                    truePL=truePL,fitPL=fitPL,knownItems=knownItems,
-                    MAPbigIRT=fit$personPars$X1,WLETAM = tamAbility$theta,Ability=persondat$Ability)
-                  # rmseBIRT=sqrt(sum((persondat$Ability-fit$personPars$X1)^2)),
-                  # rmseTAM=sqrt(sum((persondat$Ability-tamAbility$theta)^2)),
-                  if(is.null(of)) of = o else of <- rbind(of,o)
-                }
-              }
-            }
+        # dat$dat <- dropPerfectScores(dat$dat)
+# print(dat)
+        persondat = dat$dat[!duplicated(id) & Item %in% '1',]
+        itemdat=dat$dat[!duplicated(Item) & id %in% '1',]
+
+        if(!knownItems) itemdat<-itemdat[0:0,]
+
+        fit <- fitIRT(dat$dat,cores=1,pl=fitpl,plot=F,verbose=0,priors=T,estMeans = T,
+          itemDat = itemdat,dropPerfectScores = FALSE,AbilitySD = priorMultiply,
+          normalise = F,ebayes = F)
+
+        # fitml <- fitIRT(dat$dat,cores=1,pl=fitpl,plot=F,verbose=0,priors=F,estMeans=T,
+        #   itemDat = fit$itemPars,dropPerfectScores = FALSE,AbilitySD = priorMultiply,
+        #   normalise = F,ebayes = F)
+
+        wdat <- data.frame(dcast(data.table(dat$dat),formula = 'id ~ Item',value.var='score'))
+
+
+        if(doTAM){
+          if(knownItems) B.fixed <- cbind(itemdat$id,1,1,itemdat$B) else B.fixed <- matrix(NA,ncol=4,nrow=1)
+
+          if(fitpl==3) tfit <-tam.mml.3pl(resp = wdat,est.guess = 1:ncol(wdat),
+            guess=rep(.1,ncol(wdat),control=list(msteps=20,fac.oldxsi=.6,increment.factor=1.6)))
+          if(fitpl==2) tfit <-tam.mml.2pl(resp = wdat,B.fixed = B.fixed)
+          if(fitpl==1) tfit <-tam.mml(resp = wdat[,-1],pid = wdat$id,B.fixed = B.fixed)
+
+          wleAbility <- IRT.factor.scores(tfit,type = 'WLE')$theta
+        } else { #do MIRT
+
+          mitemdat <- data.table(mirt(data = wdat[,-1],itemtype = switch(fitpl,'Rasch','2PL','3PL'),pars='values'))
+          if(knownItems){
+            mitemdat[name %in% 'a1',c('value','est'):=list(itemdat$A,FALSE)]
+            mitemdat[name %in% 'd',c('value','est'):=list(-itemdat$B*itemdat$A,FALSE)]
+            mitemdat[name %in% 'g',c('value','est'):=list(itemdat$C,FALSE)]
           }
-        }
+          mfit <- mirt(data = wdat[,-1],itemtype = switch(fitpl,'Rasch','2PL','3PL'),pars=mitemdat)
+          wleAbility <- c(fscores(object = mfit,method = 'WLE'))
+        } #end MIRT / TAM
+
+
+        o <- data.frame(ebayesmulti=priorMultiply,Nitems=Nitems,
+          truePL=truePL,fitPL=fitpl,knownItems=knownItems,
+          # ML = fitml$personPars$X1,
+          MAPbigIRT=fit$personPars$X1,WLE = wleAbility,
+          Ability=persondat$Ability)
+        return(o)
       }
 
 
 
+      of <- list()
+      for(i in 1:40){
+        of[[i]] <- future({
+          oi <- NULL
+          for(priorMultiply in c(2.75)){ #2.75
+            for(Nitems in c(50,20)){
+              for(truePL in c(3,2,1)){
+                for(fitpl in c(3,2,1)){
+                  for(knownItems in c(TRUE,FALSE)){
+                    o <- try(simFunc(Nitems = Nitems,truePL = truePL,fitpl = fitpl,knownItems = knownItems,priorMultiply=priorMultiply))
+                    if(!'try-error' %in% class(o)){
+                      if(is.null(oi)) oi <- o else oi <- rbind(oi,o)
+                    } else print(o)
+                  }
+                }
+              }
+            }
+          }
+          return(oi)
+        }) #end future
+      }
+
+
+
+
+
+# sim plots ---------------------------------------------------------------
+
+
+      of <- value(of)
+      of <- rbindlist(of)
+
       require(ggplot2)
-      ofb=of
-      of=data.table(of)
-      of[,MAPbigIRT:=MAPbigIRT-Ability]
-      of[,WLETAM:=WLETAM-Ability]
-      of <- melt(data.table(of),id.vars = c('ebayesmulti','Nitems','Ability'))
+      require(ggpointdensity)
+      ofb=copy(of)
+      # of[,MAPbigIRT:=MAPbigIRT-Ability]
+      # of[,WLETAM:=WLETAM-Ability]
+      of <- melt(data.table(of),id.vars = c('ebayesmulti','Nitems','truePL','fitPL','knownItems','Ability'))
       of$Estimator=factor(of$variable)
       # of[variable %in% 'MAPbigIRT',Estimator:=paste0('MAPbigIRT_',ebayesmulti)]
       # of$variable <- factor(of$variable)
-      of$Bias <- of$value
+      # of$Bias <- of$value
       of$Nitems <- factor(of$Nitems)
+      of$estAbility <- of$value
+      of$residualAbility <- of$value-of$Ability
       of$PriorWeight = paste0('Prior weight = ',1/of$ebayesmulti)
+      of$knownItems <- ifelse(of$knownItems,'knownItems','unknownItems')
+      of[Estimator %in% 'MAPbigIRT',Estimator:= paste0(Estimator,'_',ebayesmulti)]
 
-      of[,rmse:=sqrt(mean(Bias^2)),by=interaction(Nitems,ebayesmulti, Estimator)]
+      # of[,rmse:=sqrt(mean(residualAbility^2)),by=interaction(Nitems,ebayesmulti, Estimator)]
 
-      ggplot(of[!duplicated(rmse),],aes(y=rmse,x=Nitems,colour=Estimator,group=Estimator))+geom_line()+
-        geom_point()+facet_wrap(vars(PriorWeight))+theme_bw()
-
-
-      ggplot(data = of,
-        mapping = aes(x=Ability, y=Bias,colour=Estimator,linetype=Nitems))+
-        geom_smooth(data=of[Estimator %in% 'WLETAM',-c('PriorWeight'),with=F],
-          method = 'gam',formula=y~s(x,k=6,bs='cs'),se = FALSE)+
-        geom_smooth(data=of[!Estimator %in% 'WLETAM',],
-          method = 'gam',formula=y~s(x,k=6,bs='cs'),se = FALSE)+
-        theme_bw()+facet_wrap(vars(PriorWeight))+
-        ggtitle('bigIRT w different prior weights vs WLE') +
-        coord_cartesian(xlim=c(-2,2),ylim=c(-.5,.5))
+      ggplot(of,aes(y=abs(residualAbility),x=Nitems,colour=Estimator,group=Estimator,linetype=factor(fitPL)))+
+        stat_summary(fun=mean,geom='line',size=1)+
+        stat_summary(fun.data=mean_sdl, geom="ribbon", alpha=0.1)+
+        geom_point(alpha=.1,position=position_jitter(width = 0.1))+
+        facet_wrap(vars(knownItems))+
+        theme_bw()
 
 
 
-    })
+      for(truePLi in 1:3){
+        print(ggplot(of[!Estimator %in% 'ML' & truePL %in% truePLi,],
+          aes(y=abs(residualAbility),x=Ability,linetype=Estimator,colour=factor(fitPL)))+
+            geom_smooth(se=F)+
+            facet_wrap(vars(interaction(Nitems,knownItems)))+
+            theme_bw()+ggtitle(paste0('True PL = ',truePLi)))
+      }
+
+      for(truePLi in 1:3){
+      print(ggplot(of[!Estimator %in% 'ML' & truePL %in% truePLi,],
+        aes(y=residualAbility,x=Ability,linetype=Estimator,colour=factor(fitPL)))+
+        # geom_pointdensity(alpha=.1)+
+        geom_smooth(se=F)+
+        geom_hline(yintercept = 0)+
+        facet_wrap(vars(interaction(Nitems,knownItems)))+
+        theme_bw()+ggtitle(paste0('True PL = ',truePLi)))
+      }
 
 
-  }
+
+    } #end sim
+  })
+
+
+}
 

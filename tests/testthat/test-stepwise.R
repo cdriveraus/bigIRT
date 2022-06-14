@@ -27,18 +27,6 @@ dat$id <- paste0('id',dat$id)
 dat <- bigIRT:::dropPerfectScores(dat,scoreref. = 'score',itemref. = 'Item',idref. = 'id')
 
 
-plot(dat$B[!duplicated(dat$Item)])
-
-wdat <- data.frame(dcast(data.table(dat),formula = 'id + persongrade~ Item',value.var='score'))
-pl=1
-#
-require(TAM)
-# if(pl==3) ttam <- system.time(tfit <-tam.mml.3pl(resp = wdat,est.guess = 1:ncol(wdat),
-#   guess=rep(.1,ncol(wdat),control=list(msteps=20,fac.oldxsi=.6,increment.factor=1.6))))#, acceleration="Ramsay")))
-if(pl==2) ttam <- system.time(tfit <-tam.mml.2pl(resp = wdat[,-1:-2],group=wdat$persongrade,est.variance = TRUE))
-if(pl==1) ttam <- system.time(tfit <-tam.mml(resp = wdat[,-1:-2],group=wdat$persongrade,est.variance = TRUE))
-tamAbility <- IRT.factor.scores(tfit,type = 'WLE')
-#
 
 
 # empirical bayes estimates for regularized final pass
