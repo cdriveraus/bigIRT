@@ -292,7 +292,7 @@ fitIRTstepwise <- function(dat,itemsteps,item='Item',id='id',normalise=FALSE,eba
     }
     smalldat <- dat[include,] #step specific data set
 
-    fit <- fitIRT(dat = smalldat,itemDat=itemDat,normalise=normalise,ebayes=ebayes)#,...)
+    fit <- fitIRT(dat = smalldat,itemDat=itemDat,normalise=normalise,ebayes=ebayes,item=item,id=id)#,...)
     itemDat <- data.table(fit$itemPars)
 
     if(firststep){
