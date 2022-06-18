@@ -153,12 +153,12 @@ optimIRT <- function(standata, cores=6, split=TRUE,
     splitby='rowIndex'
 
     stanindices <- split(unique(standata[[splitby]]),sort(unique(standata[[splitby]]) %% (cores)))
-    if(!split) stanindices <- parallel::clusterCall(clms,function(x) unique(standata[[splitby]]))
-    if(!split && length(stanindices) < cores){
-      for(i in (length(stanindices)+1):cores){
-        stanindices[[i]] <- NA
-      }
-    }
+    # if(!split) stanindices <- parallel::clusterCall(clms,function(x) unique(standata[[splitby]]))
+    # if(!split && length(stanindices) < cores){
+    #   for(i in (length(stanindices)+1):cores){
+    #     stanindices[[i]] <- NA
+    #   }
+    # }
 
 
     parcommands <- list(

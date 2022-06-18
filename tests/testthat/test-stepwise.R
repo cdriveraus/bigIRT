@@ -1,7 +1,7 @@
 if(F){
 #categorical covariate test
 
-  require(data.table)
+require(data.table)
 #Generate some data
 Nitems=200
 Nsubs=2000
@@ -16,7 +16,7 @@ dat <- bigIRT:::IRTsim(Nsubs = Nsubs,Nitems = Nitems,Nscales = 1,
   AbilityMean = 0,AbilitySD = 1)
 
 dat=dat$dat
-dat <- dat[sample(x = 1:nrow(dat),size=ceiling(nrow(dat))),] #shuffle / select
+dat <- dat[sample(x = 1:nrow(dat),size=nrow(dat)/10),] #shuffle / select
 dat$Item <- paste0('i',dat$Item)
 dat$Scale <- paste0('s',dat$Scale)
 dat$id <- paste0('id',dat$id)
@@ -26,53 +26,38 @@ dat$id <- paste0('id',dat$id)
 # drop problem people and items
 dat <- bigIRT:::dropPerfectScores(dat,scoreref. = 'score',itemref. = 'Item',idref. = 'id')
 
+itemsteps <- lapply(unique(dat$itemgrade),function(i) unique(dat[itemgrade %in%i,Item]))
+
+fit <- fitIRTstepwise(dat,itemsteps = itemsteps,cores=6,normalise=F,ebayes=F,plot=F,verbose=1,priors=T)
+
+fitn <- fitIRT(dat[id%in% fitn$personPars$id,],cores=1,normalise=F,ebayes=F, priors=T)
+fit2 <- fitIRT(dat[id%in% fitn$personPars$id,],itemDat = fit$itemPars,cores=1,normalise=F,ebayes=F, priors=T)
+#
+# fitn$personPars <- fitn$personPars[order(fitn$personPars$id),]
+# fitn$itemPars<- fitn$itemPars[order(fitn$itemPars$Item),]
+
+p=bigIRT::normaliseIRT(B = fit$itemPars$B,Ability = fit$personPars$s1,A = fit$itemPars$A)
+p2=bigIRT::normaliseIRT(B = fit2$itemPars$B,Ability = fit2$personPars$s1,A = fit2$itemPars$A)
+pn=bigIRT::normaliseIRT(B = fitn$itemPars$B,Ability = fitn$personPars$s1,A = fitn$itemPars$A)
+pdat=bigIRT::normaliseIRT(B = dat[!duplicated(Item),][order(Item),][Item %in% fit$itemPars$Item,B],
+  Ability = dat[!duplicated(id),][order(id),][id %in% fit$personPars$id,Ability],
+  A = dat[!duplicated(Item),][order(Item),][Item %in% fit$itemPars$Item,A])
 
 
+plot(p$Ability,pdat$Ability)
+points(pn$Ability,pdat$Ability,col=2)
+points(p2$Ability,pdat$Ability,col=3)
 
-# empirical bayes estimates for regularized final pass
-fit <- fitIRT(dat,cores=6,normalise=T,ebayes=T,
-  # itemPreds = 'betamean',
-  pl=pl,plot=F,verbose=1,priors=T)
+sqrt(mean((p$Ability-pdat$Ability)^2))
+sqrt(mean((p2$Ability-pdat$Ability)^2))
+sqrt(mean((pn$Ability-pdat$Ability)^2))
 
-fiti <- fitIRT(dat,cores=6,ebayesmultiplier = 2,ebayes = T,normalise=T,
-  # item = 'item2',score = 'score',id = 'id',scale = 'scale2',
-  # itemDat = fiti$itemPars[1:2,],personDat = fiti$personPars[1:4,],
-  itemPreds = 'itemgrade',
-  personPreds = 'persongrade',
-  pl=pl,plot=F,verbose=1,priors=T)
 
-fiti$pars$Abilitybeta
-fiti$pars$Bbeta
+plot(p$B,pdat$B)
+points(pn$B,pdat$B,col=2)
+points(p2$B,pdat$B,col=3)
 
-par(mfrow=c(1,1))
-trueitem <- dat[!duplicated(dat$Item),]
-trueitem <- trueitem[Item %in% fit$itemPars$Item]
-trueitem <- trueitem[order(as.character(trueitem$Item)),]
-plot(trueitem$B,fiti$itemPars$B[order(as.character(fiti$itemPars$Item))])
-points(trueitem$B,tfit$item_irt$beta[order(as.character(fit$itemPars$Item))],col='red')
-abline(0,1)
-points(trueitem$B,fit$itemPars$B[order(as.character(fit$itemPars$Item))],col=3)
-points(trueitem$B,tfit$item_irt$beta[order(as.character(fit$itemPars$Item))],col='red')
-abline(0,1)
-plot(fit$itemPars$B[order(as.character(fit$itemPars$Item))],fiti$itemPars$B[order(as.character(fiti$itemPars$Item))])
-abline(0,1)
-
-plot(trueitem$A,fit$itemPars$A[order(as.character(fit$itemPars$Item))])
-points(trueitem$A,tfit$item_irt$alpha[order(as.character(fit$itemPars$Item))],col='red')
-abline(0,1)
-plot(trueitem$A,fiti$itemPars$A[order(as.character(fiti$itemPars$Item))])
-points(trueitem$A,tfit$item_irt$alpha[order(as.character(fit$itemPars$Item))],col='red')
-abline(0,1)
-
-trueperson <- dat[!duplicated(dat$id),]
-trueperson <- trueperson[order(as.character(trueperson$id)),]
-plot(trueperson$Ability,fiti$personPars$s1[order(as.character(fiti$personPars$id))],col=rgb(1,0,0,.2),pch=16)
-points(trueperson$Ability,fit$personPars$s1[order(as.character(fit$personPars$id))],col=rgb(0,1,0,.2),pch=16)
-points(trueperson$Ability,tamAbility$theta[order(as.character(wdat$id))],col=rgb(0,0,1,.2),pch=16)
-abline(0,1)
-cor(fiti$pars$Ability,unique(dat$Ability))
-cor(fit$pars$Ability,unique(dat$Ability))
-cor(tamAbility$theta,unique(dat$Ability))
-# plot(fit$personPars$X1[order(as.character(fit$personPars$id))],fiti$personPars$X1[order(as.character(fiti$personPars$id))])
-# abline(0,1)
+sqrt(mean((p$B-pdat$B)^2))
+sqrt(mean((p2$B-pdat$B)^2))
+sqrt(mean((pn$B-pdat$B)^2))
 }
