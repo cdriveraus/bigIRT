@@ -291,7 +291,6 @@ fitIRTstepwise <- function(dat,itemsteps,item='Item',id='id',normalise=FALSE,eba
         which(dat[[.itemref]] %in% itemsteps[[stepseq[stepi-1]]] & dat[[.idref]] %in% stepids)))
     }
     smalldat <- dat[include,] #step specific data set
-    if(any(smalldat$id %in% missid)) print(stepseq[stepi])
 
     fit <- fitIRT(dat = smalldat,itemDat=itemDat,normalise=normalise,ebayes=ebayes)#,...)
     itemDat <- data.table(fit$itemPars)
@@ -305,10 +304,10 @@ fitIRTstepwise <- function(dat,itemsteps,item='Item',id='id',normalise=FALSE,eba
       personout <- rbind(personout, data.table(fit$personPars)[!get(.idref) %in% personout[[.idref]],]) #update item output with newest estimates
     }
 
-    plot(itemout[order(as.character(get(.itemref))),B],dat[!duplicated(Item) & get(.itemref) %in% itemout[[.itemref]],][order(get(.itemref)),B])
-    rmse <- sqrt(mean((itemout[order(as.character(get(.itemref))),B]-dat[!duplicated(get(.itemref)) & Item %in% itemout[[.itemref]],][order(get(.itemref)),B])^2))
-    message(paste('corr =',cor(cbind(itemout[order(as.character(get(.itemref))),B],dat[!duplicated(get(.itemref)) & get(.itemref) %in% itemout[[.itemref]],][order(get(.itemref)),B]))[2,1]))
-    message(paste('RMSE =',round(rmse,3)))
+    # plot(itemout[order(as.character(get(.itemref))),B],dat[!duplicated(Item) & get(.itemref) %in% itemout[[.itemref]],][order(get(.itemref)),B])
+    # rmse <- sqrt(mean((itemout[order(as.character(get(.itemref))),B]-dat[!duplicated(get(.itemref)) & Item %in% itemout[[.itemref]],][order(get(.itemref)),B])^2))
+    # message(paste('corr =',cor(cbind(itemout[order(as.character(get(.itemref))),B],dat[!duplicated(get(.itemref)) & get(.itemref) %in% itemout[[.itemref]],][order(get(.itemref)),B]))[2,1]))
+    # message(paste('RMSE =',round(rmse,3)))
 
     firststep <- FALSE
   }
