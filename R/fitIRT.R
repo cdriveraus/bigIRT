@@ -29,9 +29,9 @@ birtRunGeneratedQuantities<- function(fit){
     C[fixedC] = Cdata[fixedC];
 
     #put the free parameters into the item parameter objects
-    A[notfixedA] = invspApars;
-    B[notfixedB] = Bpars;
-    C[notfixedC] = logitCpars;
+    A[whichnotfixedA] = invspApars;
+    B[whichnotfixedB] = Bpars;
+    C[whichnotfixedC] = logitCpars;
 
 
     # for(i in 1:Nsubs){ #for every subject
@@ -71,7 +71,7 @@ birtRunGeneratedQuantities<- function(fit){
         A[i] =A[i]+ matrix(predsmean,1) %*% t(invspAbeta[ifelse(itemSpecificBetas==1,freeAref[item[i]],1),,drop=FALSE]); #when there are person predictors, apply the effect
         A[i]=log1p_exp(A[i]);
       }
-      if(fixedBlog[i]==0){ #if free B par and item predictors, compute average item effect
+      if(fixedB[i]==0){ #if free B par and item predictors, compute average item effect
         B[i] = B[i] + matrix(predsmean,1) %*% t(Bbeta[ifelse(itemSpecificBetas==1, freeBref[item[i]], 1),,drop=F]); #when there are person predictors, apply the effect
       }
     }
@@ -244,8 +244,8 @@ if(FALSE){
 }
 
 
-cfunc <- function(x) exp(-exp(-x))
-cfunci <- function(x) -log(-log(x))
+inv_logit <- function(x) exp(x)/(1+exp(x))
+logit <- function(x)  log(x)-log((1-x))
 
 afunc <- function(x) log1p(exp(x))
 afunci <- function(x) log(exp(x)-1)
@@ -292,7 +292,7 @@ fitIRTstepwise <- function(dat,itemsteps,item='Item',id='id',normalise=FALSE,eba
     }
     smalldat <- dat[include,] #step specific data set
 
-    fit <- fitIRT(dat = smalldat,itemDat=itemDat,normalise=normalise,ebayes=ebayes,item=item,id=id)#,...)
+    fit <- fitIRT(dat = smalldat,itemDat=itemDat,normalise=normalise,ebayes=ebayes,item=item,id=id,...)
     itemDat <- data.table(fit$itemPars)
 
     if(firststep){
@@ -363,11 +363,14 @@ fitIRTstepwise <- function(dat,itemsteps,item='Item',id='id',normalise=FALSE,eba
 #' @param BSD
 #' @param logitCMeandat
 #' @param logitCSD
+#' @param logitDMeandat
+#' @param logitDSD
 #' @param AbilityMeandat
 #' @param AbilitySD
 #' @param AMeanSD
 #' @param BMeanSD
 #' @param logitCMeanSD
+#' @param logitDMeanSD
 #' @param AbilityMeanSD
 #' @param iter
 #' @param cores
@@ -409,13 +412,15 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   AitemPreds=character(),
   BitemPreds=character(),
   CitemPreds=character(),
+  DitemPreds=character(),
   itemSpecificBetas=FALSE,
   betaScale=10,
   invspAMeandat=.542,invspASD=.5,BMeandat=0,BSD=2, logitCMeandat=-4,logitCSD=2,
+  logitDMeandat=-4,logitDSD=2,
   AbilityMeandat=array(0,dim=c(length(unique(dat[[scale]])))),
   AbilitySD=array(10,dim=c(length(unique(dat[[scale]])))),
   AbilityCorr=diag(1,c(length(unique(dat[[scale]])))),
-  AMeanSD=1,BMeanSD=BSD,logitCMeanSD=logitCSD,
+  AMeanSD=1,BMeanSD=BSD,logitCMeanSD=logitCSD,logitDMeanSD=logitDSD,
   AbilityMeanSD=array(1,dim=c(length(unique(dat[[scale]])))),
   iter=2000,cores=6,carefulfit=FALSE,
   ebayes=TRUE,ebayesmultiplier=2,ebayesFromFixed=FALSE,ebayesiter=1,
@@ -426,7 +431,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
 
   sdat <-list() #initialize standata object
 
-  itemPreds <- unique(c(AitemPreds,BitemPreds,CitemPreds))
+  itemPreds <- unique(c(AitemPreds,BitemPreds,CitemPreds,DitemPreds))
 
   #setup unlikely names to use in data.table calls to avoid overlap from user defined names
   idref. <- id; scaleref. <- scale; itemref. <- item;
@@ -496,8 +501,11 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     sdat$BMeandat <- mean(itemDat$B,na.rm=TRUE)
     sdat$BSD <- sd(itemDat$B,na.rm=TRUE)*ebayesmultiplier+1e-5
 
-    sdat$logitCMeandat <- mean(cfunci(itemDat$C+1e-8),na.rm=TRUE)
-    sdat$logitCSD <- sd(cfunci(itemDat$C+1e-8),na.rm=TRUE)*ebayesmultiplier+1e-5
+    sdat$logitCMeandat <- mean(logit(itemDat$C+1e-8),na.rm=TRUE)
+    sdat$logitCSD <- sd(logit(itemDat$C+1e-8),na.rm=TRUE)*ebayesmultiplier+1e-5
+
+    sdat$logitDMeandat <- mean(dfunci(itemDat$D+1e-8),na.rm=TRUE)
+    sdat$logitDSD <- sd(dfunci(itemDat$D+1e-8),na.rm=TRUE)*ebayesmultiplier+1e-5
 
     sdat$AbilityMeandat <- array(apply(personDat[,c(scaleIndex$original),with=FALSE],2,mean,na.rm=TRUE))
     sdat$AbilitySD <- array(apply(personDat[,c(scaleIndex$original),with=FALSE],2,sd,na.rm=TRUE))*ebayesmultiplier+1e-5 #maybe need to better account for multiple scales here, but not that important...
@@ -505,7 +513,8 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   }
 
   #setup item structure to define fixed / free pars
-  itemSetup <- data.table(itemIndex,A=ifelse(pl>1,as.numeric(NA),1),B=as.numeric(NA),C=ifelse(pl>2,as.numeric(NA),0))
+  itemSetup <- data.table(itemIndex,A=ifelse(pl>1,as.numeric(NA),1),B=as.numeric(NA),
+    C=ifelse(pl>2,as.numeric(NA),0),D=ifelse(pl>3,as.numeric(NA),0))
 
   if(!all(is.na(itemDat))){ #if fixed item pars
     if(!'data.table' %in% class(itemDat)) itemDat <- as.data.table(itemDat)
@@ -514,9 +523,10 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     itemSetup[setupRows,c('A','B','C'):=itemDat[,c('A','B','C')]]
     if(pl<2) itemSetup[,'A':=1]
     if(pl<3) itemSetup[,'C':=0]
+    if(pl<4) itemSetup[,'D':=1]
   }
-  itemSetup[,paste0(c('A','B','C'),'data'):= .SD, .SDcols=c('A','B','C')] #create data columns
-  setnafill(itemSetup,fill = -99,cols = paste0(c('A','B','C'),'data')) #and fill with arbitrary value to avoid NA in stan
+  itemSetup[,paste0(c('A','B','C','D'),'data'):= .SD, .SDcols=c('A','B','C','D')] #create data columns
+  setnafill(itemSetup,fill = -99,cols = paste0(c('A','B','C','D'),'data')) #and fill with arbitrary value to avoid NA in stan
 
   #setup person structure to define fixed / free pars
   AbilitySetup <- data.table(idIndex)
@@ -591,17 +601,20 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     NfixedA=as.integer(sum(!is.na(itemSetup$A))),
     NfixedB=as.integer(sum(!is.na(itemSetup$B))),
     NfixedC=as.integer(sum(!is.na(itemSetup$C))),
+    NfixedD=as.integer(sum(!is.na(itemSetup$D))),
     NfixedAbility=as.integer(sum(!is.na(unlist(AbilitySetup[,scaleIndex$original,with=FALSE])))),
-    fixedA=array(as.integer(which(!is.na(itemSetup$A)))),
-    fixedB=array(as.integer(which(!is.na(itemSetup$B)))),
-    fixedC=array(as.integer(which(!is.na(itemSetup$C)))),
-    Dpar = as.integer(Dpar),
+    whichfixedA=array(as.integer(which(!is.na(itemSetup$A)))),
+    whichfixedB=array(as.integer(which(!is.na(itemSetup$B)))),
+    whichfixedC=array(as.integer(which(!is.na(itemSetup$C)))),
+    whichfixedD=array(as.integer(which(!is.na(itemSetup$D)))),
     fixedAlog=array(as.integer((!is.na(itemSetup$A)))),
-    fixedBlog=array(as.integer((!is.na(itemSetup$B)))),
-    fixedClog=array(as.integer((!is.na(itemSetup$C)))),
-    notfixedA=array(as.integer(which(is.na(itemSetup$A)))),
-    notfixedB=array(as.integer(which(is.na(itemSetup$B)))),
-    notfixedC=array(as.integer(which(is.na(itemSetup$C)))),
+    fixedB=array(as.integer((!is.na(itemSetup$B)))),
+    fixedClogit=array(as.integer((!is.na(itemSetup$C)))),
+    fixedDlogit=array(as.integer((!is.na(itemSetup$D)))),
+    whichnotfixedA=array(as.integer(which(is.na(itemSetup$A)))),
+    whichnotfixedB=array(as.integer(which(is.na(itemSetup$B)))),
+    whichnotfixedC=array(as.integer(which(is.na(itemSetup$C)))),
+    whichnotfixedD=array(as.integer(which(is.na(itemSetup$D)))),
     Abilityparsindex=array(as.integer(unlist(Abilityparsindex)),c(Nsubs,Nscales)),
     fixedAbilityLogical=array(unlist(fixedAbilityLogical),c(Nsubs,Nscales)),
     Abilityparsscaleindex=array(as.integer(Abilityparsscaleindex)),
@@ -614,13 +627,14 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     itemMean = dat$itemMean[!duplicated(dat[[itemref.]])],
     personMean = dat$personMean[!duplicated(dat[[idref.]])],
     scale=array(dat[[scaleref.]]),
-    Adata=array(itemSetup$Adata),Bdata=array(itemSetup$Bdata),Cdata=array(itemSetup$Cdata),
+    Adata=array(itemSetup$Adata),Bdata=array(itemSetup$Bdata),Cdata=array(itemSetup$Cdata),Ddata=array(itemSetup$Ddata),
     Abilitydata=matrix(unlist(AbilitySetup[,paste0(c(scaleIndex$original),'data'),with=FALSE]),Nsubs,Nscales),
     NitemPreds=ncol(itemPreds),
-    NAitemPreds=length(AitemPreds), NBitemPreds=length(BitemPreds), NCitemPreds=length(CitemPreds),
+    NAitemPreds=length(AitemPreds), NBitemPreds=length(BitemPreds), NCitemPreds=length(CitemPreds),NDitemPreds=length(DitemPreds),
     AitemPreds=array(as.integer(which(colnames(itemPreds) %in% AitemPreds))),
     BitemPreds=array(as.integer(which(colnames(itemPreds) %in% BitemPreds))),
     CitemPreds=array(as.integer(which(colnames(itemPreds) %in% CitemPreds))),
+    DitemPreds=array(as.integer(which(colnames(itemPreds) %in% DitemPreds))),
     itemPreds=array(unlist(itemPreds),dim(itemPreds)),
     NpersonPreds=ncol(personPreds), personPreds=(array(unlist(personPreds),dim(personPreds))),
     itemSpecificBetas=as.integer(itemSpecificBetas),
@@ -628,10 +642,10 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     invspAMeandat=invspAMeandat,invspASD=invspASD,
     BMeandat=BMeandat,BSD=BSD,
     logitCMeandat=logitCMeandat,logitCSD=logitCSD,
+    logitDMeandat=logitDMeandat,logitDSD=logitDSD,
     AbilityMeandat=AbilityMeandat,AbilitySD=array(AbilitySD),AbilityCorr=AbilityCorr,
     AMeanSD=AMeanSD,BMeanSD=BMeanSD,logitCMeanSD=logitCMeanSD,AbilityMeanSD=array(AbilityMeanSD),
-    fixedAMean=1L,fixedBMean=1L,fixedCMean=1L,fixedAbilityMean=1L,
-    restrictAMean=1L,restrictBMean=1L,restrictCMean=0L,restrictAbilityMean=1L,
+    fixedAMean=1L,fixedBMean=1L,fixedCMean=1L,fixedDMean=1L,fixedAbilityMean=1L,
     rowIndexPar=0L,
     originalRow=dat$`.originalRow`,
     doGenQuant=0L)
@@ -639,8 +653,9 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
 
   # browser()
   sdat$freeAref=array(as.integer(cumsum(1-as.numeric(sdat$fixedAlog))))
-  sdat$freeBref=array(as.integer(cumsum(1-as.numeric(sdat$fixedBlog))))
-  sdat$freeCref=array(as.integer(cumsum(1-as.numeric(sdat$fixedClog))))
+  sdat$freeBref=array(as.integer(cumsum(1-as.numeric(sdat$fixedB))))
+  sdat$freeCref=array(as.integer(cumsum(1-as.numeric(sdat$fixedClogit))))
+  sdat$freeDref=array(as.integer(cumsum(1-as.numeric(sdat$fixedDlogit))))
 
 
   JMLfit <- function(est, sdat, ebayes=FALSE, fit=NA,narrowPriors=FALSE,...){
@@ -652,6 +667,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
       sdat$Adata = fit$pars$A
       sdat$Bdata = fit$pars$B
       sdat$Cdata = fit$pars$C
+      sdat$Ddata = fit$pars$D
       sdat$Abilitydata = fit$pars$Ability
       init = fit$optim$par
     }
@@ -673,6 +689,12 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
         sdat$logitCMeandat <- mean(fit$pars$logitCpars) #mean(cfunci(fit$pars$C+1e-8))
         sdat$logitCSD <- sd(fit$pars$logitCpars,na.rm=TRUE) * ebayesmultiplier+1e-5 #sd(cfunci(fit$pars$C+1e-8),na.rm=TRUE)*ebayesmultiplier+1e-5
       }
+
+      if(pl > 3 && length(fit$pars$logitDpars) > 2){
+        sdat$logitDMeandat <- mean(fit$pars$logitDpars) #mean(cfunci(fit$pars$C+1e-8))
+        sdat$logitDSD <- sd(fit$pars$logitDpars,na.rm=TRUE) * ebayesmultiplier+1e-5 #sd(cfunci(fit$pars$C+1e-8),na.rm=TRUE)*ebayesmultiplier+1e-5
+      }
+
 
       if(length(fit$pars$Abilitypars) > 2){
 
@@ -708,43 +730,11 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
 
 
 
-    # if(exists('cdat')) try({
-    #   #normalise pars
-    #   tmp <- fit
-    #
-    #   nsd <- sd(tmp$pars$Ability)
-    #   nm <- mean(tmp$pars$Ability)
-    #
-    #   tmp$pars$Ability <- (tmp$pars$Ability -nm)/ nsd
-    #   tmp$pars$B <- ( tmp$pars$B-nm) / nsd
-    #   tmp$pars$A <-  tmp$pars$A * nsd
-    #
-    #
-    #   par(mfrow=c(2,2))
-    #   # plot(cdat$A,mitem[,1],col='blue',pch=16)
-    #   plot(cdat$A,tmp$pars$A)
-    #   try(points(cdat$A,tfit$item_irt$alpha,col='red'))
-    #   abline(0,1,col='green',lwd=2)
-    #   # plot(cdat$B,-mitem[,2],col='blue',pch=16)
-    #   plot(cdat$B,tmp$pars$B)
-    #   # if(AB) plot(cdat$B,fit$pars$B/fit$pars$A)
-    #   try(points(cdat$B,tfit$item_irt$beta,col='red'))
-    #   abline(0,1,col='green',lwd=2)
-    #   # plot(cdat$C,mitem[,3],col='blue',pch=16)
-    #   plot(cdat$C,tmp$pars$C,ylim=c(0,1))
-    #   try(points(cdat$C,tfit$guess,col='red'))
-    #   abline(0,1,col='green',lwd=2)
-    #   # plot(cdat$Ability,mAbility,col='blue',pch=16)
-    #   plot(cdat$Ability,tmp$pars$Ability)
-    #   try(points(cdat$Ability,tamAbility$theta,col='red'))
-    #   abline(0,1,col='green',lwd=2)
-    # })
-
-
     #check these - seems right but check again...
     rownames(fit$pars$A)[itemIndex$new] <- itemIndex$original
     rownames(fit$pars$B)[itemIndex$new]<- itemIndex$original
     rownames(fit$pars$C)[itemIndex$new] <- itemIndex$original
+    rownames(fit$pars$D)[itemIndex$new] <- itemIndex$original
     rownames(fit$pars$Ability)[idIndex$new] <- idIndex$original
     colnames(fit$pars$Ability)[scaleIndex$new] <- scaleIndex$original
 
@@ -752,9 +742,9 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   }
 
   JMLseq <- list(
-    if(carefulfit) list(est=c('A','B','C','Ability'),ebayes=FALSE,narrowPriors=TRUE),
-    list(est=c('A','B','C','Ability'),ebayes=FALSE,narrowPriors=FALSE),
-    if(ebayes) list(est=c('A','B','C','Ability'),ebayes=TRUE,narrowPriors=FALSE)
+    if(carefulfit) list(est=c('A','B','C','D','Ability'),ebayes=FALSE,narrowPriors=TRUE),
+    list(est=c('A','B','C','D','Ability'),ebayes=FALSE,narrowPriors=FALSE),
+    if(ebayes) list(est=c('A','B','C',',D','Ability'),ebayes=TRUE,narrowPriors=FALSE)
   )
 
   fit <- NA
@@ -806,7 +796,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   # }
 
   # browser()
-  fit$itemPars <- data.frame(item=rownames(fit$pars$B),A=fit$pars$A,B=fit$pars$B,C=fit$pars$C)
+  fit$itemPars <- data.frame(item=rownames(fit$pars$B),A=fit$pars$A,B=fit$pars$B,C=fit$pars$C,D=fit$pars$D)
   colnames(fit$itemPars)[1] <- item
   if(ncol(itemPreds)>0){
     colnames(fit$pars$itemPredsMean) <- colnames(itemPreds)
@@ -825,5 +815,3 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
 }
 
 
-
-logit <- function(x) log(x/(1-x))

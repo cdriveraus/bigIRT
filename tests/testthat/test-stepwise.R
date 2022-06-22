@@ -28,7 +28,7 @@ dat <- bigIRT:::dropPerfectScores(dat,scoreref. = 'score',itemref. = 'Item',idre
 
 itemsteps <- lapply(unique(dat$itemgrade),function(i) unique(dat[itemgrade %in%i,Item]))
 
-fit <- fitIRTstepwise(dat,itemsteps = itemsteps,cores=6,normalise=F,ebayes=F,plot=F,verbose=1,priors=T)
+fit <- bigIRT:::fitIRTstepwise(dat,itemsteps = itemsteps,cores=1,normalise=F,ebayes=F,plot=F,verbose=1,priors=T)
 
 fitn <- fitIRT(dat[id%in% fitn$personPars$id,],cores=1,normalise=F,ebayes=F, priors=T)
 fit2 <- fitIRT(dat[id%in% fitn$personPars$id,],itemDat = fit$itemPars,cores=1,normalise=F,ebayes=F, priors=T)
