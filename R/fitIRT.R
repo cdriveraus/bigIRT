@@ -504,8 +504,8 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     sdat$logitCMeandat <- mean(logit(itemDat$C+1e-8),na.rm=TRUE)
     sdat$logitCSD <- sd(logit(itemDat$C+1e-8),na.rm=TRUE)*ebayesmultiplier+1e-5
 
-    sdat$logitDMeandat <- mean(dfunci(itemDat$D+1e-8),na.rm=TRUE)
-    sdat$logitDSD <- sd(dfunci(itemDat$D+1e-8),na.rm=TRUE)*ebayesmultiplier+1e-5
+    sdat$logitDMeandat <- mean(logit(itemDat$D+1e-8),na.rm=TRUE)
+    sdat$logitDSD <- sd(logit(itemDat$D+1e-8),na.rm=TRUE)*ebayesmultiplier+1e-5
 
     sdat$AbilityMeandat <- array(apply(personDat[,c(scaleIndex$original),with=FALSE],2,mean,na.rm=TRUE))
     sdat$AbilitySD <- array(apply(personDat[,c(scaleIndex$original),with=FALSE],2,sd,na.rm=TRUE))*ebayesmultiplier+1e-5 #maybe need to better account for multiple scales here, but not that important...
@@ -514,7 +514,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
 
   #setup item structure to define fixed / free pars
   itemSetup <- data.table(itemIndex,A=ifelse(pl>1,as.numeric(NA),1),B=as.numeric(NA),
-    C=ifelse(pl>2,as.numeric(NA),0),D=ifelse(pl>3,as.numeric(NA),0))
+    C=ifelse(pl>2,as.numeric(NA),0),D=ifelse(pl>3,as.numeric(NA),1))
 
   if(!all(is.na(itemDat))){ #if fixed item pars
     if(!'data.table' %in% class(itemDat)) itemDat <- as.data.table(itemDat)
