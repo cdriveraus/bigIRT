@@ -78,7 +78,7 @@ int fixedDlogit[Nitems];//logical Vector indicating which items have a fixed D p
 int whichnotfixedA[Nitems-NfixedA];
 int whichnotfixedB[Nitems-NfixedB];
 int whichnotfixedC[Nitems-NfixedC];
-int whichnotfixedD[Nitems-NfixedC];
+int whichnotfixedD[Nitems-NfixedD];
 
 int freeAref[Nitems]; //for each item, if fixed then 0, or is cumsum of free items so we know which free par corresponds
 int freeBref[Nitems];
