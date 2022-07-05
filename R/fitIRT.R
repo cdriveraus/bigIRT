@@ -107,15 +107,40 @@ birtRunGeneratedQuantities<- function(fit){
 }
 
 
-normaliseIRT <- function(B,Ability, A,normaliseScale=1, normaliseMean=0){
+normaliseIRT <- function(B,Ability, A,normbase='Ability',normaliseScale=1,  normaliseMean=ifelse(normbase == 'A',1,0)){
 
-  nsd <- sd(Ability) / (normaliseScale)
-  nm <- mean(Ability)
+  if(normbase %in% c('Ability','B')){
+    if(normbase =='Ability'){
+      nsd <- sd(Ability) / (normaliseScale)
+      nm <- mean(Ability)
+    }
 
-  Ability <- (Ability -nm)/ nsd +normaliseMean
-  B  <- ( B-nm) / nsd +normaliseMean
-  A <-  A * nsd
-  return(list(A=A,B=B,Ability=Ability))
+    if(normbase =='B'){
+      nsd <- sd(B) / (normaliseScale)
+      nm <- mean(B)
+    }
+
+    Ability <- (Ability -nm)/ nsd +normaliseMean
+    B  <- ( B-nm) / nsd +normaliseMean
+    A <-  A * nsd
+  }
+
+  if(normbase == 'A'){
+    logA <- log(A)
+    nsd <- sd(logA) / (normaliseScale)
+    if(is.na(nsd)) stop('Error calculating sd of discrimination parameters -- do they vary or are any negative?')
+    nm <- mean(logA)
+    normaliseMean <- log(normaliseMean)
+
+    Ability <- (Ability -nm)/ nsd +normaliseMean
+    B  <- ( B-nm) / nsd +normaliseMean
+    logA <-  (logA -nm)/nsd +normaliseMean
+  }
+
+
+}
+
+return(list(A=A,B=B,Ability=Ability))
 }
 
 if(FALSE){
@@ -424,7 +449,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   AbilityMeanSD=array(1,dim=c(length(unique(dat[[scale]])))),
   iter=2000,cores=6,carefulfit=FALSE,
   ebayes=TRUE,ebayesmultiplier=2,ebayesFromFixed=FALSE,ebayesiter=1,
-  estMeans=FALSE,priors=TRUE,
+  estMeans=c('B','C','D'),priors=TRUE,
   normalise=TRUE,normaliseScale=1,normaliseMean=0,
   dropPerfectScores=TRUE,trainingRows=1:nrow(dat),
   init=NA,Dpar=FALSE,...){
@@ -645,7 +670,11 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     logitDMeandat=logitDMeandat,logitDSD=logitDSD,
     AbilityMeandat=AbilityMeandat,AbilitySD=array(AbilitySD),AbilityCorr=AbilityCorr,
     AMeanSD=AMeanSD,BMeanSD=BMeanSD,logitCMeanSD=logitCMeanSD,AbilityMeanSD=array(AbilityMeanSD),
-    fixedAMean=1L,fixedBMean=1L,fixedCMean=1L,fixedDMean=1L,fixedAbilityMean=1L,
+    fixedAMean=!'A' %in% estMeans & pl > 1,
+    fixedBMean=!'B' %in% estMeans,
+    fixedCMean=!'C' %in% estMeans & pl > 2,
+    fixedDMean=!'D' %in% estMeans & pl > 3,
+    fixedAbilityMean=!'Ability' %in% estMeans & !'ability' %in% estMeans,
     rowIndexPar=0L,
     originalRow=dat$`.originalRow`,
     doGenQuant=0L)
