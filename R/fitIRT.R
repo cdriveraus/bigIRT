@@ -140,6 +140,9 @@ normaliseIRT <- function(B,Ability, A,normbase='Ability',normaliseScale=1,  norm
 return(list(A=A,B=B,Ability=Ability))
 }
 
+
+
+
 if(FALSE){
 
 
@@ -667,11 +670,11 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     logitDMeandat=logitDMeandat,logitDSD=logitDSD,
     AbilityMeandat=AbilityMeandat,AbilitySD=array(AbilitySD),AbilityCorr=AbilityCorr,
     AMeanSD=AMeanSD,BMeanSD=BMeanSD,logitCMeanSD=logitCMeanSD,AbilityMeanSD=array(AbilityMeanSD),
-    fixedAMean=!'A' %in% estMeans & pl > 1,
-    fixedBMean=!'B' %in% estMeans,
-    fixedCMean=!'C' %in% estMeans & pl > 2,
-    fixedDMean=!'D' %in% estMeans & pl > 3,
-    fixedAbilityMean=!'Ability' %in% estMeans & !'ability' %in% estMeans,
+    fixedAMean=as.integer(!'A' %in% estMeans & pl > 1),
+    fixedBMean=as.integer(!'B' %in% estMeans),
+    fixedCMean=as.integer(!'C' %in% estMeans & pl > 2),
+    fixedDMean=as.integer(!'D' %in% estMeans & pl > 3),
+    fixedAbilityMean=as.integer(!'Ability' %in% estMeans & !'ability' %in% estMeans),
     rowIndexPar=0L,
     originalRow=dat$`.originalRow`,
     doGenQuant=0L)
