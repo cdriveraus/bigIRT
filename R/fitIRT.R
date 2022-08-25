@@ -137,9 +137,6 @@ normaliseIRT <- function(B,Ability, A,normbase='Ability',normaliseScale=1,  norm
     logA <-  (logA -nm)/nsd +normaliseMean
   }
 
-
-}
-
 return(list(A=A,B=B,Ability=Ability))
 }
 
