@@ -430,7 +430,10 @@ fitIRTstepwise <- function(dat,itemsteps,item='Item',id='id',normalise=FALSE,eba
 #'
 #' #fit using bigIRT
 #' fit <- fitIRT(dat$dat,cores=2,score = 'score',id = 'id',
-#'   scale = 'Scale',item = 'Item', pl=2,dohess=TRUE)
+#'   scale = 'Scale',item = 'Item', pl=2)
+#'
+#'   print(fit$personPars)
+#'   print(fit$itemPars)
 fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   personDat=NA, personPreds=character(),
   itemDat=NA,
