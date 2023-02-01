@@ -106,7 +106,26 @@ birtRunGeneratedQuantities<- function(fit){
   genq()
 }
 
-
+#' normaliseIRT
+#'
+#' Normalise item response theory (IRT) parameters.
+#'
+#' @param B Vector of item difficulty parameters.
+#' @param Ability Vector of persons' ability parameters.
+#' @param A Vector of item discrimination parameters.
+#' @param normbase The base from which the normalisation should be calculated. Can be 'Ability', 'B', or 'A'.
+#' @param normaliseScale The scale to normalise to.
+#' @param normaliseMean The mean to normalise to. The default is 0 when normbase is 'Ability' or 'B', and 1 when normbase is 'A'.
+#'
+#' @return A list containing the normalised A, B, and Ability parameters.
+#' @export
+#' @examples
+#' B <- c(2.5, 0.5, 1.3)
+#' Ability <- c(1,-1.5, 0.5)
+#' A <- c(5,2,2.5)
+#' normaliseIRT(B, Ability, A, normbase='B')
+#'
+#'
 normaliseIRT <- function(B,Ability, A,normbase='Ability',normaliseScale=1,  normaliseMean=ifelse(normbase == 'A',1,0)){
 
   if(normbase %in% c('Ability','B')){
@@ -292,15 +311,6 @@ fitIRTstepwise <- function(dat,itemsteps,item='Item',id='id',normalise=FALSE,eba
 #'   logitCMean = -10,logitCSD = 0,AMean = 1,ASD = .3,
 #'   BMean=0,BSD = .5,
 #'   AbilityMean = 0,AbilitySD = 1)
-#'
-#' #convert to wide for TAM
-#' wdat <- data.frame(dcast(data.table(dat$dat),formula = 'id ~ Item',value.var='score')[,-1])
-#'
-#'
-#' #fit using TAM
-#' require(TAM)
-#' tfit <-tam.mml.2pl(resp = wdat,est.variance = TRUE)
-#'
 #'
 #' #fit using bigIRT
 #' fit <- fitIRT(dat$dat,cores=2,score = 'score',id = 'id',
