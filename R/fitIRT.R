@@ -106,7 +106,26 @@ birtRunGeneratedQuantities<- function(fit){
   genq()
 }
 
-
+#' normaliseIRT
+#'
+#' Normalise item response theory (IRT) parameters.
+#'
+#' @param B Vector of item difficulty parameters.
+#' @param Ability Vector of persons' ability parameters.
+#' @param A Vector of item discrimination parameters.
+#' @param normbase The base from which the normalisation should be calculated. Can be 'Ability', 'B', or 'A'.
+#' @param normaliseScale The scale to normalise to.
+#' @param normaliseMean The mean to normalise to. The default is 0 when normbase is 'Ability' or 'B', and 1 when normbase is 'A'.
+#'
+#' @return A list containing the normalised A, B, and Ability parameters.
+#' @export
+#' @examples
+#' B <- c(2.5, 0.5, 1.3)
+#' Ability <- c(1,-1.5, 0.5)
+#' A <- c(5,2,2.5)
+#' normaliseIRT(B, Ability, A, normbase='B')
+#'
+#'
 normaliseIRT <- function(B,Ability, A,normbase='Ability',normaliseScale=1,  normaliseMean=ifelse(normbase == 'A',1,0)){
 
   if(normbase %in% c('Ability','B')){
@@ -280,6 +299,7 @@ fitIRTstepwise <- function(dat,itemsteps,item='Item',id='id',normalise=FALSE,eba
 #' @param priors
 #' @param normalise
 #' @param trainingRows
+#' @param tol
 #' @param ...
 #'
 #' @return
@@ -292,15 +312,6 @@ fitIRTstepwise <- function(dat,itemsteps,item='Item',id='id',normalise=FALSE,eba
 #'   logitCMean = -10,logitCSD = 0,AMean = 1,ASD = .3,
 #'   BMean=0,BSD = .5,
 #'   AbilityMean = 0,AbilitySD = 1)
-#'
-#' #convert to wide for TAM
-#' wdat <- data.frame(dcast(data.table(dat$dat),formula = 'id ~ Item',value.var='score')[,-1])
-#'
-#'
-#' #fit using TAM
-#' require(TAM)
-#' tfit <-tam.mml.2pl(resp = wdat,est.variance = TRUE)
-#'
 #'
 #' #fit using bigIRT
 #' fit <- fitIRT(dat$dat,cores=2,score = 'score',id = 'id',
@@ -317,7 +328,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   DitemPreds=character(),
   itemSpecificBetas=FALSE,
   betaScale=10,
-  invspAMeandat=.542,invspASD=.5,BMeandat=0,BSD=2, logitCMeandat=-4,logitCSD=2,
+  invspAMeandat=.542,invspASD=.5,BMeandat=0,BSD=10, logitCMeandat=-4,logitCSD=2,
   logitDMeandat=4,logitDSD=2,
   AbilityMeandat=array(0,dim=c(length(unique(dat[[scale]])))),
   AbilitySD=array(10,dim=c(length(unique(dat[[scale]])))),
@@ -326,10 +337,10 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   AbilityMeanSD=array(1,dim=c(length(unique(dat[[scale]])))),
   iter=2000,cores=6,carefulfit=FALSE,
   ebayes=TRUE,ebayesmultiplier=2,ebayesFromFixed=FALSE,ebayesiter=1,
-  estMeans=c('B','C','D'),priors=TRUE,
-  normalise=TRUE,normaliseScale=1,normaliseMean=0,
+  estMeans=c('ability','A','B','C','D'),priors=TRUE,
+  normalise=FALSE,normaliseScale=1,normaliseMean=0,
   dropPerfectScores=TRUE,trainingRows=1:nrow(dat),
-  init=NA,Dpar=FALSE,...){
+  init=NA,Dpar=FALSE,tol=1e-2,...){
 
   sdat <-list() #initialize standata object
 
@@ -654,9 +665,11 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   )
 
   fit <- NA
+  basetol=tol
   for(i in 1:length(JMLseq)){
     ebayescounter <- 0
     finished=FALSE
+    if(i < length(JMLseq)) tol= basetol*100 else tol = basetol
     if(!is.null(JMLseq[[i]])){
       if(JMLseq[[i]]$ebayes %in% 'TRUE') fitML <- fit #store fit before ebayes step
       while(!finished){
@@ -664,7 +677,8 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
         # stochastic <- F#(i == length(JMLseq))
         fit <- JMLfit(est = JMLseq[[i]]$est,sdat = sdat, ebayes=JMLseq[[i]]$ebayes,
           fit = fit,
-          narrowPriors = JMLseq[[i]]$narrowPriors,...)
+          narrowPriors = JMLseq[[i]]$narrowPriors,
+          tol=tol,...)
         if(ebayescounter >= ebayesiter || !JMLseq[[i]]$ebayes) finished=TRUE
       }
     }
@@ -701,7 +715,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   #   }
   # }
 
-  # browser()
+  #
   fit$itemPars <- data.frame(item=rownames(fit$pars$B),A=fit$pars$A,B=fit$pars$B,C=fit$pars$C,D=fit$pars$D)
   colnames(fit$itemPars)[1] <- item
   if(ncol(itemPreds)>0){
@@ -714,6 +728,34 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   if(ncol(personPreds)>0){
     colnames(fit$pars$personPredsMean) <- colnames(personPreds)
     fit$personPars <- cbind(fit$personPars, fit$pars$personPredsMean)
+  }
+
+  ###Covariate effect summary
+  fit$CovariateEffects <- list()
+  if(fit$dat$NpersonPreds > 0){
+    colnames(fit$pars$Abilitybeta) <- colnames(personPreds)
+    fit$CovariateEffects$Ability <- fit$pars$Abilitybeta
+    fit$CovariateEffects$AbilityStd <- fit$pars$Abilitybeta * apply(fit$dat$personPreds,2,sd) / sd(fit$pars$Ability)
+  }
+  if(fit$dat$NAitemPreds > 0){
+    colnames(fit$pars$Abeta) <- colnames(AitemPreds)
+    fit$CovariateEffects$A <- fit$pars$Abeta
+    fit$CovariateEffects$AStd <- t(t(fit$pars$Abeta) * apply(fit$dat$itemPreds[,fit$dat$AitemPreds],2,sd) / sd(fit$pars$A))
+  }
+  if(fit$dat$NBitemPreds > 0){
+    colnames(fit$pars$Bbeta) <- colnames(BitemPreds)
+    fit$CovariateEffects$B<- fit$pars$Bbeta
+    fit$CovariateEffects$BStd <- t(t(fit$pars$Bbeta) * apply(fit$dat$itemPreds[,fit$dat$BitemPreds],2,sd) / sd(fit$pars$B))
+  }
+  if(fit$dat$NCitemPreds > 0){
+    colnames(fit$pars$Cbeta) <- colnames(CitemPreds)
+    fit$CovariateEffects$C<- fit$pars$Cbeta
+    fit$CovariateEffects$CStd <- t(t(fit$pars$Cbeta) * apply(fit$dat$itemPreds[,fit$dat$CitemPreds],2,sd) / sd(fit$pars$C))
+  }
+  if(fit$dat$NDitemPreds > 0){
+    colnames(fit$pars$Dbeta) <- colnames(DitemPreds)
+    fit$CovariateEffects$D<- fit$pars$Dbeta
+    fit$CovariateEffects$DStd <- t(t(fit$pars$Dbeta) * apply(fit$dat$itemPreds[,fit$dat$DitemPreds],2,sd) / sd(fit$pars$D))
   }
 
 
