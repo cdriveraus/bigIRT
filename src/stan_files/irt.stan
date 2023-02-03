@@ -189,11 +189,11 @@ matrix[Nscales,Nscales] AbilityChol = cholesky_decompose(AbilityCov+diag_matrix(
 
 //probability computation
 for(i in startx:endx){
-  real sA= fixedAlog[item[i]] ? Adata[item[i]] : invspApars[freeAref[item[i]]];
-  real sB=fixedB[item[i]] ? Bdata[item[i]] : Bpars[freeBref[item[i]]];
-  real sC=fixedClogit[item[i]] ? Cdata[item[i]] : logitCpars[freeCref[item[i]]];
-  real sD=fixedDlogit[item[i]] ? Ddata[item[i]] : logitDpars[freeDref[item[i]]];
-  real sAbility= fixedAbilityLogical[id[i],scale[i]] ? Abilitydata[id[i],scale[i]] : Abilitypars[Abilityparsindex[id[i],scale[i]]];
+  real sA= fixedAlog[item[i]] ? Adata[item[i]] : invspApars[freeAref[item[i]]] + invspAMean;
+  real sB=fixedB[item[i]] ? Bdata[item[i]] : Bpars[freeBref[item[i]]] + BMean;
+  real sC=fixedClogit[item[i]] ? Cdata[item[i]] : logitCpars[freeCref[item[i]]] +logitCMean;
+  real sD=fixedDlogit[item[i]] ? Ddata[item[i]] : logitDpars[freeDref[item[i]]] + logitDMean;
+  real sAbility= fixedAbilityLogical[id[i],scale[i]] ? Abilitydata[id[i],scale[i]] : Abilitypars[Abilityparsindex[id[i],scale[i]]] + AbilityMean[Abilityparsscaleindex][1];
 
   if(doApreds && !fixedAlog[item[i]]) sA += (itemPreds[i,AitemPreds] * invspAbeta[itemSpecificBetas ? freeAref[item[i]] : 1,]);
   if(doBpreds && !fixedB[item[i]]) sB += (itemPreds[i,BitemPreds] * Bbeta[itemSpecificBetas ? freeBref[item[i]] : 1,]);
@@ -228,20 +228,20 @@ target+=ll;
 
 //following sections add the prior probability model for any free parameters
 if(NfixedA < Nitems){
-  if(dopriors) invspApars ~ normal(invspAMean,invspASD);
+  if(dopriors) invspApars ~ normal(0,invspASD);
 }
 if(NfixedB < Nitems){
-  if(dopriors) Bpars ~ normal(BMean,BSD);
+  if(dopriors) Bpars ~ normal(0,BSD);
 }
 if(NfixedC < Nitems){
-  if(dopriors) logitCpars ~ normal(logitCMean,logitCSD);
+  if(dopriors) logitCpars ~ normal(0,logitCSD);
 }
 if(NfixedD < Nitems){
-  if(dopriors) logitDpars ~ normal(logitDMean,logitDSD);
+  if(dopriors) logitDpars ~ normal(0,logitDSD);
 }
 if(Nscales==1){
   for(i in 1:(Nscales)){
-    if(dopriors) Abilitypars ~ normal(AbilityMean[Abilityparsscaleindex],AbilitySD[Abilityparsscaleindex]);
+    if(dopriors) Abilitypars ~ normal(0,AbilitySD[Abilityparsscaleindex]);
   }
 }
 if(Nscales > 1 && dopriors){
