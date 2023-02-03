@@ -193,7 +193,7 @@ for(i in startx:endx){
   real sB=fixedB[item[i]] ? Bdata[item[i]] : Bpars[freeBref[item[i]]] + BMean;
   real sC=fixedClogit[item[i]] ? Cdata[item[i]] : logitCpars[freeCref[item[i]]] +logitCMean;
   real sD=fixedDlogit[item[i]] ? Ddata[item[i]] : logitDpars[freeDref[item[i]]] + logitDMean;
-  real sAbility= fixedAbilityLogical[id[i],scale[i]] ? Abilitydata[id[i],scale[i]] : Abilitypars[Abilityparsindex[id[i],scale[i]]] + AbilityMean[Abilityparsscaleindex][1];
+  real sAbility= fixedAbilityLogical[id[i],scale[i]] ? Abilitydata[id[i],scale[i]] : Abilitypars[Abilityparsindex[id[i],scale[i]]] + AbilityMean[Abilityparsscaleindex[i]];
 
   if(doApreds && !fixedAlog[item[i]]) sA += (itemPreds[i,AitemPreds] * invspAbeta[itemSpecificBetas ? freeAref[item[i]] : 1,]);
   if(doBpreds && !fixedB[item[i]]) sB += (itemPreds[i,BitemPreds] * Bbeta[itemSpecificBetas ? freeBref[item[i]] : 1,]);
@@ -247,7 +247,7 @@ if(Nscales==1){
 if(Nscales > 1 && dopriors){
   for(i in 1:Nsubs) {
     int selector[Nscales - sum(fixedAbilityLogical[i,])] = which(fixedAbilityLogical[i,],0); // which scales does this subject have estimated pars for
-    if(size(selector)>0) Abilitypars[Abilityparsindex[i,selector] ] ~ multi_normal_cholesky(AbilityMean[selector],AbilityChol[selector,selector] );
+    if(size(selector)>0) Abilitypars[Abilityparsindex[i,selector] ] ~ multi_normal_cholesky(rep_vector(0,size(selector)),AbilityChol[selector,selector] );
   }
 }
 if(dopriors){

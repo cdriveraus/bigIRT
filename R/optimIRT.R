@@ -94,7 +94,7 @@ scoreIRT <- function(fit, verbose=1L){
 
 
 optimIRT <- function(standata, cores=6, split=TRUE,
-  verbose=0,plot=0,tol=1e-5,Niter=2000,askmore=FALSE,stochastic=FALSE,init=NA,dohess=FALSE){
+  verbose=0,plot=0,tol=1e-2,Niter=2000,askmore=FALSE,stochastic=FALSE,init=NA,dohess=FALSE){
   # verbose=1
   # cores=8
   # plot=10
@@ -294,8 +294,8 @@ optimIRT <- function(standata, cores=6, split=TRUE,
         init,
         maxiter=Niter,
         fitfunc = target,
-        itertol = 1e-2,
-        deltatol=1e-4,
+        itertol = tol,
+        deltatol=tol*.1,
         ndatapoints=standata$ndatapoints,plot=FALSE)
 
       init=optimfit$par

@@ -1,9 +1,9 @@
 logit = function(x) log(x)-log((1-x))
 
 sgd <- function(init,fitfunc,whichignore=c(),nsubjects=NA,ndatapoints=NA,plot=FALSE,
-  stepbase=1e-3,gmeminit=ifelse(is.na(startnrows),.9,.8),gmemmax=.95, maxparchange = .50,
-  startnrows=NA,roughnessmemory=.9,groughnesstarget=.4,roughnesschangemulti = 2,
-  lproughnesstarget=ifelse(parsets==1,.2,.2),parsets=1,
+  stepbase=1e-3,gmeminit=ifelse(is.na(startnrows),.8,.8),gmemmax=.98, maxparchange = .50,
+  startnrows=NA,roughnessmemory=.8,groughnesstarget=.4,roughnesschangemulti = .5,
+  lproughnesstarget=ifelse(parsets==1,.4,.2),parsets=1,
   gsmoothroughnesstarget=.05,
   warmuplength=20,nstore=max(100,length(init)),
   minparchange=1e-800,maxiter=50000,
@@ -203,12 +203,13 @@ sgd <- function(init,fitfunc,whichignore=c(),nsubjects=NA,ndatapoints=NA,plot=FA
     step = (step + roughnesschangemulti*(
       step* .6*lproughnessmod
       # + step* .05*gsmoothroughnessmod #* min(sqrt(deltasmoothsq),1)
-      + step* .5*groughnessmod# * min(sqrt(deltasmoothsq),1)
+      + step*
+        .5*groughnessmod# * min(sqrt(deltasmoothsq),1)
       # + step * rmsstepmod
     ))
 
     signdif= sign(gsmooth)!=sign(gmid)
-    if(i > warmuplength) step[gsmoothroughness < gsmoothroughnesstarget & !signdif] <- step[gsmoothroughness < gsmoothroughnesstarget& !signdif] *2
+    # if(i > warmuplength) step[gsmoothroughness < gsmoothroughnesstarget & !signdif] <- step[gsmoothroughness < gsmoothroughnesstarget& !signdif] *2
 
     # gsmooth[gsmoothroughness < gsmoothroughnesstarget] <- gsmooth[gsmoothroughness < gsmoothroughnesstarget] * 1.2
     # step[gsmoothroughness < gsmoothroughnesstarget] * .1*gsmoothroughnessmod[gsmoothroughness < gsmoothroughnesstarget]
@@ -241,19 +242,6 @@ sgd <- function(init,fitfunc,whichignore=c(),nsubjects=NA,ndatapoints=NA,plot=FA
 
     }
 
-    # }#end if not gam
-
-    # if(i > 1 && runif(1,0,1) > .95) {
-    #   # #slowly forget old max and mins, allow fast re exploration of space
-    #   rndchange <- runif(length(maxpars),0,1) > .95
-    #   # step[rndchange] <- stepbase
-    #   if(any(rndchange)){
-    #     maxpars[rndchange] <- max(parstore[rndchange,]+1e-6)
-    #     minpars[rndchange] <- min(parstore[rndchange,]-1e-6)
-    #   }
-    # }
-
-    # gmemory <- gmemory * gsmoothroughnessmod
     if(i > 25 && i %% 20 == 0) {
       oldlpdif <- lpdif# sum(diff(head(tail(lp,10),20)))
       sublp <- tail(lp,20)
