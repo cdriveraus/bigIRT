@@ -2,8 +2,8 @@ logit = function(x) log(x)-log((1-x))
 
 sgd <- function(init,fitfunc,whichignore=c(),nsubjects=NA,ndatapoints=NA,plot=FALSE,
   stepbase=1e-3,gmeminit=ifelse(is.na(startnrows),.8,.8),gmemmax=.98, maxparchange = .50,
-  startnrows=NA,roughnessmemory=.8,groughnesstarget=.4,roughnesschangemulti = .5,
-  lproughnesstarget=ifelse(parsets==1,.4,.2),parsets=1,
+  startnrows=NA,roughnessmemory=.9,groughnesstarget=.4,roughnesschangemulti = 2,
+  lproughnesstarget=ifelse(parsets==1,.1,.2),parsets=1,
   gsmoothroughnesstarget=.05,
   warmuplength=20,nstore=max(100,length(init)),
   minparchange=1e-800,maxiter=50000,
@@ -74,8 +74,8 @@ sgd <- function(init,fitfunc,whichignore=c(),nsubjects=NA,ndatapoints=NA,plot=FA
         # deltadgdp= step * dgsmooth * sum(abs(gsmooth))/sum(abs(dgsmooth))# +dgsmooth *sum(abs(gsmooth))/sum(abs(dgsmooth)))   #* exp((rnorm(length(g),0,.02)))
         # delta=delta+deltadgdp
 
-        if(rbinom(1,1,.05)==1) delta = delta * exp((rnorm(length(g),0,.5)))
-        s <- which(rbinom(n = length(pars),size = 1,prob= .1)==1)
+        # if(rbinom(1,1,.05)==1) delta = delta * exp((rnorm(length(g),0,.5)))
+        # s <- which(rbinom(n = length(pars),size = 1,prob= .1)==1)
         # delta[s] <- delta[s] + sign(newpars[s])*abs(rnorm(length(s),0,abs(gdelta[s])*step[s]))
         # s <- which(rbinom(n = length(pars),size = 1,prob= .1)==1)
         # delta[s] <- delta[s] + rnorm(length(s),0,abs(gdelta[s])*step[s]*2)
@@ -91,10 +91,10 @@ sgd <- function(init,fitfunc,whichignore=c(),nsubjects=NA,ndatapoints=NA,plot=FA
 
 
         #random jumping
-        if(i %% 10 ==0){
-          s <- which(rbinom(n = length(pars),size = 1,prob= .8)==1)
-          newpars[s] <- newpars[s] + rnorm(length(s),0,abs(delta[s])*1)
-        }
+        # if(i %% 10 ==0){
+        #   s <- which(rbinom(n = length(pars),size = 1,prob= .8)==1)
+        #   newpars[s] <- newpars[s] + rnorm(length(s),0,abs(delta[s])*1)
+        # }
 
       }
 
@@ -136,7 +136,7 @@ sgd <- function(init,fitfunc,whichignore=c(),nsubjects=NA,ndatapoints=NA,plot=FA
           class(lpg) !='try-error' &&
           !is.nan(lpg[1]) &&
           all(!is.nan(attributes(lpg)$gradient)) #&&
-          # (i < warmuplength || ( exp(lpg[1] - lp[i-1]) > runif(1,0,1))) #sd(tail(lp,100))*8+
+        # (i < warmuplength || ( exp(lpg[1] - lp[i-1]) > runif(1,0,1))) #sd(tail(lp,100))*8+
       ){
         accepted <- TRUE
       }
@@ -201,10 +201,10 @@ sgd <- function(init,fitfunc,whichignore=c(),nsubjects=NA,ndatapoints=NA,plot=FA
     groughnessmod = ( ( ( (1/(-(groughness)-groughnesstarget)) / (1/-groughnesstarget) + .5) ) -1)
 
     step = (step + roughnesschangemulti*(
-      step* .6*lproughnessmod
+      step* lproughnessmod
       # + step* .05*gsmoothroughnessmod #* min(sqrt(deltasmoothsq),1)
       + step*
-        .5*groughnessmod# * min(sqrt(deltasmoothsq),1)
+        .8*groughnessmod# * min(sqrt(deltasmoothsq),1)
       # + step * rmsstepmod
     ))
 
@@ -312,14 +312,29 @@ sgd <- function(init,fitfunc,whichignore=c(),nsubjects=NA,ndatapoints=NA,plot=FA
       # if( (i - bestiter) > nconvergeiter*5 &&
       #     mean(sign(diff(tail(lp,nconvergeiter)))) < .3) converged <- TRUE #time since best
       lpdiff=max(tail(lp,nconvergeiter)) - min(tail(lp,nconvergeiter))
+
       if(lpdiff < itertol & lpdiff > 0) converged <- TRUE
-      if(abs(max(diff(tail(lp,nconvergeiter)))) < deltatol) converged <- TRUE
+      # lpdeltas = abs(max(diff(tail(lp,nconvergeiter))))
+      # if(lpdeltas < deltatol) converged <- TRUE
       # if(!is.na(parsdtol)){
       #   if(max(apply(parstore,1,sd)) < parsdtol) converged <- TRUE
       # }
       # if(converged) browser()
+      if(i==31){ #configure progress bar
+        lpdiffbase <- lpdiff
+        pb <- txtProgressBar(min = 0,      # Minimum value of the progress bar
+          max = 100, # Maximum value of the progress bar
+          style = 3,    # Progress bar style (also available style = 1 and style = 2)
+          width = 50,   # Progress bar width. Defaults to getOption("width")
+          char = "=")   # Character used to create the bar
+        on.exit(add=TRUE,expr = {close(pb)})
+      }
+
+      setTxtProgressBar(pb,100*(1 - log(lpdiff/itertol) / log(lpdiffbase/itertol)))
     }
   }
+
+  setTxtProgressBar(pb,100)
   out=list(itervalues = lp, value = max(lp),
     par=bestpars,lpstore=tail(lp,nstore))
 

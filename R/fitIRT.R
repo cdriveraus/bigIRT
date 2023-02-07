@@ -636,7 +636,8 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
       sdat$dopriors <- 1L
       sdat$ASD <- .5
       sdat$BSD <- 1
-      sdat$logitCSD <- 1
+      sdat$logitCSD <- .1
+      sdat$logitDSD <- .1
       sdat$AbilitySD <- array(1,sdat$Nscales)
     }
     # browser()
@@ -669,7 +670,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   for(i in 1:length(JMLseq)){
     ebayescounter <- 0
     finished=FALSE
-    if(i < length(JMLseq)) tol= basetol*100 else tol = basetol
+    if(i < length(JMLseq)) tol= basetol*10 else tol = basetol
     if(!is.null(JMLseq[[i]])){
       if(JMLseq[[i]]$ebayes %in% 'TRUE') fitML <- fit #store fit before ebayes step
       while(!finished){

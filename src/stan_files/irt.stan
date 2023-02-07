@@ -117,7 +117,7 @@ matrix[Nscales,Nscales] AbilityCorr;
 real invspAMeandat; //mean of the inverse softplus A parameters
 real BMeandat; //mean of B parameters
 real logitCMeandat; //mean of logit C parameters
-real logitDMeandat; //mean of logit C parameters
+real logitDMeandat; //mean of logit D parameters
 vector[Nscales] AbilityMeandat; //mean of ability parameters
 }
 
@@ -193,18 +193,17 @@ for(i in startx:endx){
   real sB=fixedB[item[i]] ? Bdata[item[i]] : Bpars[freeBref[item[i]]] + BMean;
   real sC=fixedClogit[item[i]] ? Cdata[item[i]] : logitCpars[freeCref[item[i]]] +logitCMean;
   real sD=fixedDlogit[item[i]] ? Ddata[item[i]] : logitDpars[freeDref[item[i]]] + logitDMean;
-  real sAbility= fixedAbilityLogical[id[i],scale[i]] ? Abilitydata[id[i],scale[i]] : Abilitypars[Abilityparsindex[id[i],scale[i]]] + AbilityMean[Abilityparsscaleindex[i]];
+  real sAbility= fixedAbilityLogical[id[i],scale[i]] ? Abilitydata[id[i],scale[i]] : Abilitypars[Abilityparsindex[id[i],scale[i]]] + AbilityMean[Abilityparsscaleindex[Abilityparsindex[id[i],scale[i]]]];
 
   if(doApreds && !fixedAlog[item[i]]) sA += (itemPreds[i,AitemPreds] * invspAbeta[itemSpecificBetas ? freeAref[item[i]] : 1,]);
   if(doBpreds && !fixedB[item[i]]) sB += (itemPreds[i,BitemPreds] * Bbeta[itemSpecificBetas ? freeBref[item[i]] : 1,]);
   if(doCpreds && !fixedClogit[item[i]]) sC += (itemPreds[i,CitemPreds] * logitCbeta[itemSpecificBetas ? freeCref[item[i]] : 1,]);
   if(doDpreds && !fixedDlogit[item[i]]) sC += (itemPreds[i,DitemPreds] * logitDbeta[itemSpecificBetas ? freeDref[item[i]] : 1,]);
   if(NpersonPreds && !fixedAbilityLogical[id[i],scale[i]]) sAbility += personPreds[i,] * Abilitybeta[scale[i],];
-  //if(NstatePreds && !fixedAbilityLogical[id[i],scale[i]]) sAbility += statePreds[i,] * statebeta[scale[i],];
 
 if(!fixedAlog[item[i]]) sA=log1p_exp(sA);
-if(!fixedClogit[item[i]]) sC=inv_logit(sC);
-if(!fixedDlogit[item[i]]) sD=inv_logit(sD);
+if(!fixedClogit[item[i]]) sC=inv_logit(sC)*.5;
+if(!fixedDlogit[item[i]]) sD=inv_logit(sD)*.5+.5;
 
 p[i]= sC + (sD-sC) / ( 1.0 + exp(
     (-sA * (
@@ -346,12 +345,12 @@ D[whichnotfixedD] = logitDpars;
 
     if(fixedClogit[i]==0){ //if free A par and item predictors, compute average item effect
       if(doCpreds) C[i] += itemPredsMean[i,CitemPreds] * logitCbeta[itemSpecificBetas ? freeCref[i] : 1,]; //when there are person predictors, apply the effect
-      C[i]=inv_logit(C[i]);
+      C[i]=inv_logit(C[i])*.5;
     }
 
     if(fixedDlogit[i]==0){ //if free A par and item predictors, compute average item effect
       if(doDpreds) D[i] += itemPredsMean[i,DitemPreds] * logitDbeta[itemSpecificBetas ? freeDref[i] : 1,]; //when there are person predictors, apply the effect
-      D[i]=inv_logit(D[i]);
+      D[i]=inv_logit(D[i])*.5+.5;
     }
 
   }
