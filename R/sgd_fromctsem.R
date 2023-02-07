@@ -1,8 +1,8 @@
 logit = function(x) log(x)-log((1-x))
 
 sgd <- function(init,fitfunc,whichignore=c(),nsubjects=NA,ndatapoints=NA,plot=FALSE,
-  stepbase=1e-3,gmeminit=ifelse(is.na(startnrows),.8,.8),gmemmax=.98, maxparchange = .50,
-  startnrows=NA,roughnessmemory=.9,groughnesstarget=.4,roughnesschangemulti = 2,
+  stepbase=1e-3,gmeminit=ifelse(is.na(startnrows),.9,.8),gmemmax=.98, maxparchange = .50,
+  startnrows=NA,roughnessmemory=.9,groughnesstarget=.5,roughnesschangemulti = 2,
   lproughnesstarget=ifelse(parsets==1,.1,.2),parsets=1,
   gsmoothroughnesstarget=.05,
   warmuplength=20,nstore=max(100,length(init)),
@@ -322,14 +322,9 @@ sgd <- function(init,fitfunc,whichignore=c(),nsubjects=NA,ndatapoints=NA,plot=FA
       # if(converged) browser()
       if(i==31){ #configure progress bar
         lpdiffbase <- lpdiff
-        pb <- txtProgressBar(min = 0,      # Minimum value of the progress bar
-          max = 100, # Maximum value of the progress bar
-          style = 3,    # Progress bar style (also available style = 1 and style = 2)
-          width = 50,   # Progress bar width. Defaults to getOption("width")
-          char = "=")   # Character used to create the bar
+        pb <- txtProgressBar(min = 0, max = 100,style = 3, width = 50, char = "=", file = stderr())
         on.exit(add=TRUE,expr = {close(pb)})
       }
-
       setTxtProgressBar(pb,100*(1 - log(lpdiff/itertol) / log(lpdiffbase/itertol)))
     }
   }

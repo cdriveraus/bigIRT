@@ -189,11 +189,11 @@ matrix[Nscales,Nscales] AbilityChol = cholesky_decompose(AbilityCov+diag_matrix(
 
 //probability computation
 for(i in startx:endx){
-  real sA= fixedAlog[item[i]] ? Adata[item[i]] : invspApars[freeAref[item[i]]] + invspAMean;
-  real sB=fixedB[item[i]] ? Bdata[item[i]] : Bpars[freeBref[item[i]]] + BMean;
-  real sC=fixedClogit[item[i]] ? Cdata[item[i]] : logitCpars[freeCref[item[i]]] +logitCMean;
-  real sD=fixedDlogit[item[i]] ? Ddata[item[i]] : logitDpars[freeDref[item[i]]] + logitDMean;
-  real sAbility= fixedAbilityLogical[id[i],scale[i]] ? Abilitydata[id[i],scale[i]] : Abilitypars[Abilityparsindex[id[i],scale[i]]] + AbilityMean[Abilityparsscaleindex[Abilityparsindex[id[i],scale[i]]]];
+  real sA= fixedAlog[item[i]] ? Adata[item[i]] : invspApars[freeAref[item[i]]];// + invspAMean;
+  real sB=fixedB[item[i]] ? Bdata[item[i]] : Bpars[freeBref[item[i]]];// + BMean;
+  real sC=fixedClogit[item[i]] ? Cdata[item[i]] : logitCpars[freeCref[item[i]]];// +logitCMean;
+  real sD=fixedDlogit[item[i]] ? Ddata[item[i]] : logitDpars[freeDref[item[i]]];// + logitDMean;
+  real sAbility= fixedAbilityLogical[id[i],scale[i]] ? Abilitydata[id[i],scale[i]] : Abilitypars[Abilityparsindex[id[i],scale[i]]];// + AbilityMean[Abilityparsscaleindex[Abilityparsindex[id[i],scale[i]]]];
 
   if(doApreds && !fixedAlog[item[i]]) sA += (itemPreds[i,AitemPreds] * invspAbeta[itemSpecificBetas ? freeAref[item[i]] : 1,]);
   if(doBpreds && !fixedB[item[i]]) sB += (itemPreds[i,BitemPreds] * Bbeta[itemSpecificBetas ? freeBref[item[i]] : 1,]);
@@ -227,24 +227,24 @@ target+=ll;
 
 //following sections add the prior probability model for any free parameters
 if(NfixedA < Nitems){
-  if(dopriors) invspApars ~ normal(0,invspASD);
+  if(dopriors) invspApars ~ normal(invspAMean,invspASD);
 }
 if(NfixedB < Nitems){
-  if(dopriors) Bpars ~ normal(0,BSD);
+  if(dopriors) Bpars ~ normal(BMean,BSD);
 }
 if(NfixedC < Nitems){
-  if(dopriors) logitCpars ~ normal(0,logitCSD);
+  if(dopriors) logitCpars ~ normal(logitCMean,logitCSD);
 }
 if(NfixedD < Nitems){
-  if(dopriors) logitDpars ~ normal(0,logitDSD);
+  if(dopriors) logitDpars ~ normal(logitDMean,logitDSD);
 }
 if(Nscales==1){
-    if(dopriors) Abilitypars ~ normal(0,AbilitySD[1]); //AbilityMean[1]
+    if(dopriors) Abilitypars ~ normal(AbilityMean[1],AbilitySD[1]); //AbilityMean[1]
 }
 if(Nscales > 1 && dopriors){
   for(i in 1:Nsubs) {
     int selector[Nscales - sum(fixedAbilityLogical[i,])] = which(fixedAbilityLogical[i,],0); // which scales does this subject have estimated pars for
-    if(size(selector)>0) Abilitypars[Abilityparsindex[i,selector] ] ~ multi_normal_cholesky(rep_vector(0,size(selector)),AbilityChol[selector,selector] ); //AbilityMean[selector]
+    if(size(selector)>0) Abilitypars[Abilityparsindex[i,selector] ] ~ multi_normal_cholesky(AbilityMean[selector],AbilityChol[selector,selector] ); //AbilityMean[selector] rep_vector(0,size(selector))
   }
 }
 if(dopriors){
@@ -284,10 +284,10 @@ C[whichfixedC] = Cdata[whichfixedC];
 D[whichfixedD] = Ddata[whichfixedD];
 
 //put the free parameters into the item parameter objects
-A[whichnotfixedA] = invspApars +invspAMean;
-B[whichnotfixedB] = Bpars +BMean;
-C[whichnotfixedC] = logitCpars + logitCMean;
-D[whichnotfixedD] = logitDpars + logitDMean;
+A[whichnotfixedA] = invspApars;// +invspAMean;
+B[whichnotfixedB] = Bpars;// +BMean;
+C[whichnotfixedC] = logitCpars;// + logitCMean;
+D[whichnotfixedD] = logitDpars;// + logitDMean;
 
 
   for(i in start:end){
@@ -300,7 +300,7 @@ D[whichnotfixedD] = logitDpars + logitDMean;
     if(fixedAbilityLogical[i,j]==1){
       Ability[i,j] = Abilitydata[i,j];
     } else{ //if ability is user supplied, input it
-      Ability[i,j] = Abilitypars[Abilityparsindex[i,j]] + AbilityMean[j]; // or input the free parameter
+      Ability[i,j] = Abilitypars[Abilityparsindex[i,j]];// + AbilityMean[j]; // or input the free parameter
       if(NpersonPreds) {
         int count=0;
         personPredsMean[i]=rep_row_vector(0.0, NpersonPreds); //init to zero, mean of person predictors
