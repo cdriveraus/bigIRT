@@ -48,7 +48,7 @@ int NpersonPreds; //Number of covariates used to predict person parameters
 int AitemPreds[NAitemPreds];
 int BitemPreds[NBitemPreds];
 int CitemPreds[NCitemPreds];
-int DitemPreds[NCitemPreds];
+int DitemPreds[NDitemPreds];
 
 int itemSpecificBetas;
 
@@ -189,17 +189,19 @@ matrix[Nscales,Nscales] AbilityChol = cholesky_decompose(AbilityCov+diag_matrix(
 
 //probability computation
 for(i in startx:endx){
-  real sA= fixedAlog[item[i]] ? Adata[item[i]] : invspApars[freeAref[item[i]]];// + invspAMean;
   real sB=fixedB[item[i]] ? Bdata[item[i]] : Bpars[freeBref[item[i]]];// + BMean;
   real sC=fixedClogit[item[i]] ? Cdata[item[i]] : logitCpars[freeCref[item[i]]];// +logitCMean;
   real sD=fixedDlogit[item[i]] ? Ddata[item[i]] : logitDpars[freeDref[item[i]]];// + logitDMean;
+  real sA= fixedAlog[item[i]] ? Adata[item[i]] : invspApars[freeAref[item[i]]];// + invspAMean;
   real sAbility= fixedAbilityLogical[id[i],scale[i]] ? Abilitydata[id[i],scale[i]] : Abilitypars[Abilityparsindex[id[i],scale[i]]];// + AbilityMean[Abilityparsscaleindex[Abilityparsindex[id[i],scale[i]]]];
 
   if(doApreds && !fixedAlog[item[i]]) sA += (itemPreds[i,AitemPreds] * invspAbeta[itemSpecificBetas ? freeAref[item[i]] : 1,]);
+  if(NpersonPreds && !fixedAbilityLogical[id[i],scale[i]]) sAbility += personPreds[i,] * Abilitybeta[scale[i],];
+
   if(doBpreds && !fixedB[item[i]]) sB += (itemPreds[i,BitemPreds] * Bbeta[itemSpecificBetas ? freeBref[item[i]] : 1,]);
   if(doCpreds && !fixedClogit[item[i]]) sC += (itemPreds[i,CitemPreds] * logitCbeta[itemSpecificBetas ? freeCref[item[i]] : 1,]);
-  if(doDpreds && !fixedDlogit[item[i]]) sC += (itemPreds[i,DitemPreds] * logitDbeta[itemSpecificBetas ? freeDref[item[i]] : 1,]);
-  if(NpersonPreds && !fixedAbilityLogical[id[i],scale[i]]) sAbility += personPreds[i,] * Abilitybeta[scale[i],];
+  if(doDpreds && !fixedDlogit[item[i]]) sD += (itemPreds[i,DitemPreds] * logitDbeta[itemSpecificBetas ? freeDref[item[i]] : 1,]);
+
 
 if(!fixedAlog[item[i]]) sA=log1p_exp(sA);
 if(!fixedClogit[item[i]]) sC=inv_logit(sC)*.5;
@@ -208,8 +210,8 @@ if(!fixedDlogit[item[i]]) sD=inv_logit(sD)*.5+.5;
 p[i]= sC + (sD-sC) / ( 1.0 + exp(
     (-sA * (
       sAbility- //AbilityNobs[i]-
-      sB
-      ))));
+      sB)
+      )));
 
 if(score[i]==0) p[i]= 1.0-p[i];//(1 - score[i]) + (2*score[i]-1) * p[i];
 

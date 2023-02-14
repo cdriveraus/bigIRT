@@ -30,7 +30,7 @@ if(identical(Sys.getenv("NOT_CRAN"), "true")& .Machine$sizeof.pointer != 4){
     itemPreds = c('V1','V2','V3')
 
     fit <- fitIRT(dat$dat,cores=cores,pl=2,plot=F,verbose=0,priors=T,
-      itemPreds = itemPreds,
+      BitemPreds = itemPreds,AitemPreds = itemPreds,
       personDat = persondat,
       itemDat = itemdat,
       # betaScale = 1,

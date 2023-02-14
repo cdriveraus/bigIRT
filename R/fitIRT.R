@@ -540,24 +540,40 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     itemMean = dat$itemMean[!duplicated(dat[[itemref.]])],
     personMean = dat$personMean[!duplicated(dat[[idref.]])],
     scale=array(dat[[scaleref.]]),
-    Adata=array(itemSetup$Adata),Bdata=array(itemSetup$Bdata),Cdata=array(itemSetup$Cdata),Ddata=array(itemSetup$Ddata),
+    Adata=array(itemSetup$Adata),
+    Bdata=array(itemSetup$Bdata),
+    Cdata=array(itemSetup$Cdata),
+    Ddata=array(itemSetup$Ddata),
     Abilitydata=matrix(unlist(AbilitySetup[,paste0(c(scaleIndex$original),'data'),with=FALSE]),Nsubs,Nscales),
     NitemPreds=ncol(itemPreds),
-    NAitemPreds=length(AitemPreds), NBitemPreds=length(BitemPreds), NCitemPreds=length(CitemPreds),NDitemPreds=length(DitemPreds),
+    NAitemPreds=length(AitemPreds),
+    NBitemPreds=length(BitemPreds),
+    NCitemPreds=length(CitemPreds),
+    NDitemPreds=length(DitemPreds),
     AitemPreds=array(as.integer(which(colnames(itemPreds) %in% AitemPreds))),
     BitemPreds=array(as.integer(which(colnames(itemPreds) %in% BitemPreds))),
     CitemPreds=array(as.integer(which(colnames(itemPreds) %in% CitemPreds))),
     DitemPreds=array(as.integer(which(colnames(itemPreds) %in% DitemPreds))),
     itemPreds=array(unlist(itemPreds),dim(itemPreds)),
-    NpersonPreds=ncol(personPreds), personPreds=(array(unlist(personPreds),dim(personPreds))),
+    NpersonPreds=ncol(personPreds),
+    personPreds=(array(unlist(personPreds),dim(personPreds))),
     itemSpecificBetas=as.integer(itemSpecificBetas),
     betaScale=betaScale,
-    invspAMeandat=invspAMeandat,invspASD=invspASD,
-    BMeandat=BMeandat,BSD=BSD,
-    logitCMeandat=logitCMeandat,logitCSD=logitCSD,
-    logitDMeandat=logitDMeandat,logitDSD=logitDSD,
-    AbilityMeandat=AbilityMeandat,AbilitySD=array(AbilitySD),AbilityCorr=AbilityCorr,
-    AMeanSD=AMeanSD,BMeanSD=BMeanSD,logitCMeanSD=logitCMeanSD,AbilityMeanSD=array(AbilityMeanSD),
+    invspAMeandat=invspAMeandat,
+    invspASD=invspASD,
+    BMeandat=BMeandat,
+    BSD=BSD,
+    logitCMeandat=logitCMeandat,
+    logitCSD=logitCSD,
+    logitDMeandat=logitDMeandat,
+    logitDSD=logitDSD,
+    AbilityMeandat=AbilityMeandat,
+    AbilitySD=array(AbilitySD),
+    AbilityCorr=AbilityCorr,
+    AMeanSD=AMeanSD,
+    BMeanSD=BMeanSD,
+    logitCMeanSD=logitCMeanSD,
+    AbilityMeanSD=array(AbilityMeanSD),
     fixedAMean=as.integer(!'A' %in% estMeans & pl > 1),
     fixedBMean=as.integer(!'B' %in% estMeans),
     fixedCMean=as.integer(!'C' %in% estMeans & pl > 2),
@@ -738,23 +754,23 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     fit$CovariateEffects$Ability <- fit$pars$Abilitybeta
     fit$CovariateEffects$AbilityStd <- fit$pars$Abilitybeta * apply(fit$dat$personPreds,2,sd) / sd(fit$pars$Ability)
   }
-  if(fit$dat$NAitemPreds > 0){
-    colnames(fit$pars$Abeta) <- colnames(AitemPreds)
+  if(fit$dat$NAitemPreds > 0 && pl > 1){
+    dimnames(fit$pars$Abeta)[[2]] <- (AitemPreds)
     fit$CovariateEffects$A <- fit$pars$Abeta
     fit$CovariateEffects$AStd <- t(t(fit$pars$Abeta) * apply(fit$dat$itemPreds[,fit$dat$AitemPreds],2,sd) / sd(fit$pars$A))
   }
   if(fit$dat$NBitemPreds > 0){
-    colnames(fit$pars$Bbeta) <- colnames(BitemPreds)
+    dimnames(fit$pars$Bbeta)[[2]] <- (BitemPreds)
     fit$CovariateEffects$B<- fit$pars$Bbeta
     fit$CovariateEffects$BStd <- t(t(fit$pars$Bbeta) * apply(fit$dat$itemPreds[,fit$dat$BitemPreds],2,sd) / sd(fit$pars$B))
   }
-  if(fit$dat$NCitemPreds > 0){
-    colnames(fit$pars$Cbeta) <- colnames(CitemPreds)
+  if(fit$dat$NCitemPreds > 0 && pl > 2){
+    dimnames(fit$pars$Cbeta)[[2]] <- (CitemPreds)
     fit$CovariateEffects$C<- fit$pars$Cbeta
     fit$CovariateEffects$CStd <- t(t(fit$pars$Cbeta) * apply(fit$dat$itemPreds[,fit$dat$CitemPreds],2,sd) / sd(fit$pars$C))
   }
-  if(fit$dat$NDitemPreds > 0){
-    colnames(fit$pars$Dbeta) <- colnames(DitemPreds)
+  if(fit$dat$NDitemPreds > 0 && pl > 3){
+    dimnames(fit$pars$Dbeta)[[2]] <- (DitemPreds)
     fit$CovariateEffects$D<- fit$pars$Dbeta
     fit$CovariateEffects$DStd <- t(t(fit$pars$Dbeta) * apply(fit$dat$itemPreds[,fit$dat$DitemPreds],2,sd) / sd(fit$pars$D))
   }

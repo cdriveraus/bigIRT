@@ -13,25 +13,29 @@ cores=2
     predBeta=matrix(c(1,2,-2),1,3)
 
     dat <- bigIRT:::IRTsim(Nsubs = Np,Nitems = Ni,Nscales = 1,
-      logitCMean = -20,logitCSD = .0,AMean = 1,ASD = 0,
+      logitCMean = -20,logitCSD = .0,AMean = 2,ASD = .25,
       BMean=0,BSD = .1,
       itemPreds = itempreds,
-      # AitemPredEffects = predBeta,
+      AitemPredEffects = predBeta,
       BitemPredEffects = predBeta,
       # personPreds = matrix(rnorm(Np)), AbilityPredEffects = matrix(c(1,-0.5,.5),6,1),
       AbilityMean = 0)
 
-    dat$dat <- bigIRT::dropPerfectScores(dat$dat)
+    BpredBetaStd <- predBeta * apply(dat$dat[,c('V1','V2','V3')],2,sd) / sd(dat$B)
+    ApredBetaStd <- predBeta * apply(dat$dat[,c('V1','V2','V3')],2,sd) / sd(dat$A)
+
+    # dat$dat <- bigIRT:::dropPerfectScores(dat$dat)
 
     persondat <- dat$dat[!duplicated(id),]
     setnames(persondat,'Ability','1')
 
-    fit <- fitIRT(dat$dat,cores=cores,pl=1,plot=F,verbose=1,priors=T,
+    fit <- fitIRT(dat$dat,cores=cores,pl=2,plot=F,verbose=10,priors=T,
       BitemPreds = c('V1','V2','V3'),
+      AitemPreds = c('V1','V2','V3'),
       # personPreds = c('V1','V2','V3'),
-      # personDat = persondat,
-      betaScale = 10,
-      normalise = F,ebayes = F,ebayesmultiplier = 2,itemSpecificBetas = F)
+      personDat = persondat,
+      betaScale = 100,
+      normalise = F,ebayes = T,ebayesmultiplier = 2)
 
     # apply(fit$pars$invspAbeta,1,mean)
     # apply(fit$pars$Bbeta,2,mean)
@@ -39,14 +43,19 @@ cores=2
     # plot(fit$pars$Bbeta[,2])
     #
     # plot(fit$pars$Ability,dat$dat[!duplicated(id),Ability])
-     plot(fit$pars$B,dat$B)
+     # plot(fit$pars$B,dat$B)
     # plot(fit$pars$A,dat$A)
     # abline(0,1)
 
 
     testthat::expect_equivalent(
-      c(fit$pars$Bbeta),
-      c(predBeta),
+      c(BpredBetaStd),
+      c(fit$CovariateEffects$BStd),
+      tol=.05)
+
+    testthat::expect_equivalent(
+      c(ApredBetaStd),
+      c(fit$CovariateEffects$AStd),
       tol=.1)
   })
 
