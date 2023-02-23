@@ -51,8 +51,9 @@ int CitemPreds[NCitemPreds];
 int DitemPreds[NDitemPreds];
 
 int itemSpecificBetas;
-
 int doGenQuant;
+int integrateAbility;
+real integrateWidth;
 
 row_vector[NitemPreds] itemPreds[Nobs]; //Values of item predictors
 row_vector[NpersonPreds] personPreds[Nobs]; //Values of person predictors
@@ -207,11 +208,34 @@ if(!fixedAlog[item[i]]) sA=log1p_exp(sA);
 if(!fixedClogit[item[i]]) sC=inv_logit(sC)*.5;
 if(!fixedDlogit[item[i]]) sD=inv_logit(sD)*.5+.5;
 
+if(!integrateAbility){
 p[i]= sC + (sD-sC) / ( 1.0 + exp(
     (-sA * (
       sAbility- //AbilityNobs[i]-
       sB)
       )));
+}
+
+if(integrateAbility){
+    real e2 = exp(-(sA * (sAbility - sB)));
+    real e3 = e2 + 1;
+    real e4 = sD - sC;
+    real e6 = e4/e3 + sC;
+    real e7 = (e3^2) * e6;
+    real sAbilityVar = fabs(1/(1e-5+e2 * e4 * sA^2 * (1 - e2 * (2 * (e3 * e6) + sC - sD)/e7)/e7));
+
+  p[i]=0;
+  for(ii in -1:1){ //but skip 0!
+    p[i] += ((ii==0) ? .5 : 0.25) * ( //if mean, multiply by .5 else .25
+      sC + (sD-sC) / ( 1.0 + exp(
+    (-sA * (
+      (sAbility + ii * sqrt(.5*sAbilityVar) * integrateWidth) -
+      sB)
+      )))
+      );
+  }
+  //print(p[i]);
+}
 
 if(score[i]==0) p[i]= 1.0-p[i];//(1 - score[i]) + (2*score[i]-1) * p[i];
 

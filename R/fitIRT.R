@@ -338,6 +338,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   iter=2000,cores=6,carefulfit=FALSE,
   ebayes=TRUE,ebayesmultiplier=2,ebayesFromFixed=FALSE,ebayesiter=1,
   estMeans=c('ability','A','B','C','D'),priors=TRUE,
+  integrateAbility=FALSE, integrateWidth= 1,
   normalise=FALSE,normaliseScale=1,normaliseMean=0,
   dropPerfectScores=TRUE,trainingRows=1:nrow(dat),
   init=NA,Dpar=FALSE,tol=1e-2,...){
@@ -581,7 +582,9 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     fixedAbilityMean=as.integer(!'Ability' %in% estMeans & !'ability' %in% estMeans),
     rowIndexPar=0L,
     originalRow=dat$`.originalRow`,
-    doGenQuant=0L)
+    doGenQuant=0L,
+    integrateAbility=as.integer(integrateAbility),
+    integrateWidth=integrateWidth)
   )
 
   # browser()
@@ -650,7 +653,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
 
     if(narrowPriors){
       sdat$dopriors <- 1L
-      sdat$ASD <- .5
+      sdat$ASD <- .1
       sdat$BSD <- 1
       sdat$logitCSD <- .1
       sdat$logitDSD <- .1
