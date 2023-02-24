@@ -232,12 +232,13 @@ optimIRT <- function(standata, cores=6, split=TRUE,
       }
 
       if(plot > 0){
-        if(out[1] > (-1e99)) storedLp <<- c(storedLp,out[1])
+         storedLp <<- c(storedLp,ifelse(out[1] > (-1e99),out[1],NA))
         # g=log(abs(attributes(out)$gradient))*sign(attributes(out)$gradient)
         if(iter %% plot == 0){
           par(mfrow=c(1,1))
           # plot(parm,xlab='param',ylab='par value',col=1:length(parm))
-          plot(tail(1:iter,500), tail(exp(storedLp/standata$Nobs),500),ylab='target',type='l') #log(1+tail(-storedLp,500)-min(tail(-storedLp,500)))
+          tmp<-try(plot(tail(1:iter,500), tail(exp(storedLp/standata$Nobs),500),ylab='target',type='l')) #log(1+tail(-storedLp,500)-min(tail(-storedLp,500)))
+          if('try-error' %in% class(tmp) ) browser()
           # plot(g,type='p',col=1:length(parm),ylab='gradient',xlab='param')
         }
       }

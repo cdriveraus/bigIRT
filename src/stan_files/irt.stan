@@ -168,10 +168,9 @@ vector[rowIndexPar ? 1:0] rowIndex;
 transformed parameters{ //this section combines any user input fixed values and free parameters
 
 vector[Nobs] p; //probability of observed response for responses in current parallel set
-// matrix[Nsubs,Nscales] Ability; //ability matrix (potentially mix of free parameters and fixed values)
+matrix[Nsubs,Nscales] sAbilitySD=rep_matrix(0,Nsubs,Nscales); //abilitySD matrix (potentially mix of free parameters and fixed values)
 //vector[Nobs] AbilityNobs; //relevant ability for each response in current parallel set
 real ll;
-
 
 real invspAMean = fixedAMean ? invspAMeandat : invspAMeanpar[1]; //mean of inverse softplus A params
 real BMean = fixedBMean ? BMeandat : BMeanpar[1]; //mean of B params
@@ -185,10 +184,11 @@ matrix[Nscales,Nscales] AbilityChol = cholesky_decompose(AbilityCov+diag_matrix(
 
 
 { //local block for row index use
-  int startx = rowIndexPar ? realToInt(rowIndex[1]) : start;
-  int endx = rowIndexPar ? startx : end;
+int startx = rowIndexPar ? realToInt(rowIndex[1]) : start;
+int endx = rowIndexPar ? startx : end;
 
 //probability computation
+for(doIntegrate in 0:integrateAbility){ //would be more efficient to re-write to avoid this loop and the recomputations
 for(i in startx:endx){
   real sB=fixedB[item[i]] ? Bdata[item[i]] : Bpars[freeBref[item[i]]];// + BMean;
   real sC=fixedClogit[item[i]] ? Cdata[item[i]] : logitCpars[freeCref[item[i]]];// +logitCMean;
@@ -203,42 +203,48 @@ for(i in startx:endx){
   if(doCpreds && !fixedClogit[item[i]]) sC += (itemPreds[i,CitemPreds] * logitCbeta[itemSpecificBetas ? freeCref[item[i]] : 1,]);
   if(doDpreds && !fixedDlogit[item[i]]) sD += (itemPreds[i,DitemPreds] * logitDbeta[itemSpecificBetas ? freeDref[item[i]] : 1,]);
 
+  if(!fixedAlog[item[i]]) sA=log1p_exp(sA);
+  if(!fixedClogit[item[i]]) sC=inv_logit(sC)*.5;
+  if(!fixedDlogit[item[i]]) sD=inv_logit(sD)*.5+.5;
 
-if(!fixedAlog[item[i]]) sA=log1p_exp(sA);
-if(!fixedClogit[item[i]]) sC=inv_logit(sC)*.5;
-if(!fixedDlogit[item[i]]) sD=inv_logit(sD)*.5+.5;
+  if(!doIntegrate) p[i]= (1-score[i])+ (score[i] *2 -1) * (  sC + (sD-sC) /  (1.0 + exp((-sA * (sAbility- sB)))) );
 
-if(!integrateAbility){
-p[i]= sC + (sD-sC) / ( 1.0 + exp(
-    (-sA * (
-      sAbility- //AbilityNobs[i]-
-      sB)
-      )));
-}
+  if(integrateAbility && !doIntegrate){ //if in the JML phase, prepare ability SDs
+  real e2 = exp(-(sA * (sAbility - sB)));
+  real e3 = 1 + e2;
+  real e5 = 2 * score[i] - 1;
+  real e6 = sD - sC;
+  real e9 = (e6/e3 + sC) * e5 + 1 - score[i];
+  real e10 = e9 * (e3^2);
 
-if(integrateAbility){
-    real e2 = exp(-(sA * (sAbility - sB)));
-    real e3 = e2 + 1;
-    real e4 = sD - sC;
-    real e6 = e4/e3 + sC;
-    real e7 = (e3^2) * e6;
-    real sAbilityVar = fabs(1/(1e-5+e2 * e4 * sA^2 * (1 - e2 * (2 * (e3 * e6) + sC - sD)/e7)/e7));
-
-  p[i]=0;
-  for(ii in -1:1){ //but skip 0!
-    p[i] += ((ii==0) ? .5 : 0.25) * ( //if mean, multiply by .5 else .25
-      sC + (sD-sC) / ( 1.0 + exp(
-    (-sA * (
-      (sAbility + ii * sqrt(.5*sAbilityVar) * integrateWidth) -
-      sB)
-      )))
-      );
+  sAbilitySD[Abilityparsindex[id[i],scale[i]]] += -(sA^2 * (inv(e10) - (2 * (e9 * e3) - e5 *
+    e6) * e2/(e10^2)) * e5 * e2 * e6); //incremental addition to 2nd deriv
   }
-  //print(p[i]);
+
+  if(integrateAbility && doIntegrate){ //if finished the JML phase and ability sd computation
+  for(ii in -1:1){ //but skip 0!
+  if(ii != 0){
+    p[i] +=  0.25 * ( //if mean, multiply by .5 else .25
+    (1-score[i])+ (score[i] *2 -1) * (
+      sC + (sD-sC) / ( 1.0 + exp((-sA * (
+        (sAbility + ii * sqrt(fabs(.5*inv(sAbilitySD[Abilityparsindex[id[i],scale[i]]][1]))) * integrateWidth) -
+        sB))))));
+  }
+  }
+  }
+
+} //end loop over rows
+
+if(integrateAbility && !doIntegrate) p = p * .5; //prepare p values for integration step
+
+} // end integration loop
+
+if(doGenQuant && integrateAbility){ // finish computing subject sd's
+for(rowi in 1:Nsubs){
+  for(coli in 1:Nscales){
+    if(fixedAbilityLogical[rowi,coli]==1) sAbilitySD[rowi,coli] = sqrt(inv(-sAbilitySD[rowi,coli]));
+  }
 }
-
-if(score[i]==0) p[i]= 1.0-p[i];//(1 - score[i]) + (2*score[i]-1) * p[i];
-
 }
 
 } //end local block of row index use
@@ -265,7 +271,7 @@ if(NfixedD < Nitems){
   if(dopriors) logitDpars ~ normal(logitDMean,logitDSD);
 }
 if(Nscales==1){
-    if(dopriors) Abilitypars ~ normal(AbilityMean[1],AbilitySD[1]); //AbilityMean[1]
+  if(dopriors) Abilitypars ~ normal(AbilityMean[1],AbilitySD[1]); //AbilityMean[1]
 }
 if(Nscales > 1 && dopriors){
   for(i in 1:Nsubs) {
@@ -275,10 +281,10 @@ if(Nscales > 1 && dopriors){
 }
 if(dopriors){
 
-    if(doApreds) for(i in 1:NAitemPreds) invspAbeta[,i] ~ normal(0,betaScale);
-    if(doBpreds) for(i in 1:NBitemPreds) Bbeta[,i] ~ normal(0,betaScale);
-    if(doCpreds) for(i in 1:NCitemPreds) logitCbeta[,i] ~ normal(0,betaScale);
-    if(doDpreds) for(i in 1:NDitemPreds) logitDbeta[,i] ~ normal(0,betaScale);
+  if(doApreds) for(i in 1:NAitemPreds) invspAbeta[,i] ~ normal(0,betaScale);
+  if(doBpreds) for(i in 1:NBitemPreds) Bbeta[,i] ~ normal(0,betaScale);
+  if(doCpreds) for(i in 1:NCitemPreds) logitCbeta[,i] ~ normal(0,betaScale);
+  if(doDpreds) for(i in 1:NDitemPreds) logitDbeta[,i] ~ normal(0,betaScale);
 
   for(i in 1:Nscales){
     if(num_elements(Abilitybeta[i,])) Abilitybeta[i,] ~ normal(0,betaScale);
@@ -316,67 +322,67 @@ C[whichnotfixedC] = logitCpars;// + logitCMean;
 D[whichnotfixedD] = logitDpars;// + logitDMean;
 
 
-  for(i in start:end){
-    if(score[i]==0) pcorrect[i] = 1-p[i]; else pcorrect[i]=p[i];
-  }
+for(i in start:end){
+  if(score[i]==0) pcorrect[i] = 1-p[i]; else pcorrect[i]=p[i];
+}
 
-  // Compute abilities
-  for(i in 1:Nsubs){ //for every subject
-  for(j in 1:Nscales){ //and every scale
-    if(fixedAbilityLogical[i,j]==1){
-      Ability[i,j] = Abilitydata[i,j];
-    } else{ //if ability is user supplied, input it
-      Ability[i,j] = Abilitypars[Abilityparsindex[i,j]];// + AbilityMean[j]; // or input the free parameter
-      if(NpersonPreds) {
-        int count=0;
-        personPredsMean[i]=rep_row_vector(0.0, NpersonPreds); //init to zero, mean of person predictors
-        for( ri in 1:Nobs){
-          if(id[ri] == i){
-            count+=1;
-            personPredsMean[i]+=personPreds[ri,];
-          }
-        }
-        personPredsMean[i]= personPredsMean[i]/count;
-        Ability[i,j] += personPredsMean[i] * Abilitybeta[j,]; //when there are person predictors, apply the effect
-      }
+// Compute abilities
+for(i in 1:Nsubs){ //for every subject
+for(j in 1:Nscales){ //and every scale
+if(fixedAbilityLogical[i,j]==1){
+  Ability[i,j] = Abilitydata[i,j];
+} else{ //if ability is user supplied, input it
+Ability[i,j] = Abilitypars[Abilityparsindex[i,j]];// + AbilityMean[j]; // or input the free parameter
+if(NpersonPreds) {
+  int count=0;
+  personPredsMean[i]=rep_row_vector(0.0, NpersonPreds); //init to zero, mean of person predictors
+  for( ri in 1:Nobs){
+    if(id[ri] == i){
+      count+=1;
+      personPredsMean[i]+=personPreds[ri,];
     }
   }
+  personPredsMean[i]= personPredsMean[i]/count;
+  Ability[i,j] += personPredsMean[i] * Abilitybeta[j,]; //when there are person predictors, apply the effect
+}
+}
+}
 }
 
 {
   row_vector[NitemPreds] predsmean; //create here for access later
 
   for(i in 1:Nitems){ //for every item
-    if(doApreds || doBpreds || doCpreds) { //if any covariates, compute covariate mean
-        int count=0;
-        itemPredsMean[i]=rep_row_vector(0.0, NitemPreds);
-        for( ri in 1:Nobs){
-          if(item[ri] == i){
-            count+=1;
-            itemPredsMean[i]+=itemPreds[ri,];
-          }
-        }
-        itemPredsMean[i]= itemPredsMean[i]/count;
+  if(doApreds || doBpreds || doCpreds) { //if any covariates, compute covariate mean
+  int count=0;
+  itemPredsMean[i]=rep_row_vector(0.0, NitemPreds);
+  for( ri in 1:Nobs){
+    if(item[ri] == i){
+      count+=1;
+      itemPredsMean[i]+=itemPreds[ri,];
     }
+  }
+  itemPredsMean[i]= itemPredsMean[i]/count;
+  }
 
-    if(fixedAlog[i]==0){ //if free A par and item predictors, compute average item effect
-      if(doApreds) A[i] += itemPredsMean[i,AitemPreds] * invspAbeta[itemSpecificBetas ? freeAref[i] : 1,]; //when there are person predictors, apply the effect
-      A[i]=log1p_exp(A[i]);
-    }
+  if(fixedAlog[i]==0){ //if free A par and item predictors, compute average item effect
+  if(doApreds) A[i] += itemPredsMean[i,AitemPreds] * invspAbeta[itemSpecificBetas ? freeAref[i] : 1,]; //when there are person predictors, apply the effect
+  A[i]=log1p_exp(A[i]);
+  }
 
-    if(fixedB[i]==0){ //if free B par and item predictors, compute average item effect
-      if(doBpreds)B[i] += itemPredsMean[i,BitemPreds] * Bbeta[itemSpecificBetas ? freeBref[i] : 1,]; //when there are person predictors, apply the effect
-    }
+  if(fixedB[i]==0){ //if free B par and item predictors, compute average item effect
+  if(doBpreds)B[i] += itemPredsMean[i,BitemPreds] * Bbeta[itemSpecificBetas ? freeBref[i] : 1,]; //when there are person predictors, apply the effect
+  }
 
-    if(fixedClogit[i]==0){ //if free A par and item predictors, compute average item effect
-      if(doCpreds) C[i] += itemPredsMean[i,CitemPreds] * logitCbeta[itemSpecificBetas ? freeCref[i] : 1,]; //when there are person predictors, apply the effect
-      C[i]=inv_logit(C[i])*.5;
-    }
+  if(fixedClogit[i]==0){ //if free A par and item predictors, compute average item effect
+  if(doCpreds) C[i] += itemPredsMean[i,CitemPreds] * logitCbeta[itemSpecificBetas ? freeCref[i] : 1,]; //when there are person predictors, apply the effect
+  C[i]=inv_logit(C[i])*.5;
+  }
 
-    if(fixedDlogit[i]==0){ //if free A par and item predictors, compute average item effect
-      if(doDpreds) D[i] += itemPredsMean[i,DitemPreds] * logitDbeta[itemSpecificBetas ? freeDref[i] : 1,]; //when there are person predictors, apply the effect
-      D[i]=inv_logit(D[i])*.5+.5;
-    }
+  if(fixedDlogit[i]==0){ //if free A par and item predictors, compute average item effect
+  if(doDpreds) D[i] += itemPredsMean[i,DitemPreds] * logitDbeta[itemSpecificBetas ? freeDref[i] : 1,]; //when there are person predictors, apply the effect
+  D[i]=inv_logit(D[i])*.5+.5;
+  }
 
   }
 } //close local block for predsmean
