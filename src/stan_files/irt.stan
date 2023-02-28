@@ -23,16 +23,14 @@ functions{
     return(b);
   }
 }
-data{ // Section specifies the user supplied data that is passed to the probability model
+data{ // Section specifies the user supplied data that i passed to the probability model
 int Nobs; //Total number of responses (yes or no answers) observed
 int Nitems; //Total number of unique items (questions)
 int Nsubs; //Total unique subjects (may be students or assessment occasions)
 int Nscales; //Total number of scales (e.g. German reading)
-int start; //Row of data to start computation on (for parallelisation)
-int end; //Row of data to end computation on (for parallelisation)
 int trainingLogical[Nobs]; //Which rows of data to use in target probability
 
-int rowIndexPar;
+int rowIndexPar; //specifies single row to use for target probability, used for getting stan to compute score contributions by row
 
 int id[Nobs]; //Subject identifier for each response
 int score[Nobs]; //Binary response array
@@ -53,6 +51,7 @@ int DitemPreds[NDitemPreds];
 int itemSpecificBetas;
 int doGenQuant;
 int integrateAbility;
+int integrateAbilityFixedSE;
 real integrateWidth;
 
 row_vector[NitemPreds] itemPreds[Nobs]; //Values of item predictors
@@ -81,7 +80,7 @@ int whichnotfixedB[Nitems-NfixedB];
 int whichnotfixedC[Nitems-NfixedC];
 int whichnotfixedD[Nitems-NfixedD];
 
-int freeAref[Nitems]; //for each item, if fixed then 0, or is cumsum of free items so we know which free par corresponds
+int freeAref[Nitems]; //for each item, if fixed then 0, or i cumsum of free items so we know which free par corresponds
 int freeBref[Nitems];
 int freeCref[Nitems];
 int freeDref[Nitems];
@@ -96,10 +95,10 @@ vector[Nitems] Cdata; //user specified (fixed) C values for each item (values ig
 vector[Nitems] Ddata; //user specified (fixed) D values for each item (values ignored for items with free parameter)
 matrix[Nsubs, Nscales] Abilitydata; //user input ability values for each subject * scale (ignored when free parameters exist)
 
-int fixedAMean; //Logical, is the mean of the (inverse softplus) A parameters user specified or estimated?
-int fixedBMean;//Logical, is the mean of the B parameters user specified or estimated?
-int fixedCMean;//Logical, is the mean of the (logit) C parameters user specified or estimated?
-int fixedDMean;//Logical, is the mean of the (logit) D parameters user specified or estimated?
+int fixedAMean; //Logical, i the mean of the (inverse softplus) A parameters user specified or estimated?
+int fixedBMean;//Logical, i the mean of the B parameters user specified or estimated?
+int fixedCMean;//Logical, i the mean of the (logit) C parameters user specified or estimated?
+int fixedDMean;//Logical, i the mean of the (logit) D parameters user specified or estimated?
 int fixedAbilityMean; //Logical, are the means of the ability parameters user specified or estimated?
 
 //priors for parameters:
@@ -123,7 +122,7 @@ vector[Nscales] AbilityMeandat; //mean of ability parameters
 }
 
 transformed data{ // Section contains calculations that only dependx on user input data
-int Ntrainingset = sum(trainingLogical[start:end]);
+int Ntrainingset = sum(trainingLogical[1:Nobs]);
 int trainingset[Ntrainingset];
 int counter=0;
 int doApreds = (Nitems-NfixedA) ? (NAitemPreds>0) : 0;
@@ -131,7 +130,7 @@ int doBpreds = (Nitems-NfixedB) ? (NBitemPreds>0) : 0;
 int doCpreds = (Nitems-NfixedC) ? (NCitemPreds>0) : 0;
 int doDpreds = (Nitems-NfixedD) ? (NDitemPreds>0) : 0;
 
-for(i in start:end){
+for(i in 1:Nobs){
   if(trainingLogical[i]==1){
     counter+=1;
     trainingset[counter] = i;
@@ -140,35 +139,32 @@ for(i in start:end){
 }
 
 parameters{ //Section specifying free parameters to be estimated
-vector[Nitems-NfixedA] invspApars;// inverse softplus of free A parameters
-vector[Nitems-NfixedB] Bpars;//free B parameters
-vector[Nitems-NfixedC] logitCpars;//logit of free C parameters
-vector[Nitems-NfixedD] logitDpars;//logit of free C parameters
 vector[Nsubs*Nscales-NfixedAbility] Abilitypars; //free ability parameters
-
-//when means of parameters are to be estimated
-vector[fixedAMean ? 0 : 1] invspAMeanpar; // mean of inverse softplus of A parameters, unless value fixed
-vector[fixedBMean ? 0 : 1] BMeanpar;//mean of B parameters, unless value fixed
-vector[fixedCMean ? 0 : 1] logitCMeanpar;//mean of logit C parameters, unless value fixed
-vector[fixedDMean ? 0 : 1] logitDMeanpar;//mean of logit D parameters, unless value fixed
 vector[fixedAbilityMean ? 0 : Nscales] AbilityMeanpar;//means of ability parameters, unless values fixed
-
-//when covariate effects are included
-vector[(Nitems-NfixedA) ? size(AitemPreds) : 0] invspAbeta[ itemSpecificBetas ? (Nitems-NfixedA) : 1];//regression weights for covariate effects on inverse softplus A params
-vector[(Nitems-NfixedB) ? size(BitemPreds) : 0] Bbeta[ itemSpecificBetas ? (Nitems-NfixedB) : 1];//regression weights for covariate effects on B params
-vector[(Nitems-NfixedC) ? size(CitemPreds) : 0] logitCbeta[itemSpecificBetas ? (Nitems-NfixedC) : 1];//regression weights for covariate effects on logit C params
-vector[(Nitems-NfixedD) ? size(CitemPreds) : 0] logitDbeta[itemSpecificBetas ? (Nitems-NfixedD) : 1];//regression weights for covariate effects on logit D params
 vector[(Nsubs*Nscales-NfixedAbility) ? NpersonPreds : 0] Abilitybeta[Nscales];//reg. weights for covariate effects on ability
-//vector[NstatePreds] statebeta[Nscales];//regression weights for state predictor effects on state difficulty / ability.
-//corr_matrix[Nscales] AbilityCorr;
-// vector[(Nscales * Nscales - Nscales) / 2] rawcor;
-vector[rowIndexPar ? 1:0] rowIndex;
+
+vector[Nitems-NfixedB] Bpars;//free B parameters
+vector[fixedBMean ? 0 : 1] BMeanpar;//mean of B parameters, unless value fixed
+vector[(Nitems-NfixedB) ? size(BitemPreds) : 0] Bbeta[ itemSpecificBetas ? (Nitems-NfixedB) : 1];//regression weights for covariate effects on B params
+
+vector[Nitems-NfixedA] invspApars;// inverse softplus of free A parameters
+vector[fixedAMean ? 0 : 1] invspAMeanpar; // mean of inverse softplus of A parameters, unless value fixed
+vector[(Nitems-NfixedA) ? size(AitemPreds) : 0] invspAbeta[ itemSpecificBetas ? (Nitems-NfixedA) : 1];//regression weights for covariate effects on inverse softplus A params
+
+vector[Nitems-NfixedC] logitCpars;//logit of free C parameters
+vector[fixedCMean ? 0 : 1] logitCMeanpar;//mean of logit C parameters, unless value fixed
+vector[(Nitems-NfixedC) ? size(CitemPreds) : 0] logitCbeta[itemSpecificBetas ? (Nitems-NfixedC) : 1];//regression weights for covariate effects on logit C params
+
+vector[Nitems-NfixedD] logitDpars;//logit of free C parameters
+vector[fixedDMean ? 0 : 1] logitDMeanpar;//mean of logit D parameters, unless value fixed
+vector[(Nitems-NfixedD) ? size(CitemPreds) : 0] logitDbeta[itemSpecificBetas ? (Nitems-NfixedD) : 1];//regression weights for covariate effects on logit D params
+
 }
 
 transformed parameters{ //this section combines any user input fixed values and free parameters
 
 vector[Nobs] p; //probability of observed response for responses in current parallel set
-matrix[Nsubs,Nscales] sAbilitySD=rep_matrix(0,Nsubs,Nscales); //abilitySD matrix (potentially mix of free parameters and fixed values)
+matrix[Nsubs,Nscales] sAbilitySD=rep_matrix(integrateAbilityFixedSE ? .1 : 0,Nsubs,Nscales); //abilitySD matrix (potentially mix of free parameters and fixed values)
 //vector[Nobs] AbilityNobs; //relevant ability for each response in current parallel set
 real ll;
 
@@ -183,74 +179,80 @@ matrix[Nscales,Nscales] AbilityCov = quad_form_diag(AbilityCorr,AbilitySD);
 matrix[Nscales,Nscales] AbilityChol = cholesky_decompose(AbilityCov+diag_matrix(rep_vector(1e-6,Nscales)));
 
 
-{ //local block for row index use
-int startx = rowIndexPar ? realToInt(rowIndex[1]) : start;
-int endx = rowIndexPar ? startx : end;
+{ //local block for row specific parameter computation
+vector[Nobs] sA;
+vector[Nobs] sB;
+vector[Nobs] sC;
+vector[Nobs] sD;
+vector[Nobs] sAbility;
 
 //probability computation
 for(doIntegrate in 0:integrateAbility){ //would be more efficient to re-write to avoid this loop and the recomputations
-for(i in startx:endx){
-  real sB=fixedB[item[i]] ? Bdata[item[i]] : Bpars[freeBref[item[i]]];// + BMean;
-  real sC=fixedClogit[item[i]] ? Cdata[item[i]] : logitCpars[freeCref[item[i]]];// +logitCMean;
-  real sD=fixedDlogit[item[i]] ? Ddata[item[i]] : logitDpars[freeDref[item[i]]];// + logitDMean;
-  real sA= fixedAlog[item[i]] ? Adata[item[i]] : invspApars[freeAref[item[i]]];// + invspAMean;
-  real sAbility= fixedAbilityLogical[id[i],scale[i]] ? Abilitydata[id[i],scale[i]] : Abilitypars[Abilityparsindex[id[i],scale[i]]];// + AbilityMean[Abilityparsscaleindex[Abilityparsindex[id[i],scale[i]]]];
+for(i in 1:Nobs){
+  if(!doIntegrate){ //calculate item and ability parameters with covariate effects, compute max a posteriori prob
+  sB[i]=fixedB[item[i]] ? Bdata[item[i]] : Bpars[freeBref[item[i]]];// + BMean;
+  sC[i]=fixedClogit[item[i]] ? Cdata[item[i]] : logitCpars[freeCref[item[i]]];// +logitCMean;
+  sD[i]=fixedDlogit[item[i]] ? Ddata[item[i]] : logitDpars[freeDref[item[i]]];// + logitDMean;
+  sA[i]= fixedAlog[item[i]] ? Adata[item[i]] : invspApars[freeAref[item[i]]];// + invspAMean;
+  sAbility[i]= fixedAbilityLogical[id[i],scale[i]] ? Abilitydata[id[i],scale[i]] : Abilitypars[Abilityparsindex[id[i],scale[i]]];// + AbilityMean[Abilityparsscaleindex[Abilityparsindex[id[i],scale[i]]]];
 
-  if(doApreds && !fixedAlog[item[i]]) sA += (itemPreds[i,AitemPreds] * invspAbeta[itemSpecificBetas ? freeAref[item[i]] : 1,]);
-  if(NpersonPreds && !fixedAbilityLogical[id[i],scale[i]]) sAbility += personPreds[i,] * Abilitybeta[scale[i],];
+  if(doApreds && !fixedAlog[item[i]]) sA[i] += (itemPreds[i,AitemPreds] * invspAbeta[itemSpecificBetas ? freeAref[item[i]] : 1,]);
+  if(NpersonPreds && !fixedAbilityLogical[id[i],scale[i]]) sAbility[i] += personPreds[i,] * Abilitybeta[scale[i],];
 
-  if(doBpreds && !fixedB[item[i]]) sB += (itemPreds[i,BitemPreds] * Bbeta[itemSpecificBetas ? freeBref[item[i]] : 1,]);
-  if(doCpreds && !fixedClogit[item[i]]) sC += (itemPreds[i,CitemPreds] * logitCbeta[itemSpecificBetas ? freeCref[item[i]] : 1,]);
-  if(doDpreds && !fixedDlogit[item[i]]) sD += (itemPreds[i,DitemPreds] * logitDbeta[itemSpecificBetas ? freeDref[item[i]] : 1,]);
+  if(doBpreds && !fixedB[item[i]]) sB[i] += (itemPreds[i,BitemPreds] * Bbeta[itemSpecificBetas ? freeBref[item[i]] : 1,]);
+  if(doCpreds && !fixedClogit[item[i]]) sC[i] += (itemPreds[i,CitemPreds] * logitCbeta[itemSpecificBetas ? freeCref[item[i]] : 1,]);
+  if(doDpreds && !fixedDlogit[item[i]]) sD[i] += (itemPreds[i,DitemPreds] * logitDbeta[itemSpecificBetas ? freeDref[item[i]] : 1,]);
 
-  if(!fixedAlog[item[i]]) sA=log1p_exp(sA);
-  if(!fixedClogit[item[i]]) sC=inv_logit(sC)*.5;
-  if(!fixedDlogit[item[i]]) sD=inv_logit(sD)*.5+.5;
+  if(!fixedAlog[item[i]]) sA[i]=log1p_exp(sA[i]);
+  if(!fixedClogit[item[i]]) sC[i]=inv_logit(sC[i])*.5;
+  if(!fixedDlogit[item[i]]) sD[i]=inv_logit(sD[i])*.5+.5;
 
-  if(!doIntegrate) p[i]= (1-score[i])+ (score[i] *2 -1) * (  sC + (sD-sC) /  (1.0 + exp((-sA * (sAbility- sB)))) );
+  p[i]= (1-score[i])+ (score[i] *2 -1) * (  sC[i] + (sD[i]-sC[i]) /  (1.0 + exp(sA[i] * (sAbility[i]- sB[i]))) );
+  } //end !doIntegrate
 
   if(integrateAbility && !doIntegrate){ //if in the JML phase, prepare ability SDs
-  real e2 = exp(-(sA * (sAbility - sB)));
+  real e2 = exp(-(sA[i] * (sAbility[i] - sB[i])));
   real e3 = 1 + e2;
   real e5 = 2 * score[i] - 1;
-  real e6 = sD - sC;
-  real e9 = (e6/e3 + sC) * e5 + 1 - score[i];
+  real e6 = sD[i] - sC[i];
+  real e9 = (e6/e3 + sC[i]) * e5 + 1 - score[i];
   real e10 = e9 * (e3^2);
 
-  sAbilitySD[Abilityparsindex[id[i],scale[i]]] += -(sA^2 * (inv(e10) - (2 * (e9 * e3) - e5 *
+  sAbilitySD[Abilityparsindex[id[i],scale[i]]] += -(sA[i]^2 * (inv(e10) - (2 * (e9 * e3) - e5 *
     e6) * e2/(e10^2)) * e5 * e2 * e6); //incremental addition to 2nd deriv
   }
 
-  if(integrateAbility && doIntegrate){ //if finished the JML phase and ability sd computation
-  for(ii in -1:1){ //but skip 0!
-  if(ii != 0){
-    p[i] +=  0.25 * ( //if mean, multiply by .5 else .25
-    (1-score[i])+ (score[i] *2 -1) * (
-      sC + (sD-sC) / ( 1.0 + exp((-sA * (
-        (sAbility + ii * sqrt(fabs(.5*inv(sAbilitySD[Abilityparsindex[id[i],scale[i]]][1]))) * integrateWidth) -
-        sB))))));
-  }
-  }
+
+  if(integrateAbility && doIntegrate){ //if finished the JML phase, use ability SD's for approx integral over ability
+    for(ii in -1:1){ //but skip 0!
+      if(ii != 0){
+        p[i] +=  0.25 * ( //if mean, multiply by .5 else .25
+        (1-score[i])+ (score[i] *2 -1) * (
+          sC[i] + (sD[i]-sC[i]) / ( 1.0 + exp((-sA[i] * (
+            (sAbility[i] + ii * sqrt(fabs(.5*inv(sAbilitySD[Abilityparsindex[id[i],scale[i]]][1]))) * integrateWidth) -
+            sB[i]))))));
+      }
+    }
   }
 
 } //end loop over rows
 
 if(integrateAbility && !doIntegrate) p = p * .5; //prepare p values for integration step
 
-} // end integration loop
+} // end integration yes / no loop
 
-if(doGenQuant && integrateAbility){ // finish computing subject sd's
-for(rowi in 1:Nsubs){
-  for(coli in 1:Nscales){
-    if(fixedAbilityLogical[rowi,coli]==1) sAbilitySD[rowi,coli] = sqrt(inv(-sAbilitySD[rowi,coli]));
+if(doGenQuant && integrateAbility){ // then finish computing subject sd's
+  for(rowi in 1:Nsubs){
+    for(coli in 1:Nscales){
+      if(fixedAbilityLogical[rowi,coli]==1) sAbilitySD[rowi,coli] = sqrt(inv(-sAbilitySD[rowi,coli]));
+    }
   }
 }
-}
 
-} //end local block of row index use
+} //end local block
 
-if(!rowIndexPar) ll= sum(log(p[trainingset]+1e-20)); //add log of the likelihood (sum of individual response probabilities) to target
-if(rowIndexPar) ll= log(p[realToInt(rowIndex[1])]+1e-20); //add log of the likelihood (sum of individual response probabilities) to target
+if(!rowIndexPar) ll= sum(log(p[trainingset]+1e-20)); //log of the likelihood (sum of individual response probabilities)
+if(rowIndexPar) ll= log(p[rowIndexPar]+1e-20); //individual log likelihood for use during cross validation
 }
 
 model{ // This section modifies the 'target' (output log probability), via 'target+' or '~' operators
@@ -258,28 +260,19 @@ model{ // This section modifies the 'target' (output log probability), via 'targ
 target+=ll;
 
 //following sections add the prior probability model for any free parameters
-if(NfixedA < Nitems){
-  if(dopriors) invspApars ~ normal(invspAMean,invspASD);
-}
-if(NfixedB < Nitems){
-  if(dopriors) Bpars ~ normal(BMean,BSD);
-}
-if(NfixedC < Nitems){
-  if(dopriors) logitCpars ~ normal(logitCMean,logitCSD);
-}
-if(NfixedD < Nitems){
-  if(dopriors) logitDpars ~ normal(logitDMean,logitDSD);
-}
-if(Nscales==1){
-  if(dopriors) Abilitypars ~ normal(AbilityMean[1],AbilitySD[1]); //AbilityMean[1]
-}
-if(Nscales > 1 && dopriors){
-  for(i in 1:Nsubs) {
-    int selector[Nscales - sum(fixedAbilityLogical[i,])] = which(fixedAbilityLogical[i,],0); // which scales does this subject have estimated pars for
-    if(size(selector)>0) Abilitypars[Abilityparsindex[i,selector] ] ~ multi_normal_cholesky(AbilityMean[selector],AbilityChol[selector,selector] ); //AbilityMean[selector] rep_vector(0,size(selector))
-  }
-}
 if(dopriors){
+  if(NfixedA < Nitems)  invspApars ~ normal(invspAMean,invspASD);
+  if(NfixedB < Nitems) Bpars ~ normal(BMean,BSD);
+  if(NfixedC < Nitems)logitCpars ~ normal(logitCMean,logitCSD);
+  if(NfixedD < Nitems) logitDpars ~ normal(logitDMean,logitDSD);
+
+  if(Nscales==1) Abilitypars ~ normal(AbilityMean[1],AbilitySD[1]); //AbilityMean[1]
+  if(Nscales > 1){
+    for(i in 1:Nsubs) {
+      int selector[Nscales - sum(fixedAbilityLogical[i,])] = which(fixedAbilityLogical[i,],0); // which scales does this subject have estimated pars for
+      if(size(selector)>0) Abilitypars[Abilityparsindex[i,selector] ] ~ multi_normal_cholesky(AbilityMean[selector],AbilityChol[selector,selector] ); //AbilityMean[selector] rep_vector(0,size(selector))
+    }
+  }
 
   if(doApreds) for(i in 1:NAitemPreds) invspAbeta[,i] ~ normal(0,betaScale);
   if(doBpreds) for(i in 1:NBitemPreds) Bbeta[,i] ~ normal(0,betaScale);
@@ -288,12 +281,12 @@ if(dopriors){
 
   for(i in 1:Nscales){
     if(num_elements(Abilitybeta[i,])) Abilitybeta[i,] ~ normal(0,betaScale);
-    //if(num_elements(statebeta[i,])) statebeta[i,] ~ normal(0,1);
   }
-}
+} // end dopriors
+
 }
 
-generated quantities{ //Section generates additional output that is not relevant for probability model
+generated quantities{ //Section generates additional output that i not relevant for probability model
 vector[Nobs] pcorrect; //probability of a correct response for each observation
 matrix[Nsubs,Nscales] Ability; //ability matrix (potentially mix of free parameters and fixed values)
 vector[(Nitems-NfixedA) ? NAitemPreds : 0] Abeta[ itemSpecificBetas ? (Nitems-NfixedA) : 1];//linearised regression weights for covariate effects on A params
@@ -322,7 +315,7 @@ C[whichnotfixedC] = logitCpars;// + logitCMean;
 D[whichnotfixedD] = logitDpars;// + logitDMean;
 
 
-for(i in start:end){
+for(i in 1:Nobs){
   if(score[i]==0) pcorrect[i] = 1-p[i]; else pcorrect[i]=p[i];
 }
 
@@ -331,7 +324,7 @@ for(i in 1:Nsubs){ //for every subject
 for(j in 1:Nscales){ //and every scale
 if(fixedAbilityLogical[i,j]==1){
   Ability[i,j] = Abilitydata[i,j];
-} else{ //if ability is user supplied, input it
+} else{ //if ability i user supplied, input it
 Ability[i,j] = Abilitypars[Abilityparsindex[i,j]];// + AbilityMean[j]; // or input the free parameter
 if(NpersonPreds) {
   int count=0;

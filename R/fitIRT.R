@@ -338,7 +338,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   iter=2000,cores=6,carefulfit=FALSE,
   ebayes=TRUE,ebayesmultiplier=2,ebayesFromFixed=FALSE,ebayesiter=1,
   estMeans=c('ability','A','B','C','D'),priors=TRUE,
-  integrateAbility=FALSE, integrateWidth= 1,
+  integrateAbility=FALSE, integrateWidth= 2, integrateAbilityFixedSE=FALSE,
   normalise=FALSE,normaliseScale=1,normaliseMean=0,
   dropPerfectScores=TRUE,trainingRows=1:nrow(dat),
   init=NA,Dpar=FALSE,tol=1e-2,...){
@@ -366,6 +366,8 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   #drop problem people and items
   if(dropPerfectScores)    dat <- dropPerfectScores(dat,scoreref. = scoreref.,itemref. = itemref.,idref. = idref.)
 
+  #sort data by subject
+  dat <- dat[order(get(idref.)),]
 
   #setup indices to map user specified categories to sequential integers for stan
   itemIndex <- data.table(original=as.character(dat[[itemref.]][!duplicated(dat[[itemref.]])]))
@@ -571,7 +573,6 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     AbilityMeandat=AbilityMeandat,
     AbilitySD=array(AbilitySD),
     AbilityCorr=AbilityCorr,
-    AMeanSD=AMeanSD,
     BMeanSD=BMeanSD,
     logitCMeanSD=logitCMeanSD,
     AbilityMeanSD=array(AbilityMeanSD),
@@ -584,8 +585,9 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     originalRow=dat$`.originalRow`,
     doGenQuant=0L,
     integrateAbility=as.integer(integrateAbility),
-    integrateWidth=integrateWidth)
-  )
+    integrateWidth=integrateWidth,
+    integrateAbilityFixedSE=as.integer(integrateAbilityFixedSE)
+  ))
 
   # browser()
   sdat$freeAref=array(as.integer(cumsum(1-as.numeric(sdat$fixedAlog))))
@@ -678,6 +680,8 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     return(fit)
   }
 
+  rm(dat)
+
   JMLseq <- list(
     if(carefulfit) list(est=c('A','B','C','D','Ability'),ebayes=FALSE,narrowPriors=TRUE),
     list(est=c('A','B','C','D','Ability'),ebayes=FALSE,narrowPriors=FALSE),
@@ -707,9 +711,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   if(ebayes) fit$fitML <- fitML
 
 
-  #normalise pars
-  if(normalise){
-
+  if(normalise){   #normalise pars
     for(i in 1:ncol(fit$pars$Ability)){
       selector <- rownames(fit$pars$B) %in% itemSetup$original[itemSetup$scale %in% i]
 
@@ -723,19 +725,9 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
       fit$pars$A[selector] <-  normpars$A
     }
   }
-  # if(normalise){
-  #   nsd <- apply(fit$pars$Ability,2,sd) / (normaliseScale)
-  #   nm <- apply(fit$pars$Ability,2,mean)
-  #
-  #   for(i in 1:ncol(fit$pars$Ability)){
-  #     fit$pars$Ability[,i] <- (fit$pars$Ability[,i] -nm[i])/ nsd[i] +normaliseMean
-  #     selector <- rownames(fit$pars$B) %in% itemSetup$original[itemSetup$scale %in% i]
-  #     fit$pars$B[selector]  <- ( fit$pars$B[selector]-nm[i]) / nsd[i] +normaliseMean
-  #     fit$pars$A[selector] <-  fit$pars$A[selector] * nsd[i]
-  #   }
-  # }
 
-  #
+  ###compute some output details
+
   fit$itemPars <- data.frame(item=rownames(fit$pars$B),A=fit$pars$A,B=fit$pars$B,C=fit$pars$C,D=fit$pars$D)
   colnames(fit$itemPars)[1] <- item
   if(ncol(itemPreds)>0){

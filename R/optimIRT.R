@@ -13,8 +13,18 @@ stan_reinitsf <- function(model, data,fast=FALSE){
 
 
 standata_specificsubjects <- function(standata, subindices){
-  standata$start <- as.integer(min(subindices))
-  standata$end <- as.integer(max(subindices))
+  # browser()
+  include <- which(standata$id %in% subindices)
+  sapply(c('id','score','item','scale','trainingLogical'),function(x) standata[[x]]<<-standata[[x]][include])
+  sapply(c('itemPreds','personPreds'),function(x) standata[[x]]<<-standata[[x]][include,,drop=FALSE])
+  standata$Nobs <- as.integer(length(include))
+  standata$end <- standata$Nobs
+  # standata$rowIndexPar <- 0L;
+  # browser()
+  # standata$start <- as.integer(min(subindices))
+  # standata$end <- as.integer(max(subindices))
+  # standata$start <- as.integer(min( (1:standata$Nobs)[standata$id %in% min(standata$id[subindices])] )) #first row of first subject in subindices
+  # standata$end <- as.integer(max( (1:standata$Nobs)[standata$id %in% max(standata$id[subindices])]] )) #last row of last subject in subindices
   return(standata)
 }
 
@@ -102,7 +112,7 @@ optimIRT <- function(standata, cores=6, split=TRUE,
   # askmore=FALSE
   split=TRUE
   # standata=sdat
-  standata$rowIndex <- array(as.integer(1:standata$Nobs))
+  # standata$rowIndex <- array(as.integer(1:standata$Nobs))
 
 
 
@@ -150,19 +160,12 @@ optimIRT <- function(standata, cores=6, split=TRUE,
   }
 
   if(cores > 1){ #for parallelised computation after fitting, if only single subject
-    splitby='rowIndex'
-
-    stanindices <- split(unique(standata[[splitby]]),sort(unique(standata[[splitby]]) %% (cores)))
-    # if(!split) stanindices <- parallel::clusterCall(clms,function(x) unique(standata[[splitby]]))
-    # if(!split && length(stanindices) < cores){
-    #   for(i in (length(stanindices)+1):cores){
-    #     stanindices[[i]] <- NA
-    #   }
-    # }
-
+    splitby='id'
+    stanindices <- split(sort(unique(standata[[splitby]])),sort(unique(standata[[splitby]]) %% (cores)))
 
     parcommands <- list(
-      "if(length(stanindices[[nodeid]]) < length(unique(standata[[splitby]]))) standata <- standata_specificsubjects(standata,stanindices[[nodeid]])",
+      "#if(length(stanindices[[nodeid]]) < length(unique(standata[[splitby]]))) ",
+      "standata <- standata_specificsubjects(standata,stanindices[[nodeid]])",
       "if(!1 %in% stanindices[[nodeid]]) standata$dopriors <- 0L",
       "g = eval(parse(text=paste0('gl','obalenv()')))", #avoid spurious cran check -- assigning to global environment only on created parallel workers.
       "assign('smf',bigIRT:::stan_reinitsf(bigIRT:::stanmodels$irt,standata),pos = g)",
@@ -249,8 +252,6 @@ optimIRT <- function(standata, cores=6, split=TRUE,
     } #end target func
 
   }#end multicore
-
-
 
 
   if(cores==1) npars=rstan::get_num_upars(smf)
