@@ -156,7 +156,7 @@ normaliseIRT <- function(B,Ability, A,normbase='Ability',normaliseScale=1,  norm
     logA <-  (logA -nm)/nsd +normaliseMean
   }
 
-return(list(A=A,B=B,Ability=Ability))
+  return(list(A=A,B=B,Ability=Ability))
 }
 
 
@@ -338,7 +338,8 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   iter=2000,cores=6,carefulfit=FALSE,
   ebayes=TRUE,ebayesmultiplier=2,ebayesFromFixed=FALSE,ebayesiter=1,
   estMeans=c('ability','A','B','C','D'),priors=TRUE,
-  integrateAbility=FALSE, integrateWidth= 2, integrateAbilityFixedSE=FALSE,
+  integrateEachAbility=FALSE, integrateEachAbilityFixedSE=FALSE,
+  mml=FALSE,NintegratePoints=5,
   normalise=FALSE,normaliseScale=1,normaliseMean=0,
   dropPerfectScores=TRUE,trainingRows=1:nrow(dat),
   init=NA,Dpar=FALSE,tol=1e-2,...){
@@ -407,25 +408,30 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
 
   #if getting priors from fixed pars, do this before dropping unnecessary items from itemSetup / AbilitySetup
   if(ebayesFromFixed){
-    personDat <- as.data.table(personDat)
-    itemDat <- as.data.table(itemDat)
-    sdat$dopriors <- 1L
+    if(length(personDat)==1 && !is.na(personDat)){
+      personDat <- as.data.table(personDat)
+      sdat$dopriors <- 1L
 
-    sdat$invspAMeandat <- mean(afunci(itemDat$A),na.rm=TRUE)
-    sdat$invspASD <- sd(afunci(itemDat$A),na.rm=TRUE)*ebayesmultiplier+1e-5
+      sdat$AbilityMeandat <- array(apply(personDat[,c(scaleIndex$original),with=FALSE],2,mean,na.rm=TRUE))
+      sdat$AbilitySD <- array(apply(personDat[,c(scaleIndex$original),with=FALSE],2,sd,na.rm=TRUE))*ebayesmultiplier+1e-5 #maybe need to better account for multiple scales here, but not that important...
+      sdat$AbilityCorr <- cor(personDat[,c(scaleIndex$original),with=FALSE],use='pairwise.complete.obs')
+    }
+    if(length(itemDat)==1 && !is.na(itemDat)){
+      itemDat <- as.data.table(itemDat)
+      sdat$dopriors <- 1L
 
-    sdat$BMeandat <- mean(itemDat$B,na.rm=TRUE)
-    sdat$BSD <- sd(itemDat$B,na.rm=TRUE)*ebayesmultiplier+1e-5
+      sdat$invspAMeandat <- mean(afunci(itemDat$A),na.rm=TRUE)
+      sdat$invspASD <- sd(afunci(itemDat$A),na.rm=TRUE)*ebayesmultiplier+1e-5
 
-    sdat$logitCMeandat <- mean(logit(itemDat$C+1e-8),na.rm=TRUE)
-    sdat$logitCSD <- sd(logit(itemDat$C+1e-8),na.rm=TRUE)*ebayesmultiplier+1e-5
+      sdat$BMeandat <- mean(itemDat$B,na.rm=TRUE)
+      sdat$BSD <- sd(itemDat$B,na.rm=TRUE)*ebayesmultiplier+1e-5
 
-    sdat$logitDMeandat <- mean(logit(itemDat$D+1e-8),na.rm=TRUE)
-    sdat$logitDSD <- sd(logit(itemDat$D+1e-8),na.rm=TRUE)*ebayesmultiplier+1e-5
+      sdat$logitCMeandat <- mean(logit(itemDat$C+1e-8),na.rm=TRUE)
+      sdat$logitCSD <- sd(logit(itemDat$C+1e-8),na.rm=TRUE)*ebayesmultiplier+1e-5
 
-    sdat$AbilityMeandat <- array(apply(personDat[,c(scaleIndex$original),with=FALSE],2,mean,na.rm=TRUE))
-    sdat$AbilitySD <- array(apply(personDat[,c(scaleIndex$original),with=FALSE],2,sd,na.rm=TRUE))*ebayesmultiplier+1e-5 #maybe need to better account for multiple scales here, but not that important...
-    sdat$AbilityCorr <- cor(personDat[,c(scaleIndex$original),with=FALSE],use='pairwise.complete.obs')
+      sdat$logitDMeandat <- mean(logit(itemDat$D+1e-8),na.rm=TRUE)
+      sdat$logitDSD <- sd(logit(itemDat$D+1e-8),na.rm=TRUE)*ebayesmultiplier+1e-5
+    }
   }
 
   #setup item structure to define fixed / free pars
@@ -584,9 +590,11 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     rowIndexPar=0L,
     originalRow=dat$`.originalRow`,
     doGenQuant=0L,
-    integrateAbility=as.integer(integrateAbility),
-    integrateWidth=integrateWidth,
-    integrateAbilityFixedSE=as.integer(integrateAbilityFixedSE)
+    integrateAbility=as.integer(integrateEachAbility),
+    integrateAbilityFixedSE=as.integer(integrateEachAbilityFixedSE),
+    NintegratePoints=as.integer(NintegratePoints),
+    integrateWeights=(statmod::gauss.quad.prob(n=NintegratePoints,dist='normal')$weights),
+    integratePoints=(statmod::gauss.quad.prob(n=NintegratePoints,dist='normal')$nodes)
   ))
 
   # browser()
@@ -656,13 +664,13 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     if(narrowPriors){
       sdat$dopriors <- 1L
       sdat$ASD <- .1
-      sdat$BSD <- 1
-      sdat$logitCSD <- .1
-      sdat$logitDSD <- .1
-      sdat$AbilitySD <- array(1,sdat$Nscales)
+      # sdat$BSD <- 1
+      sdat$logitCSD <- .01
+      sdat$logitDSD <- .01
+      # sdat$AbilitySD <- array(1,sdat$Nscales)
     }
     # browser()
-    if(!skipebayes) fit <- optimIRT(standata=sdat,Niter=iter,cores=cores,init = init,...)
+    if(!skipebayes) fit <- optimIRT(standata=sdat,Niter=iter,cores=cores,init = init,mml=mml,...)
 
 
 
@@ -674,8 +682,10 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     rownames(fit$pars$B)[itemIndex$new]<- itemIndex$original
     rownames(fit$pars$C)[itemIndex$new] <- itemIndex$original
     rownames(fit$pars$D)[itemIndex$new] <- itemIndex$original
-    rownames(fit$pars$Ability)[idIndex$new] <- idIndex$original
-    colnames(fit$pars$Ability)[scaleIndex$new] <- scaleIndex$original
+    if(!mml){
+      rownames(fit$pars$Ability)[idIndex$new] <- idIndex$original
+      colnames(fit$pars$Ability)[scaleIndex$new] <- scaleIndex$original
+    }
 
     return(fit)
   }
@@ -693,7 +703,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   for(i in 1:length(JMLseq)){
     ebayescounter <- 0
     finished=FALSE
-    if(i < length(JMLseq)) tol= basetol*10 else tol = basetol
+    if(i < length(JMLseq)) tol= basetol*ifelse(JMLseq[[i]]$narrowPriors,100,10) else tol = basetol
     if(!is.null(JMLseq[[i]])){
       if(JMLseq[[i]]$ebayes %in% 'TRUE') fitML <- fit #store fit before ebayes step
       while(!finished){
@@ -735,39 +745,41 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     fit$itemPars <- cbind(fit$itemPars, fit$pars$itemPredsMean)
   }
 
-  fit$personPars <- data.frame(id=rownames(fit$pars$Ability),fit$pars$Ability)
-  colnames(fit$personPars)[1] = id
-  if(ncol(personPreds)>0){
-    colnames(fit$pars$personPredsMean) <- colnames(personPreds)
-    fit$personPars <- cbind(fit$personPars, fit$pars$personPredsMean)
+  if(!mml){
+    fit$personPars <- data.frame(id=rownames(fit$pars$Ability),fit$pars$Ability)
+    colnames(fit$personPars)[1] = id
+    if(ncol(personPreds)>0){
+      colnames(fit$pars$personPredsMean) <- colnames(personPreds)
+      fit$personPars <- cbind(fit$personPars, fit$pars$personPredsMean)
+    }
   }
 
   ###Covariate effect summary
-  fit$CovariateEffects <- list()
+  fit$covariateEffects <- list()
   if(fit$dat$NpersonPreds > 0){
     colnames(fit$pars$Abilitybeta) <- colnames(personPreds)
-    fit$CovariateEffects$Ability <- fit$pars$Abilitybeta
-    fit$CovariateEffects$AbilityStd <- fit$pars$Abilitybeta * apply(fit$dat$personPreds,2,sd) / sd(fit$pars$Ability)
+    fit$covariateEffects$Ability <- fit$pars$Abilitybeta
+    fit$covariateEffects$AbilityStd <- fit$pars$Abilitybeta * apply(fit$dat$personPreds,2,sd) / sd(fit$pars$Ability)
   }
   if(fit$dat$NAitemPreds > 0 && pl > 1){
     dimnames(fit$pars$Abeta)[[2]] <- (AitemPreds)
-    fit$CovariateEffects$A <- fit$pars$Abeta
-    fit$CovariateEffects$AStd <- t(t(fit$pars$Abeta) * apply(fit$dat$itemPreds[,fit$dat$AitemPreds],2,sd) / sd(fit$pars$A))
+    fit$covariateEffects$A <- fit$pars$Abeta
+    fit$covariateEffects$AStd <- t(t(fit$pars$Abeta) * apply(fit$dat$itemPreds[,fit$dat$AitemPreds],2,sd) / sd(fit$pars$A))
   }
   if(fit$dat$NBitemPreds > 0){
     dimnames(fit$pars$Bbeta)[[2]] <- (BitemPreds)
-    fit$CovariateEffects$B<- fit$pars$Bbeta
-    fit$CovariateEffects$BStd <- t(t(fit$pars$Bbeta) * apply(fit$dat$itemPreds[,fit$dat$BitemPreds],2,sd) / sd(fit$pars$B))
+    fit$covariateEffects$B<- fit$pars$Bbeta
+    fit$covariateEffects$BStd <- t(t(fit$pars$Bbeta) * apply(fit$dat$itemPreds[,fit$dat$BitemPreds],2,sd) / sd(fit$pars$B))
   }
   if(fit$dat$NCitemPreds > 0 && pl > 2){
     dimnames(fit$pars$Cbeta)[[2]] <- (CitemPreds)
-    fit$CovariateEffects$C<- fit$pars$Cbeta
-    fit$CovariateEffects$CStd <- t(t(fit$pars$Cbeta) * apply(fit$dat$itemPreds[,fit$dat$CitemPreds],2,sd) / sd(fit$pars$C))
+    fit$covariateEffects$C<- fit$pars$Cbeta
+    fit$covariateEffects$CStd <- t(t(fit$pars$Cbeta) * apply(fit$dat$itemPreds[,fit$dat$CitemPreds],2,sd) / sd(fit$pars$C))
   }
   if(fit$dat$NDitemPreds > 0 && pl > 3){
     dimnames(fit$pars$Dbeta)[[2]] <- (DitemPreds)
-    fit$CovariateEffects$D<- fit$pars$Dbeta
-    fit$CovariateEffects$DStd <- t(t(fit$pars$Dbeta) * apply(fit$dat$itemPreds[,fit$dat$DitemPreds],2,sd) / sd(fit$pars$D))
+    fit$covariateEffects$D<- fit$pars$Dbeta
+    fit$covariateEffects$DStd <- t(t(fit$pars$Dbeta) * apply(fit$dat$itemPreds[,fit$dat$DitemPreds],2,sd) / sd(fit$pars$D))
   }
 
 

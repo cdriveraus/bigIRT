@@ -52,7 +52,9 @@ int itemSpecificBetas;
 int doGenQuant;
 int integrateAbility;
 int integrateAbilityFixedSE;
-real integrateWidth;
+int NintegratePoints;
+vector[NintegratePoints] integratePoints;
+vector[NintegratePoints] integrateWeights;
 
 row_vector[NitemPreds] itemPreds[Nobs]; //Values of item predictors
 row_vector[NpersonPreds] personPreds[Nobs]; //Values of person predictors
@@ -163,7 +165,7 @@ vector[(Nitems-NfixedD) ? size(CitemPreds) : 0] logitDbeta[itemSpecificBetas ? (
 
 transformed parameters{ //this section combines any user input fixed values and free parameters
 
-vector[Nobs] p; //probability of observed response for responses in current parallel set
+vector[Nobs] p=rep_vector(0,Nobs); //probability of observed response for responses in current parallel set
 matrix[Nsubs,Nscales] sAbilitySD=rep_matrix(integrateAbilityFixedSE ? .1 : 0,Nsubs,Nscales); //abilitySD matrix (potentially mix of free parameters and fixed values)
 //vector[Nobs] AbilityNobs; //relevant ability for each response in current parallel set
 real ll;
@@ -185,6 +187,14 @@ vector[Nobs] sB;
 vector[Nobs] sC;
 vector[Nobs] sD;
 vector[Nobs] sAbility;
+vector[Nobs] e1;
+vector[Nobs] e3;
+vector[Nobs] e4;
+vector[Nobs] e6;
+vector[Nobs] e7;
+vector[Nobs] e9;
+vector[Nobs] e11;
+int scoreCoef[Nobs];
 
 //probability computation
 for(doIntegrate in 0:integrateAbility){ //would be more efficient to re-write to avoid this loop and the recomputations
@@ -207,47 +217,45 @@ for(i in 1:Nobs){
   if(!fixedClogit[item[i]]) sC[i]=inv_logit(sC[i])*.5;
   if(!fixedDlogit[item[i]]) sD[i]=inv_logit(sD[i])*.5+.5;
 
-  p[i]= (1-score[i])+ (score[i] *2 -1) * (  sC[i] + (sD[i]-sC[i]) /  (1.0 + exp(sA[i] * (sAbility[i]- sB[i]))) );
+   e1[i] = sA[i] * (sAbility[i] - sB[i]);
+   e4[i] = sD[i] - sC[i];
+   e6[i] = e4[i] * inv_logit(e1[i]) + sC[i];
+   scoreCoef[i] =  (score[i] *2 -1);
+
+  if(!integrateAbility) p[i]= (1-score[i])+ scoreCoef[i] * e6[i] ;
   } //end !doIntegrate
 
   if(integrateAbility && !doIntegrate){ //if in the JML phase, prepare ability SDs
-  real e2 = exp(-(sA[i] * (sAbility[i] - sB[i])));
-  real e3 = 1 + e2;
-  real e5 = 2 * score[i] - 1;
-  real e6 = sD[i] - sC[i];
-  real e9 = (e6/e3 + sC[i]) * e5 + 1 - score[i];
-  real e10 = e9 * (e3^2);
-
-  sAbilitySD[Abilityparsindex[id[i],scale[i]]] += -(sA[i]^2 * (inv(e10) - (2 * (e9 * e3) - e5 *
-    e6) * e2/(e10^2)) * e5 * e2 * e6); //incremental addition to 2nd deriv
+    e3[i] = exp(-e1[i]);
+    e7[i] = 1 + e3[i];
+    e9[i] = e6[i] * scoreCoef[i] + 1 - score[i];
+    e11[i] = e9[i] * e7[i]^2;
+    sAbilitySD[id[i],scale[i]] += -(sA[i]^2 * ((scoreCoef[i] * e4[i] - 2 * (e9[i] * e7[i])) * e3[i]/e11[i]^2 + inv(e11[i])) * scoreCoef[i] * e4[i] * e3[i]); //incremental addition to 2nd deriv
   }
 
 
   if(integrateAbility && doIntegrate){ //if finished the JML phase, use ability SD's for approx integral over ability
-    for(ii in -1:1){ //but skip 0!
-      if(ii != 0){
-        p[i] +=  0.25 * ( //if mean, multiply by .5 else .25
-        (1-score[i])+ (score[i] *2 -1) * (
-          sC[i] + (sD[i]-sC[i]) / ( 1.0 + exp((-sA[i] * (
-            (sAbility[i] + ii * sqrt(fabs(.5*inv(sAbilitySD[Abilityparsindex[id[i],scale[i]]][1]))) * integrateWidth) -
-            sB[i]))))));
+      for(ii in 1:NintegratePoints){ //but skip 0!
+        p[i] +=  integrateWeights[ii] * ( //if mean, multiply by .5 else .25
+        (1-score[i]) + scoreCoef[i] * (
+          sC[i] + e4[i] * inv_logit(sA[i] * (
+            (sAbility[i] + integratePoints[ii] * sAbilitySD[id[i],scale[i]]) -
+            sB[i]))));
       }
     }
-  }
 
 } //end loop over rows
 
-if(integrateAbility && !doIntegrate) p = p * .5; //prepare p values for integration step
-
-} // end integration yes / no loop
-
-if(doGenQuant && integrateAbility){ // then finish computing subject sd's
-  for(rowi in 1:Nsubs){
+if(integrateAbility && !doIntegrate){ //compute subject sd's
+    for(rowi in 1:Nsubs){
     for(coli in 1:Nscales){
-      if(fixedAbilityLogical[rowi,coli]==1) sAbilitySD[rowi,coli] = sqrt(inv(-sAbilitySD[rowi,coli]));
+      if(!fixedAbilityLogical[rowi,coli]) sAbilitySD[rowi,coli] = sqrt(inv(fabs(sAbilitySD[rowi,coli])));
     }
   }
 }
+
+} // end integration yes / no loop
+
 
 } //end local block
 

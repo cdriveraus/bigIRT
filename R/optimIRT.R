@@ -103,7 +103,7 @@ scoreIRT <- function(fit, verbose=1L){
 }
 
 
-optimIRT <- function(standata, cores=6, split=TRUE,
+optimIRT <- function(standata, cores=6, mml=FALSE,split=TRUE,
   verbose=0,plot=0,tol=1e-2,Niter=2000,askmore=FALSE,stochastic=FALSE,init=NA,dohess=FALSE){
   # verbose=1
   # cores=8
@@ -155,7 +155,8 @@ optimIRT <- function(standata, cores=6, split=TRUE,
 
   if(cores==1){
     target = singletarget #we use this for importance sampling
-    smf <- stan_reinitsf(stanmodels$irt,standata)
+    if(!mml) smf <- stan_reinitsf(stanmodels$irt,standata)
+    if(mml) smf <- stan_reinitsf(stanmodels$irtmml,standata)
 
   }
 
@@ -168,7 +169,7 @@ optimIRT <- function(standata, cores=6, split=TRUE,
       "standata <- standata_specificsubjects(standata,stanindices[[nodeid]])",
       "if(!1 %in% stanindices[[nodeid]]) standata$dopriors <- 0L",
       "g = eval(parse(text=paste0('gl','obalenv()')))", #avoid spurious cran check -- assigning to global environment only on created parallel workers.
-      "assign('smf',bigIRT:::stan_reinitsf(bigIRT:::stanmodels$irt,standata),pos = g)",
+      paste0("assign('smf',bigIRT:::stan_reinitsf(bigIRT:::stanmodels$irt",ifelse(mml,'mml',''),",standata),pos = g)"),
       "NULL"
     )
 
@@ -247,7 +248,7 @@ optimIRT <- function(standata, cores=6, split=TRUE,
       }
       b=Sys.time()
       if(verbose > 0  && (iter %% verbose)==0) print(paste0('ll=',out[1],', mean p= ',exp(out/standata$Nobs),' , iter time = ',round(b-a,5),
-        ' , core times = ',paste(sapply(out2,function(x) round(attributes(x)$time,3)),collapse=', ')))
+        ' , core timerange = ',paste0(range(sapply(out2,function(x) round(attributes(x)$time,3))),collapse=' : ')))
       return(out)
     } #end target func
 
@@ -322,7 +323,8 @@ optimIRT <- function(standata, cores=6, split=TRUE,
   try({parallel::stopCluster(clms)},silent=TRUE)
 
   standata$doGenQuant = 1L #generate extra values now
-  smf <- stan_reinitsf(stanmodels$irt,standata)
+  if(!mml) smf <- stan_reinitsf(stanmodels$irt,standata)
+  if(mml) smf <- stan_reinitsf(stanmodels$irtmml,standata)
 
   return(list(optim=optimfit,
     parcov=parcov,
@@ -331,3 +333,4 @@ optimIRT <- function(standata, cores=6, split=TRUE,
     dat=standata))
 
 }
+

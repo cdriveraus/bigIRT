@@ -322,7 +322,7 @@ sgd <- function(init,fitfunc,whichignore=c(),nsubjects=NA,ndatapoints=NA,plot=FA
       # if(converged) browser()
       if(i==31){ #configure progress bar
         lpdiffbase <- lpdiff
-        pb <- txtProgressBar(min = 0, max = 100,style = 3, width = 50, char = "=", file = stderr())
+        pb <- txtProgressBar(min = 0, max = 100,style = 3, width = 10, char = "=", file = stderr())
         on.exit(add=TRUE,expr = {close(pb)})
       }
       setTxtProgressBar(pb,100*(1 - log(lpdiff/itertol) / log(lpdiffbase/itertol)))
