@@ -1,6 +1,7 @@
 // Item response theory based probability model
 // Square brackets indicate object dimensions, square brackets after name indicates array of specified object.
 // Objects are all declared at the top of the relevant sections and potentially modified below.
+
 functions{
   int[] which(int[] a, int condition){
     int Nmatches = 0;
@@ -55,6 +56,7 @@ int integrateAbilityFixedSE;
 int NintegratePoints;
 vector[NintegratePoints] integratePoints;
 vector[NintegratePoints] integrateWeights;
+int personSlipping;
 
 row_vector[NitemPreds] itemPreds[Nobs]; //Values of item predictors
 row_vector[NpersonPreds] personPreds[Nobs]; //Values of person predictors
@@ -96,12 +98,14 @@ vector[Nitems] Bdata; //user specified (fixed) B values for each item (values ig
 vector[Nitems] Cdata; //user specified (fixed) C values for each item (values ignored for items with free parameter)
 vector[Nitems] Ddata; //user specified (fixed) D values for each item (values ignored for items with free parameter)
 matrix[Nsubs, Nscales] Abilitydata; //user input ability values for each subject * scale (ignored when free parameters exist)
+matrix[Nsubs, Nscales] Slipdata; //user input ability values for each subject * scale (ignored when free parameters exist)
 
 int fixedAMean; //Logical, i the mean of the (inverse softplus) A parameters user specified or estimated?
 int fixedBMean;//Logical, i the mean of the B parameters user specified or estimated?
 int fixedCMean;//Logical, i the mean of the (logit) C parameters user specified or estimated?
 int fixedDMean;//Logical, i the mean of the (logit) D parameters user specified or estimated?
 int fixedAbilityMean; //Logical, are the means of the ability parameters user specified or estimated?
+int fixedSlipMean; //Logical, are the means of the ability parameters user specified or estimated?
 
 //priors for parameters:
 
@@ -111,6 +115,7 @@ real BSD;// standard deviation of the B parameters.
 real logitCSD; // standard deviation of the logit C parameters.
 real logitDSD; // standard deviation of the logit C parameters.
 vector[Nscales] AbilitySD; // standard deviation of the ability parameters.
+vector[Nscales] SlipSD; // standard deviation of the ability parameters.
 
 real betaScale; //sd of regression weights
 
@@ -121,6 +126,7 @@ real BMeandat; //mean of B parameters
 real logitCMeandat; //mean of logit C parameters
 real logitDMeandat; //mean of logit D parameters
 vector[Nscales] AbilityMeandat; //mean of ability parameters
+vector[Nscales] SlipMeandat; //mean of slip parameters
 }
 
 transformed data{ // Section contains calculations that only dependx on user input data
@@ -142,7 +148,9 @@ for(i in 1:Nobs){
 
 parameters{ //Section specifying free parameters to be estimated
 vector[Nsubs*Nscales-NfixedAbility] Abilitypars; //free ability parameters
+vector[personSlipping ? Nsubs*Nscales-NfixedAbility : 0] Slippars; //free slip parameters
 vector[fixedAbilityMean ? 0 : Nscales] AbilityMeanpar;//means of ability parameters, unless values fixed
+vector[fixedSlipMean ? 0 : Nscales] SlipMeanpar;//means of slip parameters, unless values fixed
 vector[(Nsubs*Nscales-NfixedAbility) ? NpersonPreds : 0] Abilitybeta[Nscales];//reg. weights for covariate effects on ability
 
 vector[Nitems-NfixedB] Bpars;//free B parameters
@@ -173,8 +181,9 @@ real ll;
 real invspAMean = fixedAMean ? invspAMeandat : invspAMeanpar[1]; //mean of inverse softplus A params
 real BMean = fixedBMean ? BMeandat : BMeanpar[1]; //mean of B params
 real logitCMean = fixedCMean ? logitCMeandat : logitCMeanpar[1]; //mean of logit C params
-real logitDMean = fixedDMean ? logitDMeandat : logitDMeanpar[1]; //mean of logit C params
+real logitDMean = fixedDMean ? logitDMeandat : logitDMeanpar[1]; //mean of logit D params
 vector[Nscales] AbilityMean = fixedAbilityMean ? AbilityMeandat : AbilityMeanpar; //means of ability parameters
+vector[Nscales] SlipMean = fixedSlipMean ? SlipMeandat : SlipMeanpar; //means of slip parameters
 
 // matrix[Nscales,Nscales] AbilityCorr=tcrossprod(constraincorsqrt(rawcor,Nscales));
 matrix[Nscales,Nscales] AbilityCov = quad_form_diag(AbilityCorr,AbilitySD);
@@ -187,6 +196,7 @@ vector[Nobs] sB;
 vector[Nobs] sC;
 vector[Nobs] sD;
 vector[Nobs] sAbility;
+vector[Nobs] sSlip;
 vector[Nobs] e1;
 vector[Nobs] e3;
 vector[Nobs] e4;
@@ -205,6 +215,7 @@ for(i in 1:Nobs){
   sD[i]=fixedDlogit[item[i]] ? Ddata[item[i]] : logitDpars[freeDref[item[i]]];// + logitDMean;
   sA[i]= fixedAlog[item[i]] ? Adata[item[i]] : invspApars[freeAref[item[i]]];// + invspAMean;
   sAbility[i]= fixedAbilityLogical[id[i],scale[i]] ? Abilitydata[id[i],scale[i]] : Abilitypars[Abilityparsindex[id[i],scale[i]]];// + AbilityMean[Abilityparsscaleindex[Abilityparsindex[id[i],scale[i]]]];
+  if(personSlipping) sSlip[i]= fixedAbilityLogical[id[i],scale[i]] ? Slipdata[id[i],scale[i]] : Slippars[Abilityparsindex[id[i],scale[i]]];// + AbilityMean[Abilityparsscaleindex[Abilityparsindex[id[i],scale[i]]]];
 
   if(doApreds && !fixedAlog[item[i]]) sA[i] += (itemPreds[i,AitemPreds] * invspAbeta[itemSpecificBetas ? freeAref[item[i]] : 1,]);
   if(NpersonPreds && !fixedAbilityLogical[id[i],scale[i]]) sAbility[i] += personPreds[i,] * Abilitybeta[scale[i],];
@@ -216,6 +227,7 @@ for(i in 1:Nobs){
   if(!fixedAlog[item[i]]) sA[i]=log1p_exp(sA[i]);
   if(!fixedClogit[item[i]]) sC[i]=inv_logit(sC[i])*.5;
   if(!fixedDlogit[item[i]]) sD[i]=inv_logit(sD[i])*.5+.5;
+  if(personSlipping) sD[i] += inv_logit(sSlip[i])*.5+.5 - 1;
 
    e1[i] = sA[i] * (sAbility[i] - sB[i]);
    e4[i] = sD[i] - sC[i];
@@ -274,7 +286,11 @@ if(dopriors){
   if(NfixedC < Nitems)logitCpars ~ normal(logitCMean,logitCSD);
   if(NfixedD < Nitems) logitDpars ~ normal(logitDMean,logitDSD);
 
-  if(Nscales==1) Abilitypars ~ normal(AbilityMean[1],AbilitySD[1]); //AbilityMean[1]
+  if(Nscales==1){
+    Abilitypars ~ normal(AbilityMean[1],AbilitySD[1]); //AbilityMean[1]
+    Slippars ~ normal(SlipMean[1],SlipSD[1]); //AbilityMean[1]
+
+  }
   if(Nscales > 1){
     for(i in 1:Nsubs) {
       int selector[Nscales - sum(fixedAbilityLogical[i,])] = which(fixedAbilityLogical[i,],0); // which scales does this subject have estimated pars for
