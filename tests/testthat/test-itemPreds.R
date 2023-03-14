@@ -12,7 +12,7 @@ cores=2
     itempreds = matrix(rnorm(Ni*3,0,.2),Ni,3)
     predBeta=matrix(c(1,2,-2),1,3)
 
-    dat <- bigIRT:::IRTsim(Nsubs = Np,Nitems = Ni,Nscales = 1,
+    dat <- simIRT(Nsubs = Np,Nitems = Ni,Nscales = 1,
       logitCMean = -20,logitCSD = .0,AMean = 2,ASD = .25,
       BMean=0,BSD = .1,
       itemPreds = itempreds,
@@ -71,7 +71,7 @@ cores=2
     itempreds = matrix(rnorm(Ni*3,0,.2),Ni,3)
     predBeta=matrix(c(.1,.2,-.2),1,3)
 
-    dat <- bigIRT:::IRTsim(Nsubs = Np,Nitems = Ni,Nscales = 1,
+    dat <- simIRT(Nsubs = Np,Nitems = Ni,Nscales = 1,
       logitCMean = -20,logitCSD = .0,AMean = 1,ASD = .1,
       BMean=0,BSD = .1,
       itemPreds = itempreds,
@@ -127,7 +127,7 @@ cores=2
     itempreds = matrix(rnorm(Ni*3,0,.2),Ni,3)
     predBeta=matrix(c(.1,.2,-.2),1,3)
 
-    dat <- bigIRT:::IRTsim(Nsubs = Np,Nitems = Ni,Nscales = 1,
+    dat <- simIRT(Nsubs = Np,Nitems = Ni,Nscales = 1,
       logitCMean = -1,logitCSD = .2,AMean = 1,ASD = .1,
       BMean=0,BSD = 1,
       itemPreds = itempreds,

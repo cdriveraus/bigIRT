@@ -10,7 +10,7 @@ if(identical(Sys.getenv("NOT_CRAN"), "true")& .Machine$sizeof.pointer != 4){
     require(ggplot2)
     Np=5000
     Ni=30
-    dat <- bigIRT:::IRTsim(Nsubs = Np,Nitems = Ni,Nscales = 1,
+    dat <- simIRT(Nsubs = Np,Nitems = Ni,Nscales = 1,
       logitCMean = -20,logitCSD = .0,AMean = 1,ASD = .2,
       BMean=0,BSD = 1,
       # personPreds = matrix(rnorm(Np)),

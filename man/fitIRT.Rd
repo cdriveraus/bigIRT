@@ -14,22 +14,27 @@ fitIRT(
   personDat = NA,
   personPreds = character(),
   itemDat = NA,
-  itemPreds = character(),
-  statePreds = character(),
+  AitemPreds = character(),
+  BitemPreds = character(),
+  CitemPreds = character(),
+  DitemPreds = character(),
   itemSpecificBetas = FALSE,
   betaScale = 10,
   invspAMeandat = 0.542,
   invspASD = 0.5,
   BMeandat = 0,
-  BSD = 2,
+  BSD = 10,
   logitCMeandat = -4,
   logitCSD = 2,
+  logitDMeandat = 4,
+  logitDSD = 2,
   AbilityMeandat = array(0, dim = c(length(unique(dat[[scale]])))),
   AbilitySD = array(10, dim = c(length(unique(dat[[scale]])))),
   AbilityCorr = diag(1, c(length(unique(dat[[scale]])))),
   AMeanSD = 1,
   BMeanSD = BSD,
   logitCMeanSD = logitCSD,
+  logitDMeanSD = logitDSD,
   AbilityMeanSD = array(1, dim = c(length(unique(dat[[scale]])))),
   iter = 2000,
   cores = 6,
@@ -38,23 +43,25 @@ fitIRT(
   ebayesmultiplier = 2,
   ebayesFromFixed = FALSE,
   ebayesiter = 1,
-  estMeans = FALSE,
+  estMeans = c("ability", "A", "B", "C", "D"),
   priors = TRUE,
-  normalise = TRUE,
+  integrateEachAbility = FALSE,
+  integrateEachAbilityFixedSE = FALSE,
+  mml = FALSE,
+  NintegratePoints = 5,
+  normalise = FALSE,
   normaliseScale = 1,
   normaliseMean = 0,
   dropPerfectScores = TRUE,
   trainingRows = 1:nrow(dat),
   init = NA,
   Dpar = FALSE,
+  tol = 0.01,
   ...
 )
 }
 \arguments{
 \item{...}{}
-}
-\value{
-
 }
 \description{
 Title
@@ -62,21 +69,15 @@ Title
 \examples{
 #Generate some data (here 2pl model
 require(data.table)
-dat <- bigIRT:::IRTsim(Nsubs = 50,Nitems = 100,Nscales = 1,
+dat <- simIRT(Nsubs = 50,Nitems = 100,Nscales = 1,
   logitCMean = -10,logitCSD = 0,AMean = 1,ASD = .3,
   BMean=0,BSD = .5,
   AbilityMean = 0,AbilitySD = 1)
 
-#convert to wide for TAM
-wdat <- data.frame(dcast(data.table(dat$dat),formula = 'id ~ Item',value.var='score')[,-1])
-
-
-#fit using TAM
-require(TAM)
-tfit <-tam.mml.2pl(resp = wdat,est.variance = TRUE)
-
-
 #fit using bigIRT
 fit <- fitIRT(dat$dat,cores=2,score = 'score',id = 'id',
-  scale = 'Scale',item = 'Item', pl=2,dohess=TRUE)
+  scale = 'Scale',item = 'Item', pl=2)
+
+  print(fit$personPars)
+  print(fit$itemPars)
 }

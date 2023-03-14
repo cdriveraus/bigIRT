@@ -8,7 +8,7 @@ Nsubs=2000
 itemgrade=data.table(itemgrade=rep(-2:2,each=Nitems/5))
 persongrade=data.table(persongrade=rep(-2:2,each=Nsubs/5))
 
-dat <- bigIRT:::IRTsim(Nsubs = Nsubs,Nitems = Nitems,Nscales = 1,
+dat <- simIRT(Nsubs = Nsubs,Nitems = Nitems,Nscales = 1,
   logitCMean = -10,logitCSD = .03,AMean = 1,ASD = .3,
   BMean=0,BSD = 1,
   itemPreds = itemgrade,BitemPredEffects = matrix(2),

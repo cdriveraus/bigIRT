@@ -171,25 +171,26 @@ afunci <- function(x) log(exp(x)-1)
 
 dropPerfectScores <- function(dat,scoreref.='score',itemref.='Item',idref.='id',tol.=.001){
   if(!'data.table' %in% class(dat)) stop('Not a data.table!')
-  dt <- dat
-  dt[,.originalRow:=1:.N]
+
   dropping <- TRUE
   while(dropping){
     dropping <- FALSE
-    dt[,itemMean:=mean(get(scoreref.)),by=itemref.]
-    if(any((abs(dt$itemMean-.5)+tol.)>= .5)){
+    dat[,itemMean:=mean(get(scoreref.)),by=itemref.]
+    if(any((abs(dat$itemMean-.5)+tol.)>= .5)){
       dropping <- TRUE
       warning('Dropping items with all 0 or 1',immediate. = TRUE)
-      dt <- dt[(abs(itemMean-.5)+tol.)< .5,]
+      dat <- dat[(abs(itemMean-.5)+tol.)< .5,]
     }
-    dt[,personMean:= mean(get(scoreref.)),by=idref.]
-    if(any((abs(dt$personMean-.5)+tol.)>= .5)){
+    dat[,personMean:= mean(get(scoreref.)),by=idref.]
+    if(any((abs(dat$personMean-.5)+tol.)>= .5)){
       warning('Dropping subjects with all 0 or 1',immediate. = TRUE)
       dropping <- TRUE
-      dt <-dt[(abs(personMean-.5)+tol.)< .5,]
+      dat <-dat[(abs(personMean-.5)+tol.)< .5,]
     }
   }
-  return(dat[dt$`.originalRow`,])
+  dat[,itemMean:=NULL]
+  dat[,personMean:=NULL]
+  return(dat)
 }
 
 fitIRTstepwise <- function(dat,itemsteps,item='Item',id='id',normalise=FALSE,ebayes=FALSE,...){ #need to rethink...
@@ -308,7 +309,7 @@ fitIRTstepwise <- function(dat,itemsteps,item='Item',id='id',normalise=FALSE,eba
 #' @examples
 #' #Generate some data (here 2pl model
 #' require(data.table)
-#' dat <- bigIRT:::IRTsim(Nsubs = 50,Nitems = 100,Nscales = 1,
+#' dat <- simIRT(Nsubs = 50,Nitems = 100,Nscales = 1,
 #'   logitCMean = -10,logitCSD = 0,AMean = 1,ASD = .3,
 #'   BMean=0,BSD = .5,
 #'   AbilityMean = 0,AbilitySD = 1)

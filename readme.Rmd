@@ -25,7 +25,7 @@ remotes::install_github('cdriveraus/bigIRT', INSTALL_opts = "--no-multiarch", de
 library(bigIRT)
 #Generate some data (here 2pl model
 require(data.table)
-dat <- bigIRT:::IRTsim(Nsubs = 1000,Nitems = 100,Nscales = 1,
+dat <- simIRT(Nsubs = 1000,Nitems = 100,Nscales = 1,
   logitCMean = -10,logitCSD = 0,AMean = 1,ASD = .3,
   BMean=0,BSD = .5,
   AbilityMean = 0,AbilitySD = 1)

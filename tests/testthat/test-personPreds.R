@@ -15,7 +15,7 @@ if(identical(Sys.getenv("NOT_CRAN"), "true")& .Machine$sizeof.pointer != 4){
     AbilitySD = .8
 
 
-    dat <- bigIRT:::IRTsim(Nsubs = Np,Nitems = Ni,Nscales = 1,
+    dat <- simIRT(Nsubs = Np,Nitems = Ni,Nscales = 1,
       logitCMean = -20,logitCSD = .0,AMean = 2,ASD = .25,
       BMean=0,BSD = .5,AbilitySD = AbilitySD,
       # itemPreds = itempreds,

@@ -8,7 +8,7 @@ if(identical(Sys.getenv("NOT_CRAN"), "true")& .Machine$sizeof.pointer != 4){
 
     require(data.table)
     Np=500
-    dat <- bigIRT:::IRTsim(Nsubs = Np,Nitems = 20,Nscales = 1,
+    dat <- simIRT(Nsubs = Np,Nitems = 20,Nscales = 1,
       logitCMean = -20,logitCSD = .0,AMean = 1,ASD = .0,
       BMean=0,BSD = .5,
       # personPreds = matrix(rnorm(Np)), AbilityPredEffects = matrix(c(1,-0.5,.5),6,1),
@@ -59,7 +59,7 @@ if(identical(Sys.getenv("NOT_CRAN"), "true")& .Machine$sizeof.pointer != 4){
         if(truePL==3) logitCMean = -2
 
         Np=500
-        dat <- bigIRT:::IRTsim(Nsubs = Np,Nitems = Nitems,Nscales = 1,
+        dat <- simIRT(Nsubs = Np,Nitems = Nitems,Nscales = 1,
           logitCMean = ifelse(truePL > 2,-2,-20),logitCSD = .5,
           AMean = 1,ASD = ifelse(truePL > 1,.2,0),
           BMean=0,BSD = 1,

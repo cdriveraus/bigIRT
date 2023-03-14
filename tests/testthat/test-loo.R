@@ -8,7 +8,7 @@ if(identical(Sys.getenv("NOT_CRAN"), "true")& .Machine$sizeof.pointer != 4){
     set.seed(1)
 
     require(data.table)
-    dat <- bigIRT:::IRTsim(Nsubs = 100,Nitems = 100,Nscales = 1,
+    dat <- simIRT(Nsubs = 100,Nitems = 100,Nscales = 1,
       logitCMean = -20,logitCSD = .01,AMean = 1,ASD = .0,
       BMean=0,BSD = .5,
       AbilityMean = 0,AbilitySD = 1)
@@ -54,7 +54,7 @@ if(FALSE){#CV comparison
   for(i in 1:n){
   nsubs=1000
   intelligence <- rnorm(nsubs)
-  dat <- bigIRT:::IRTsim(Nsubs = nsubs,Nitems = 20,Nscales = 1,
+  dat <- simIRT(Nsubs = nsubs,Nitems = 20,Nscales = 1,
     logitCMean = -20,logitCSD = .01,AMean = 1,ASD = .0,
     personPreds = cbind(intelligence),AbilityPredEffects = matrix(1),
     BMean=0,BSD = .5,
