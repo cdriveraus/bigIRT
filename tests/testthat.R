@@ -1,4 +1,4 @@
 library(testthat)
-library(ctsem)
+library(bigIRT)
 pdf(NULL)
- test_check("ctsem")
+ test_check("bigIRT")

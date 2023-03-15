@@ -615,7 +615,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
       sdat$Bdata = fit$pars$B
       sdat$Cdata = fit$pars$C
       sdat$Ddata = fit$pars$D
-      sdat$Abilitydata = fit$pars$Ability
+      if(!mml) sdat$Abilitydata = fit$pars$Ability
       init = fit$optim$par
     }
 
@@ -655,7 +655,6 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
 
         sdat$AbilityCorr= cor(fit$pars$Ability) #inconsistency here -- based on overall ability, rather than conditional ability as for sd / mean.
       }
-
       if(any(is.na(c(sdat$BSD,sdat$invspASD,sdat$logitCSD,sdat$AbilitySD)))){
         skipebayes <- TRUE
         warning('NA when computing item sd parameters, ebayes set to FALSE')

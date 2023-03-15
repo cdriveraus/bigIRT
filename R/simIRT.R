@@ -292,7 +292,7 @@ simIRT <- function(Nsubs=100,Nitems=200,Nscales=3, NitemsAnswered=Nitems,
   }
 
 
-  C <- ctsem:::inv_logit(logitC)
+  C <- inv_logit(logitC)
 
 
   for(si in 1:Nscales){
