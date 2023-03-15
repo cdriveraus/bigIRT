@@ -643,7 +643,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
       }
 
 
-      if(length(fit$pars$Abilitypars) > 2){
+      if(!mml && length(fit$pars$Abilitypars) > 2){
 
         sdat$AbilityMeandat <- array(sapply(1:Nscales,function(x){
           mean(fit$pars$Abilitypars[sdat$Abilityparsscaleindex %in% x])
@@ -722,7 +722,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   if(ebayes) fit$fitML <- fitML
 
 
-  if(normalise){   #normalise pars
+  if(normalise && !mml){   #normalise pars
     for(i in 1:ncol(fit$pars$Ability)){
       selector <- rownames(fit$pars$B) %in% itemSetup$original[itemSetup$scale %in% i]
 
@@ -736,6 +736,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
       fit$pars$A[selector] <-  normpars$A
     }
   }
+  if(normalise && mml) warning('Cannot normalize mml currently')
 
   ###compute some output details
 
