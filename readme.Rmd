@@ -4,6 +4,9 @@ author: "Charles Driver"
 date: "12/05/2021"
 output: github_document
 ---
+  <!-- badges: start -->
+  [![R-CMD-check](https://github.com/cdriveraus/bigIRT/actions/workflows/R-CMD-check.yaml/badge.svg)](https://github.com/cdriveraus/bigIRT/actions/workflows/R-CMD-check.yaml)
+  <!-- badges: end -->
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)

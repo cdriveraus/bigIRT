@@ -3,6 +3,10 @@ bigIRT
 Charles Driver
 12/05/2021
 
+<!-- badges: start -->
+[![R-CMD-check](https://github.com/cdriveraus/bigIRT/actions/workflows/R-CMD-check.yaml/badge.svg)](https://github.com/cdriveraus/bigIRT/actions/workflows/R-CMD-check.yaml)
+<!-- badges: end -->
+
 ## Install
 
 ``` r
