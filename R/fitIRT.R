@@ -1,4 +1,12 @@
-birtCheckParsOutput <- function(fit){
+
+
+inv_logit <- function(x) exp(x)/(1+exp(x))
+logit <- function(x)  log(x)-log((1-x))
+
+afunc <- function(x) log1p(exp(x))
+afunci <- function(x) log(exp(x)-1)
+
+checkP <- function(fit){ #for checking max a posteriori model parameters using R based calc instead of stan based
   p=rep(NA,fit$dat$Nobs)
   for(i in 1:length(p)){
     p[i] <- fit$itemPars$C[fit$dat$item[i]] + (1.0-fit$itemPars$C[fit$dat$item[i]]) / ( 1.0 + exp(
@@ -13,98 +21,99 @@ birtCheckParsOutput <- function(fit){
 }
 
 
-birtRunGeneratedQuantities<- function(fit){
+# birtRunGeneratedQuantities<- function(fit){
+#
+#   log1p_exp=function(x) log1p(exp(x))
+#
+#   genq <- function(){
+#     browser()
+#
+#     A=rep(NA,Nitems) # item A values
+#     B=rep(NA,Nitems) #item B values
+#     C=rep(NA,Nitems) #item C values
+#     #put the user supplied fixed values into the item parameter objects
+#     A[fixedA] = Adata[fixedA];
+#     B[fixedB] = Bdata[fixedB];
+#     C[fixedC] = Cdata[fixedC];
+#
+#     #put the free parameters into the item parameter objects
+#     A[whichnotfixedA] = invspApars;
+#     B[whichnotfixedB] = Bpars;
+#     C[whichnotfixedC] = logitCpars;
+#
+#
+#     # for(i in 1:Nsubs){ #for every subject
+#     #   for(j in 1:Nscales){ #and every scale
+#     #     if(fixedAbilityLogical[i,j]==1){
+#     #       Ability[i,j] = Abilitydata[i,j];
+#     #     } else{ #if ability is user supplied, input it
+#     #       Ability[i,j] = Abilitypars[Abilityparsindex[i,j]]; # or input the free parameter
+#     #       if(NpersonPreds) {
+#     #         predsmean=rep(0, NpersonPreds); #compute mean of person predictors
+#     #         count=0;
+#     #         for( ri in 1:Nobs){
+#     #           if(id[i] == i){
+#     #             count=count+1;
+#     #             predsmean=predsmean+personPreds[i,];
+#     #           }
+#     #         }
+#     #         predsmean= predsmean/count;
+#     #         Ability[i,j] = Ability[i,j] +predsmean * Abilitybeta[j,]; #when there are person predictors, apply the effect
+#     #       }
+#     #     }
+#     #   }
+#     # }
+#
+#
+#     for(i in 1:Nitems){ #for every item
+#       count=0;
+#       predsmean=rep(0,NitemPreds);
+#       for( ri in 1:Nobs){
+#         if(item[ri] == i){
+#           count=count+1;
+#           predsmean=predsmean+itemPreds[ri,];
+#         }
+#       }
+#       predsmean= predsmean/count;
+#       if(fixedAlog[i]==0){ #if free A par and item predictors, compute average item effect
+#         A[i] =A[i]+ matrix(predsmean,1) %*% t(invspAbeta[ifelse(itemSpecificBetas==1,freeAref[item[i]],1),,drop=FALSE]); #when there are person predictors, apply the effect
+#         A[i]=log1p_exp(A[i]);
+#       }
+#       if(fixedB[i]==0){ #if free B par and item predictors, compute average item effect
+#         B[i] = B[i] + matrix(predsmean,1) %*% t(Bbeta[ifelse(itemSpecificBetas==1, freeBref[item[i]], 1),,drop=F]); #when there are person predictors, apply the effect
+#       }
+#     }
+#
+#
+#     #
+#     #       #linearised regression weights for reporting
+#     #       if(doApreds){
+#     #         if(size(Abeta)==1){
+#     #           Abeta[1,] = ((log1p_exp(mean(invspApars)+invspAbeta[1,]*.01))-(log1p_exp(mean(invspApars)-invspAbeta[1,]*.01)))/.02;
+#     #         }
+#     #         if(size(Abeta)>1){
+#     #           for(i in 1:size(Abeta)){
+#     #             Abeta[i,] = ((log1p(exp(invspApars[i])+invspAbeta[i,]*.01))-(log1p(exp(invspApars[i])-invspAbeta[i,]*.01)))/.02;
+#     #           }
+#     #         }
+#     #       }
+#     #
+#     #       if(doCpreds){
+#     #         if(size(Cbeta)==1)   Cbeta[1,] = ((inv_logit(mean(logitCpars))+logitCbeta[1,]*.01)-(inv_logit(mean(logitCpars))-logitCbeta[1,]*.01))/.02;
+#     #         if(size(Cbeta)>1){
+#     #           for(i in 1:size(Cbeta)){
+#     #             Cbeta[i,] = ((inv_logit(logitCpars[i])+logitCbeta[i,]*.01)-(inv_logit(logitCpars[i])-logitCbeta[i,]*.01))/.02;
+#     #           }
+#     #         }
+#     #       }
+#
+#   } #end internal genq function
+#
+#   e <- list2env(c(fit$pars,fit$dat))
+#   environment(genq) <- e
+#   genq()
+# }
 
-  log1p_exp=function(x) log1p(exp(x))
-
-  genq <- function(){
-    browser()
-
-    A=rep(NA,Nitems) # item A values
-    B=rep(NA,Nitems) #item B values
-    C=rep(NA,Nitems) #item C values
-    #put the user supplied fixed values into the item parameter objects
-    A[fixedA] = Adata[fixedA];
-    B[fixedB] = Bdata[fixedB];
-    C[fixedC] = Cdata[fixedC];
-
-    #put the free parameters into the item parameter objects
-    A[whichnotfixedA] = invspApars;
-    B[whichnotfixedB] = Bpars;
-    C[whichnotfixedC] = logitCpars;
-
-
-    # for(i in 1:Nsubs){ #for every subject
-    #   for(j in 1:Nscales){ #and every scale
-    #     if(fixedAbilityLogical[i,j]==1){
-    #       Ability[i,j] = Abilitydata[i,j];
-    #     } else{ #if ability is user supplied, input it
-    #       Ability[i,j] = Abilitypars[Abilityparsindex[i,j]]; # or input the free parameter
-    #       if(NpersonPreds) {
-    #         predsmean=rep(0, NpersonPreds); #compute mean of person predictors
-    #         count=0;
-    #         for( ri in 1:Nobs){
-    #           if(id[i] == i){
-    #             count=count+1;
-    #             predsmean=predsmean+personPreds[i,];
-    #           }
-    #         }
-    #         predsmean= predsmean/count;
-    #         Ability[i,j] = Ability[i,j] +predsmean * Abilitybeta[j,]; #when there are person predictors, apply the effect
-    #       }
-    #     }
-    #   }
-    # }
-
-
-    for(i in 1:Nitems){ #for every item
-      count=0;
-      predsmean=rep(0,NitemPreds);
-      for( ri in 1:Nobs){
-        if(item[ri] == i){
-          count=count+1;
-          predsmean=predsmean+itemPreds[ri,];
-        }
-      }
-      predsmean= predsmean/count;
-      if(fixedAlog[i]==0){ #if free A par and item predictors, compute average item effect
-        A[i] =A[i]+ matrix(predsmean,1) %*% t(invspAbeta[ifelse(itemSpecificBetas==1,freeAref[item[i]],1),,drop=FALSE]); #when there are person predictors, apply the effect
-        A[i]=log1p_exp(A[i]);
-      }
-      if(fixedB[i]==0){ #if free B par and item predictors, compute average item effect
-        B[i] = B[i] + matrix(predsmean,1) %*% t(Bbeta[ifelse(itemSpecificBetas==1, freeBref[item[i]], 1),,drop=F]); #when there are person predictors, apply the effect
-      }
-    }
-
-
-    #
-    #       #linearised regression weights for reporting
-    #       if(doApreds){
-    #         if(size(Abeta)==1){
-    #           Abeta[1,] = ((log1p_exp(mean(invspApars)+invspAbeta[1,]*.01))-(log1p_exp(mean(invspApars)-invspAbeta[1,]*.01)))/.02;
-    #         }
-    #         if(size(Abeta)>1){
-    #           for(i in 1:size(Abeta)){
-    #             Abeta[i,] = ((log1p(exp(invspApars[i])+invspAbeta[i,]*.01))-(log1p(exp(invspApars[i])-invspAbeta[i,]*.01)))/.02;
-    #           }
-    #         }
-    #       }
-    #
-    #       if(doCpreds){
-    #         if(size(Cbeta)==1)   Cbeta[1,] = ((inv_logit(mean(logitCpars))+logitCbeta[1,]*.01)-(inv_logit(mean(logitCpars))-logitCbeta[1,]*.01))/.02;
-    #         if(size(Cbeta)>1){
-    #           for(i in 1:size(Cbeta)){
-    #             Cbeta[i,] = ((inv_logit(logitCpars[i])+logitCbeta[i,]*.01)-(inv_logit(logitCpars[i])-logitCbeta[i,]*.01))/.02;
-    #           }
-    #         }
-    #       }
-
-  } #end internal genq function
-
-  e <- list2env(c(fit$pars,fit$dat))
-  environment(genq) <- e
-  genq()
-}
 
 #' normaliseIRT
 #'
@@ -161,14 +170,25 @@ normaliseIRT <- function(B,Ability, A,normbase='Ability',normaliseScale=1,  norm
 
 
 
-
-inv_logit <- function(x) exp(x)/(1+exp(x))
-logit <- function(x)  log(x)-log((1-x))
-
-afunc <- function(x) log1p(exp(x))
-afunci <- function(x) log(exp(x)-1)
-
-
+#' Drop subjects and items with all perfect scores
+#'
+#' This function drops variables/items and subjects that have all perfect scores (either all 0's or all 1's) in a data table.
+#'
+#' @param dat The input data table
+#' @param scoreref The column name of the score variable in \code{dat}
+#' @param itemref The column name of the item variable in \code{dat}
+#' @param idref The column name of the id variable in \code{dat}
+#' @param tol Tolerance level for checking perfect scores -- .01 would drop subjects with less than 1% correct or incorrect
+#'
+#' @return The input data table (\code{dat}) without variables/items and subjects with all perfect scores.
+#'
+#' @import data.table
+#' @export
+#'
+#' @examples
+#' dat <- data.table(id=c(1,1,1,2,2,2,3,3,3), Item=c('I1','I2','I3','I1','I2','I3','I1','I2','I3'),
+#'    score=c(1,0,1,0,0,0,0,1,1))
+#' print(dropPerfectScores(dat))
 dropPerfectScores <- function(dat,scoreref.='score',itemref.='Item',idref.='id',tol.=.001){
   if(!'data.table' %in% class(dat)) stop('Not a data.table!')
 
@@ -190,78 +210,79 @@ dropPerfectScores <- function(dat,scoreref.='score',itemref.='Item',idref.='id',
   }
   dat[,itemMean:=NULL]
   dat[,personMean:=NULL]
+  dat[1,] #weirdness required to ensure return prints properly
   return(dat)
 }
 
-fitIRTstepwise <- function(dat,itemsteps,item='Item',id='id',normalise=FALSE,ebayes=FALSE,...){ #need to rethink...
-  .itemref <- item
-  .idref <- id
-  itemDat <- NA
-  stepseq <- c(1:length(itemsteps))#,length(itemsteps):1)
-  firststep <- TRUE
-
-
-  for(stepi in 1:length(stepseq)){
-    include <- which(dat[[.itemref]] %in% itemsteps[[stepseq[stepi]]]) #which rows to include for current item set
-    stepids <- unique(dat[include,get(.idref)]) #which subjects are relevant
-    if(stepi > 1){ #for subsequent steps,
-      itemDat <- itemDat[!get(.itemref) %in% itemsteps[[stepseq[stepi]]],] #freely estimate current item set
-      include <- unique(c(include, # and use prior step as link
-        which(dat[[.itemref]] %in% itemsteps[[stepseq[stepi-1]]] & dat[[.idref]] %in% stepids)))
-    }
-    smalldat <- dat[include,] #step specific data set
-
-    fit <- fitIRT(dat = smalldat,itemDat=itemDat,normalise=normalise,ebayes=ebayes,item=item,id=id,...)
-    itemDat <- data.table(fit$itemPars)
-
-    if(firststep){
-      itemout <- itemDat
-      personout <- data.table(fit$personPars)
-    }
-    if(!firststep){ #add new items to output
-      itemout <- rbind(itemout,itemDat[!get(.itemref) %in% itemout[[.itemref]]]) #update item output with newest estimates
-      personout <- rbind(personout, data.table(fit$personPars)[!get(.idref) %in% personout[[.idref]],]) #update item output with newest estimates
-    }
-
-    # plot(itemout[order(as.character(get(.itemref))),B],dat[!duplicated(Item) & get(.itemref) %in% itemout[[.itemref]],][order(get(.itemref)),B])
-    # rmse <- sqrt(mean((itemout[order(as.character(get(.itemref))),B]-dat[!duplicated(get(.itemref)) & Item %in% itemout[[.itemref]],][order(get(.itemref)),B])^2))
-    # message(paste('corr =',cor(cbind(itemout[order(as.character(get(.itemref))),B],dat[!duplicated(get(.itemref)) & get(.itemref) %in% itemout[[.itemref]],][order(get(.itemref)),B]))[2,1]))
-    # message(paste('RMSE =',round(rmse,3)))
-
-    firststep <- FALSE
-  }
-
-  if(FALSE){ #for testing
-    fullfit <- fitIRT(dat = dat,normalise=normalise,ebayes=ebayes)
-    #item par comparison to true
-    message(paste('corr =',cor(cbind(
-      data.table(fullfit$itemPars)[order(as.character(Item)),B],
-      dat[!duplicated(Item) & Item %in% fullfit$itemPars[[.itemref]],][order(Item),B])
-    )[2,1]))
-
-    points(data.table(fullfit$itemPars)[order(as.character(Item)),B],
-      dat[!duplicated(Item) & Item %in% itemout[[.itemref]],][order(Item),B],col=2)
-
-    #person par comparison to true
-    message(paste('corr =',cor(cbind( #stepwise fit
-      personout[order(as.character(get(.idref))),s1],
-      dat[!duplicated(get(.idref)) & get(.idref) %in% personout[[.idref]],][order(get(.idref)),Ability])
-    )[2,1]))
-
-    message(paste('corr =',cor(cbind( #full fit
-      data.table(fullfit$personPars)[order(as.character(Item)),B],
-      dat[!duplicated(Item) & Item %in% fullfit$itemPars[[.itemref]],][order(Item),B])
-    )[2,1]))
-
-    points(data.table(fullfit$itemPars)[order(as.character(Item)),B],
-      dat[!duplicated(Item) & Item %in% itemout[[.itemref]],][order(Item),B],col=2)
-  }
-
-  personout <- personout[order(get(.idref)),]
-  itemout <- itemout[order(get(.itemref)),]
-
-  return(list(itemPars=itemout,personPars=personout))
-}
+# fitIRTstepwise <- function(dat,itemsteps,item='Item',id='id',normalise=FALSE,ebayes=FALSE,...){ #need to rethink...
+#   .itemref <- item
+#   .idref <- id
+#   itemDat <- NA
+#   stepseq <- c(1:length(itemsteps))#,length(itemsteps):1)
+#   firststep <- TRUE
+#
+#
+#   for(stepi in 1:length(stepseq)){
+#     include <- which(dat[[.itemref]] %in% itemsteps[[stepseq[stepi]]]) #which rows to include for current item set
+#     stepids <- unique(dat[include,get(.idref)]) #which subjects are relevant
+#     if(stepi > 1){ #for subsequent steps,
+#       itemDat <- itemDat[!get(.itemref) %in% itemsteps[[stepseq[stepi]]],] #freely estimate current item set
+#       include <- unique(c(include, # and use prior step as link
+#         which(dat[[.itemref]] %in% itemsteps[[stepseq[stepi-1]]] & dat[[.idref]] %in% stepids)))
+#     }
+#     smalldat <- dat[include,] #step specific data set
+#
+#     fit <- fitIRT(dat = smalldat,itemDat=itemDat,normalise=normalise,ebayes=ebayes,item=item,id=id,...)
+#     itemDat <- data.table(fit$itemPars)
+#
+#     if(firststep){
+#       itemout <- itemDat
+#       personout <- data.table(fit$personPars)
+#     }
+#     if(!firststep){ #add new items to output
+#       itemout <- rbind(itemout,itemDat[!get(.itemref) %in% itemout[[.itemref]]]) #update item output with newest estimates
+#       personout <- rbind(personout, data.table(fit$personPars)[!get(.idref) %in% personout[[.idref]],]) #update item output with newest estimates
+#     }
+#
+#     # plot(itemout[order(as.character(get(.itemref))),B],dat[!duplicated(Item) & get(.itemref) %in% itemout[[.itemref]],][order(get(.itemref)),B])
+#     # rmse <- sqrt(mean((itemout[order(as.character(get(.itemref))),B]-dat[!duplicated(get(.itemref)) & Item %in% itemout[[.itemref]],][order(get(.itemref)),B])^2))
+#     # message(paste('corr =',cor(cbind(itemout[order(as.character(get(.itemref))),B],dat[!duplicated(get(.itemref)) & get(.itemref) %in% itemout[[.itemref]],][order(get(.itemref)),B]))[2,1]))
+#     # message(paste('RMSE =',round(rmse,3)))
+#
+#     firststep <- FALSE
+#   }
+#
+#   if(FALSE){ #for testing
+#     fullfit <- fitIRT(dat = dat,normalise=normalise,ebayes=ebayes)
+#     #item par comparison to true
+#     message(paste('corr =',cor(cbind(
+#       data.table(fullfit$itemPars)[order(as.character(Item)),B],
+#       dat[!duplicated(Item) & Item %in% fullfit$itemPars[[.itemref]],][order(Item),B])
+#     )[2,1]))
+#
+#     points(data.table(fullfit$itemPars)[order(as.character(Item)),B],
+#       dat[!duplicated(Item) & Item %in% itemout[[.itemref]],][order(Item),B],col=2)
+#
+#     #person par comparison to true
+#     message(paste('corr =',cor(cbind( #stepwise fit
+#       personout[order(as.character(get(.idref))),s1],
+#       dat[!duplicated(get(.idref)) & get(.idref) %in% personout[[.idref]],][order(get(.idref)),Ability])
+#     )[2,1]))
+#
+#     message(paste('corr =',cor(cbind( #full fit
+#       data.table(fullfit$personPars)[order(as.character(Item)),B],
+#       dat[!duplicated(Item) & Item %in% fullfit$itemPars[[.itemref]],][order(Item),B])
+#     )[2,1]))
+#
+#     points(data.table(fullfit$itemPars)[order(as.character(Item)),B],
+#       dat[!duplicated(Item) & Item %in% itemout[[.itemref]],][order(Item),B],col=2)
+#   }
+#
+#   personout <- personout[order(get(.idref)),]
+#   itemout <- itemout[order(get(.itemref)),]
+#
+#   return(list(itemPars=itemout,personPars=personout))
+# }
 
 
 #' Title
@@ -354,7 +375,6 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   scoreref. <- score;
   personPredsref. <- personPreds;
   itemPredsref. <- itemPreds
-  # statePredsref. <- statePreds
 
   if(!'data.table' %in% class(dat)){  #drop unused columns from dat and set to data.table (copy if already data table)
     dat <- as.data.table(dat[,c((idref.),(scoreref.),(itemref.),(scaleref.),

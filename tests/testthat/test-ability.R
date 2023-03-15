@@ -15,7 +15,7 @@ if(identical(Sys.getenv("NOT_CRAN"), "true")& .Machine$sizeof.pointer != 4){
       AbilityMean = 0)
 
     fit <- fitIRT(dat$dat,cores=1,pl=1,plot=F,verbose=0,priors=T,
-      itemDat = dat$dat[unique(Item) & id %in% '1',],
+      itemDat = dat$dat[unique(Item) & id %in% '1',],stochastic=T,
       normalise = T,ebayes = T,ebayesmultiplier = 2)
 
 
@@ -23,7 +23,7 @@ if(identical(Sys.getenv("NOT_CRAN"), "true")& .Machine$sizeof.pointer != 4){
     dat$dat$B[1]=-5
     dat$dat$score[1]=1
     fit <- fitIRT(dat$dat[1,],cores=1,pl=1,plot=F,verbose=0,priors=T,dropPerfectScores = F,
-      itemDat = dat$dat[1,],
+      itemDat = dat$dat[1,],stochas
       normalise = F,ebayes = F,ebayesmultiplier = 2,AbilitySD = array(10))
     fit$personPars
 

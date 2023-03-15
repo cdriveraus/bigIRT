@@ -44,8 +44,8 @@ if(identical(Sys.getenv("NOT_CRAN"), "true")& .Machine$sizeof.pointer != 4){
       # betaScale = 1,
       normalise = F,ebayes = T,ebayesmultiplier = 2,itemSpecificBetas = TRUE)
 
-    pis=bigIRT:::birtCheckParsOutput(fitis)
-    p=bigIRT:::birtCheckParsOutput(fit)
+    pis=bigIRT:::checkP(fitis) #check computed p values in r against stan
+    p=bigIRT:::checkP(fit)
 
     #check that output pars give same likelihood as computed likelihood
     testthat::expect_equivalent(0, sum(p^2- fit$pars$p^2),tol=1e-8)

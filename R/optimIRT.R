@@ -299,7 +299,7 @@ optimIRT <- function(standata, cores=6, mml=FALSE,split=TRUE,
         fitfunc = target,
         itertol = tol,
         deltatol=tol*.1,
-        ndatapoints=standata$ndatapoints,plot=FALSE)
+        plot=FALSE)
 
       init=optimfit$par
     }
