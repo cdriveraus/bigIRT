@@ -55,7 +55,6 @@ fitIRT(
   dropPerfectScores = TRUE,
   trainingRows = 1:nrow(dat),
   init = NA,
-  Dpar = FALSE,
   tol = 0.01,
   ...
 )

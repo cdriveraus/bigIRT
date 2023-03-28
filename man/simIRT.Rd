@@ -7,7 +7,7 @@
 simIRT(
   Nsubs = 100,
   Nitems = 200,
-  Nscales = 3,
+  Nscales = 1,
   NitemsAnswered = Nitems,
   ASD = 0,
   AMean = 1,

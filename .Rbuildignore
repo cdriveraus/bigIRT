@@ -1,5 +1,7 @@
-^bigIRT\.Rproj$
 ^\.Rproj\.user$
 ^LICENSE\.md$
 ^.testing
 ^\.github$
+^\.git$
+^src
+^.*\.Rproj$

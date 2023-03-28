@@ -32,7 +32,7 @@ if(identical(Sys.getenv("NOT_CRAN"), "true")& .Machine$sizeof.pointer != 4){
     fiti <- fitIRT(dat$dat,cores=cores,pl=4,priors=F,
       personPreds = c('V1'),dropPerfectScores = T,
       itemDat = dat$dat[!duplicated(Item),],
-      integrateAbility = T,integrateWidth = 0,
+      integrateEachAbility = T,
       betaScale = 100,tol=1,carefulfit = T,stochastic=T,
       normalise = F,ebayes = F,ebayesmultiplier = 2)
 

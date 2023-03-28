@@ -255,7 +255,7 @@ IRTcurve <- function(a,b,c,theta=seq(-3,3,.01),plot=TRUE,rescale=FALSE,add=FALSE
 #' @export
 #'
 #' @examples
-simIRT <- function(Nsubs=100,Nitems=200,Nscales=3, NitemsAnswered=Nitems,
+simIRT <- function(Nsubs=100,Nitems=200,Nscales=1, NitemsAnswered=Nitems,
   ASD=0,AMean=1,BSD=1,BMean=0,logitCSD=1,logitCMean=-2,AbilitySD=1,AbilityMean=0,
   itemPreds=NA, AitemPredEffects=NA,BitemPredEffects=NA,logitCitemPredEffects=NA,
   personPreds=NA, AbilityPredEffects=NA, normalise=FALSE){

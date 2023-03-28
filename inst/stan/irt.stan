@@ -225,7 +225,7 @@ for(i in 1:Nobs){
   if(!integrateAbility) p[i]= (1-score[i])+ scoreCoef[i] * e6[i] ;
   } //end !doIntegrate
 
-  if(integrateAbility && !doIntegrate){ //if in the JML phase, prepare ability SDs
+  if((!integrateAbility && doGenQuant) || (integrateAbility && !doIntegrate)){ //if in the JML phase, prepare ability SDs
     e3[i] = exp(-e1[i]);
     e7[i] = 1 + e3[i];
     e9[i] = e6[i] * scoreCoef[i] + 1 - score[i];
@@ -246,7 +246,7 @@ for(i in 1:Nobs){
 
 } //end loop over rows
 
-if(integrateAbility && !doIntegrate){ //compute subject sd's
+if( (!integrateAbility && doGenQuant) || (integrateAbility && !doIntegrate)){ //compute subject sd's
     for(rowi in 1:Nsubs){
     for(coli in 1:Nscales){
       if(!fixedAbilityLogical[rowi,coli]) sAbilitySD[rowi,coli] = sqrt(inv(fabs(sAbilitySD[rowi,coli])));

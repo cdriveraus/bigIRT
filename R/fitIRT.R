@@ -364,7 +364,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   mml=FALSE,NintegratePoints=5,
   normalise=FALSE,normaliseScale=1,normaliseMean=0,
   dropPerfectScores=TRUE,trainingRows=1:nrow(dat),
-  init=NA,Dpar=FALSE,tol=1e-2,...){
+  init=NA,tol=1e-2,...){
 
   sdat <-list() #initialize standata object
 
