@@ -614,8 +614,8 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     integrateAbility=as.integer(integrateEachAbility),
     integrateAbilityFixedSE=as.integer(integrateEachAbilityFixedSE),
     NintegratePoints=as.integer(NintegratePoints),
-    integrateWeights=(statmod::gauss.quad.prob(n=NintegratePoints,dist='normal')$weights),
-    integratePoints=(statmod::gauss.quad.prob(n=NintegratePoints,dist='normal')$nodes)
+    integrateWeights=array(statmod::gauss.quad.prob(n=NintegratePoints,dist='normal')$weights),
+    integratePoints=array(statmod::gauss.quad.prob(n=NintegratePoints,dist='normal')$nodes)
   ))
 
   # browser()

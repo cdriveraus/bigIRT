@@ -32,7 +32,7 @@ if(identical(Sys.getenv("NOT_CRAN"), "true")& .Machine$sizeof.pointer != 4){
     fiti <- fitIRT(dat$dat,cores=cores,pl=4,priors=F,
       personPreds = c('V1'),dropPerfectScores = T,
       itemDat = dat$dat[!duplicated(Item),],
-      integrateEachAbility = T,
+      integrateEachAbility = T,NintegratePoints = 1,
       betaScale = 100,tol=1,carefulfit = T,stochastic=T,
       normalise = F,ebayes = F,ebayesmultiplier = 2)
 
@@ -49,6 +49,7 @@ if(identical(Sys.getenv("NOT_CRAN"), "true")& .Machine$sizeof.pointer != 4){
     numSD=sapply(1:fiti$dat$Nsubs,function(x) sqrt(abs(1/jacobian(sg,fiti$optim$par[x],whichAbil=x))))
     out=cbind(fiti$pars$sAbilitySD,numSD)
     plot(out)
+    abline(0,1)
     testthat::expect_equivalent(out[,1], out[,2], tol=1e-5)
   })
 
