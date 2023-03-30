@@ -10,7 +10,8 @@ normaliseIRT(
   A,
   normbase = "Ability",
   normaliseScale = 1,
-  normaliseMean = ifelse(normbase == "A", 1, 0)
+  normaliseMean = ifelse(normbase == "A", 1, 0),
+  robust = TRUE
 )
 }
 \arguments{
@@ -25,6 +26,9 @@ normaliseIRT(
 \item{normaliseScale}{The scale to normalise to.}
 
 \item{normaliseMean}{The mean to normalise to. The default is 0 when normbase is 'Ability' or 'B', and 1 when normbase is 'A'.}
+
+\item{robust}{if TRUE, outliers (greater than 1.5x the interquartile range from the interquartile region of 25-75\%)
+are dropped before computing the mean and sd for normalisation.}
 }
 \value{
 A list containing the normalised A, B, and Ability parameters.
@@ -33,9 +37,9 @@ A list containing the normalised A, B, and Ability parameters.
 Normalise item response theory (IRT) parameters.
 }
 \examples{
-B <- c(2.5, 0.5, 1.3)
-Ability <- c(1,-1.5, 0.5)
-A <- c(5,2,2.5)
+B <- rnorm(100,2,1)
+Ability <- rnorm(500,3,.5)
+A <- rnorm(100,1.4,.05)
 normaliseIRT(B, Ability, A, normbase='B')
 
 
