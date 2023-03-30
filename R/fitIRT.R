@@ -125,27 +125,38 @@ checkP <- function(fit){ #for checking max a posteriori model parameters using R
 #' @param normbase The base from which the normalisation should be calculated. Can be 'Ability', 'B', or 'A'.
 #' @param normaliseScale The scale to normalise to.
 #' @param normaliseMean The mean to normalise to. The default is 0 when normbase is 'Ability' or 'B', and 1 when normbase is 'A'.
+#' @param robust if TRUE, outliers (greater than 1.5x the interquartile range from the interquartile region of 25-75%)
+#' are dropped before computing the mean and sd for normalisation.
 #'
 #' @return A list containing the normalised A, B, and Ability parameters.
 #' @export
 #' @examples
-#' B <- c(2.5, 0.5, 1.3)
-#' Ability <- c(1,-1.5, 0.5)
-#' A <- c(5,2,2.5)
+#' B <- rnorm(100,2,1)
+#' Ability <- rnorm(500,3,.5)
+#' A <- rnorm(100,1.4,.05)
 #' normaliseIRT(B, Ability, A, normbase='B')
 #'
 #'
-normaliseIRT <- function(B,Ability, A,normbase='Ability',normaliseScale=1,  normaliseMean=ifelse(normbase == 'A',1,0)){
+normaliseIRT <- function(B,Ability, A,normbase='Ability',normaliseScale=1,  normaliseMean=ifelse(normbase == 'A',1,0),robust=TRUE){
+
+  # if(!robust){
+  #   includePersons <- 1:length(Ability)
+  #   includeItems <- 1:length(B)
+  # }
+  # if(robust){
+  #   includePersons <- which(Ability %in% boxplot(Ability, plot = F)$out)
+  #   includeItems <- which(B %in% boxplot(B, plot = F)$out & A %in% boxplot(A, plot = F)$out)
+  # }
 
   if(normbase %in% c('Ability','B')){
     if(normbase =='Ability'){
-      nsd <- sd(Ability) / (normaliseScale)
-      nm <- mean(Ability)
+      nsd <- ifelse(robust, diff(quantile(Ability,probs=c(.25,.75))), sd(Ability)) / (normaliseScale)
+      nm <- ifelse(robust, median(Ability),mean(Ability))
     }
 
     if(normbase =='B'){
-      nsd <- sd(B) / (normaliseScale)
-      nm <- mean(B)
+      nsd <- ifelse(robust, diff(quantile(B, probs=c(.25,.75))), sd(B)) / (normaliseScale)
+      nm <- ifelse(robust, median(B), mean(B))
     }
 
     Ability <- (Ability -nm)/ nsd +normaliseMean
@@ -155,9 +166,9 @@ normaliseIRT <- function(B,Ability, A,normbase='Ability',normaliseScale=1,  norm
 
   if(normbase == 'A'){
     logA <- log(A)
-    nsd <- sd(logA) / (normaliseScale)
+    nsd <- ifelse(robust,diff(quantile(logA,probs=c(.25,.75))), sd(logA)) / (normaliseScale)
     if(is.na(nsd)) stop('Error calculating sd of discrimination parameters -- do they vary or are any negative?')
-    nm <- mean(logA)
+    nm <- ifelse(robust, median(logA),mean(logA))
     normaliseMean <- log(normaliseMean)
 
     Ability <- (Ability -nm)/ nsd +normaliseMean
