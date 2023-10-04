@@ -1,6 +1,6 @@
 Package: bigIRT
 Title: Fits item response theory models to big data
-Version: 0.1.5
+Version: 0.1.6
 Authors@R: 
     person(given = "Charles",
            family = "Driver",
@@ -24,6 +24,7 @@ Imports:
     Rcpp (>= 0.12.0),
     RcppParallel (>= 5.0.1),
     rstan (>= 2.21.0),
+    statmod,
     rstantools (>= 2.3.0)
 LinkingTo: 
     BH (>= 1.66.0),

@@ -259,7 +259,7 @@ optimIRT <- function(standata, cores=6, mml=FALSE,split=TRUE,
   # if(cores > 1) npars=parallel::clusterEvalQ(benv$clms, eval(rstan::get_num_upars(smf),envir = globalenv()))[[1]]
   # if(cores > 1) npars=clusterIDeval(cl, 'rstan::get_num_upars(smf)')[[1]]
   if(cores > 1) npars=parallel::clusterEvalQ(benv$cl, rstan::get_num_upars(smf))[[1]]
-  if(is.na(init[1])) init=rnorm(npars,0,.01)
+  if(is.na(init[1])) init=rnorm(npars,0,.1)
   #target(init)
 
   converged <- FALSE
@@ -294,12 +294,10 @@ optimIRT <- function(standata, cores=6, mml=FALSE,split=TRUE,
 
     if(stochastic){
       optimfit <- sgd(
-        init,
+        init=init,
         maxiter=Niter,
         fitfunc = target,
-        itertol = tol,
-        deltatol=tol*.1,
-        plot=FALSE)
+        itertol = tol)
 
       init=optimfit$par
     }

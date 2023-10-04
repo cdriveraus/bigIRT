@@ -6,6 +6,10 @@ logit <- function(x)  log(x)-log((1-x))
 afunc <- function(x) log1p(exp(x))
 afunci <- function(x) log(exp(x)-1)
 
+pcalc <- function(score,ability,B,A=1,C=0,D=1){
+  p <- C + (1.0-C) / ( 1.0 + exp( (-A * (ability - B))  ) )
+}
+
 checkP <- function(fit){ #for checking max a posteriori model parameters using R based calc instead of stan based
   p=rep(NA,fit$dat$Nobs)
   for(i in 1:length(p)){
@@ -122,7 +126,7 @@ checkP <- function(fit){ #for checking max a posteriori model parameters using R
 #' @param B Vector of item difficulty parameters.
 #' @param Ability Vector of persons' ability parameters.
 #' @param A Vector of item discrimination parameters.
-#' @param normbase The base from which the normalisation should be calculated. Can be 'Ability', 'B', or 'A'.
+#' @param normbase The base from which the normalisation should be calculated. Can be 'Ability' or 'B'.
 #' @param normaliseScale The scale to normalise to.
 #' @param normaliseMean The mean to normalise to. The default is 0 when normbase is 'Ability' or 'B', and 1 when normbase is 'A'.
 #' @param robust if TRUE, outliers (greater than 1.5x the interquartile range from the interquartile region of 25-75%)
@@ -164,17 +168,17 @@ normaliseIRT <- function(B,Ability, A,normbase='Ability',normaliseScale=1,  norm
     A <-  A * nsd
   }
 
-  if(normbase == 'A'){
-    logA <- log(A)
-    nsd <- ifelse(robust,diff(quantile(logA,probs=c(.25,.75))), sd(logA)) / (normaliseScale)
-    if(is.na(nsd)) stop('Error calculating sd of discrimination parameters -- do they vary or are any negative?')
-    nm <- ifelse(robust, median(logA),mean(logA))
-    normaliseMean <- log(normaliseMean)
-
-    Ability <- (Ability -nm)/ nsd +normaliseMean
-    B  <- ( B-nm) / nsd +normaliseMean
-    logA <-  (logA -nm)/nsd +normaliseMean
-  }
+  # if(normbase == 'A'){
+  #   logA <- log(A)
+  #   nsd <- ifelse(robust,diff(quantile(logA,probs=c(.25,.75))), sd(logA)) / (normaliseScale)
+  #   if(is.na(nsd)) stop('Error calculating sd of discrimination parameters -- do they vary or are any negative?')
+  #   nm <- ifelse(robust, median(logA),mean(logA))
+  #   normaliseMean <- log(normaliseMean)
+  #
+  #   Ability <- (Ability -nm)/ nsd +normaliseMean
+  #   B  <- ( B-nm) / nsd +normaliseMean
+  #   logA <-  (logA -nm)/nsd +normaliseMean
+  # }
 
   return(list(A=A,B=B,Ability=Ability))
 }
@@ -361,7 +365,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   DitemPreds=character(),
   itemSpecificBetas=FALSE,
   betaScale=10,
-  invspAMeandat=.542,invspASD=.5,BMeandat=0,BSD=10, logitCMeandat=-4,logitCSD=2,
+  invspAMeandat=.542,invspASD=2,BMeandat=0,BSD=10, logitCMeandat=-4,logitCSD=2,
   logitDMeandat=4,logitDSD=2,
   AbilityMeandat=array(0,dim=c(length(unique(dat[[scale]])))),
   AbilitySD=array(10,dim=c(length(unique(dat[[scale]])))),
@@ -369,8 +373,8 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   AMeanSD=1,BMeanSD=BSD,logitCMeanSD=logitCSD,logitDMeanSD=logitDSD,
   AbilityMeanSD=array(1,dim=c(length(unique(dat[[scale]])))),
   iter=2000,cores=6,carefulfit=FALSE,
-  ebayes=TRUE,ebayesmultiplier=2,ebayesFromFixed=FALSE,ebayesiter=1,
-  estMeans=c('ability','A','B','C','D'),priors=TRUE,
+  ebayes=TRUE,ebayesmultiplier=1,ebayesFromFixed=FALSE,ebayesiter=1,
+  estMeans=c('ability','B','C','D'),priors=TRUE,
   integrateEachAbility=FALSE, integrateEachAbilityFixedSE=FALSE,
   mml=FALSE,NintegratePoints=5,
   normalise=FALSE,normaliseScale=1,normaliseMean=0,
@@ -378,6 +382,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   init=NA,tol=1e-2,...){
 
   sdat <-list() #initialize standata object
+  basetol=tol
 
   itemPreds <- unique(c(AitemPreds,BitemPreds,CitemPreds,DitemPreds))
 
@@ -549,7 +554,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     Nitems=Nitems,
     Nscales=Nscales,
     id=array(dat[[idref.]]),
-    dopriors=as.integer(priors||ebayes),
+    dopriors=as.integer(priors),
     outlierfix=0L,
     outlierscale=2,
     NfixedA=as.integer(sum(!is.na(itemSetup$A))),
@@ -614,10 +619,10 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     BMeanSD=BMeanSD,
     logitCMeanSD=logitCMeanSD,
     AbilityMeanSD=array(AbilityMeanSD),
-    fixedAMean=as.integer(!'A' %in% estMeans & pl > 1),
+    fixedAMean=as.integer(!'A' %in% estMeans || pl < 2),
     fixedBMean=as.integer(!'B' %in% estMeans),
-    fixedCMean=as.integer(!'C' %in% estMeans & pl > 2),
-    fixedDMean=as.integer(!'D' %in% estMeans & pl > 3),
+    fixedCMean=as.integer(!'C' %in% estMeans || pl < 3),
+    fixedDMean=as.integer(!'D' %in% estMeans || pl < 4),
     fixedAbilityMean=as.integer(!'Ability' %in% estMeans & !'ability' %in% estMeans),
     rowIndexPar=0L,
     originalRow=dat$`.originalRow`,
@@ -629,7 +634,6 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     integratePoints=array(statmod::gauss.quad.prob(n=NintegratePoints,dist='normal')$nodes)
   ))
 
-  # browser()
   sdat$freeAref=array(as.integer(cumsum(1-as.numeric(sdat$fixedAlog))))
   sdat$freeBref=array(as.integer(cumsum(1-as.numeric(sdat$fixedB))))
   sdat$freeCref=array(as.integer(cumsum(1-as.numeric(sdat$fixedClogit))))
@@ -647,41 +651,48 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
       sdat$Cdata = fit$pars$C
       sdat$Ddata = fit$pars$D
       if(!mml) sdat$Abilitydata = fit$pars$Ability
-      init = fit$optim$par
+      if(!ebayes) init = fit$optim$par
     }
 
     if(ebayes){
       sdat$dopriors <- 1L
 
       if(pl > 1 &&  length(fit$pars$invspApars) > 2){
-        sdat$invspAMeandat <- mean(fit$pars$invspApars) #mean(afunci(fit$pars$A))
-        sdat$invspASD <- sd(fit$pars$invspApars)*ebayesmultiplier+1e-5 #afunci(fit$pars$A)
+        if(sdat$fixedAMean ==0) sdat$invspAMeandat <- mean(fit$pars$invspApars[!fit$pars$invspApars %in% boxplot.stats(fit$pars$invspApars)$out] ) #mean(afunci(fit$pars$A))
+        sdat$invspASD <- sd(fit$pars$invspApars[!fit$pars$invspApars %in% boxplot.stats(fit$pars$invspApars)$out])*ebayesmultiplier+1e-5 #afunci(fit$pars$A)
       }
 
       if(length(fit$pars$Bpars) > 2){
-        sdat$BMeandat <- mean(fit$pars$Bpars)
-        sdat$BSD <- sd(fit$pars$Bpars)*ebayesmultiplier+1e-5
+        if(sdat$fixedBMean ==0) sdat$BMeandat <- mean(fit$pars$Bpars[!fit$pars$Bpars %in% boxplot.stats(fit$pars$Bpars)$out])
+        sdat$BSD <- sd(fit$pars$Bpars[!fit$pars$Bpars %in% boxplot.stats(fit$pars$Bpars)$out])*ebayesmultiplier+1e-5
       }
 
       if(pl > 2 && length(fit$pars$logitCpars) > 2){
-        sdat$logitCMeandat <- mean(fit$pars$logitCpars) #mean(cfunci(fit$pars$C+1e-8))
-        sdat$logitCSD <- sd(fit$pars$logitCpars,na.rm=TRUE) * ebayesmultiplier+1e-5 #sd(cfunci(fit$pars$C+1e-8),na.rm=TRUE)*ebayesmultiplier+1e-5
+        if(sdat$fixedCMean ==0) sdat$logitCMeandat <- mean(fit$pars$logitCpars[!fit$pars$logitCpars %in% boxplot.stats(fit$pars$logitCpars)$out]) #mean(cfunci(fit$pars$C+1e-8))
+        sdat$logitCSD <- sd(fit$pars$logitCpars[!fit$pars$logitCpars %in% boxplot.stats(fit$pars$logitCpars)$out],na.rm=TRUE) * ebayesmultiplier+1e-5 #sd(cfunci(fit$pars$C+1e-8),na.rm=TRUE)*ebayesmultiplier+1e-5
       }
 
       if(pl > 3 && length(fit$pars$logitDpars) > 2){
-        sdat$logitDMeandat <- mean(fit$pars$logitDpars) #mean(cfunci(fit$pars$C+1e-8))
-        sdat$logitDSD <- sd(fit$pars$logitDpars,na.rm=TRUE) * ebayesmultiplier+1e-5 #sd(cfunci(fit$pars$C+1e-8),na.rm=TRUE)*ebayesmultiplier+1e-5
+        if(sdat$fixedDMean ==0)  sdat$logitDMeandat <- mean(fit$pars$logitDpars[!fit$pars$logitDpars %in% boxplot.stats(fit$pars$logitDpars)$out]) #mean(cfunci(fit$pars$C+1e-8))
+        sdat$logitDSD <- sd(fit$pars$logitDpars[!fit$pars$logitDpars %in% boxplot.stats(fit$pars$logitDpars)$out],na.rm=TRUE) * ebayesmultiplier+1e-5 #sd(cfunci(fit$pars$C+1e-8),na.rm=TRUE)*ebayesmultiplier+1e-5
       }
+
+      # sdat$fixedAMean <- 1L
+      # init=NA
 
 
       if(!mml && length(fit$pars$Abilitypars) > 2){
 
         sdat$AbilityMeandat <- array(sapply(1:Nscales,function(x){
-          mean(fit$pars$Abilitypars[sdat$Abilityparsscaleindex %in% x])
+          mean(fit$pars$Abilitypars[sdat$Abilityparsscaleindex %in% x][
+            !fit$pars$Abilitypars[sdat$Abilityparsscaleindex %in% x] %in%
+              boxplot.stats(fit$pars$Abilitypars[sdat$Abilityparsscaleindex %in% x])$out])
         }))
 
         sdat$AbilitySD <- array(sapply(1:Nscales,function(x){
-          sd(fit$pars$Abilitypars[sdat$Abilityparsscaleindex %in% x],na.rm=TRUE)
+          sd(fit$pars$Abilitypars[sdat$Abilityparsscaleindex %in% x][
+            !fit$pars$Abilitypars[sdat$Abilityparsscaleindex %in% x] %in%
+              boxplot.stats(fit$pars$Abilitypars[sdat$Abilityparsscaleindex %in% x])$out],na.rm=TRUE)
         })) * ebayesmultiplier + 1e-5
 
         sdat$AbilityCorr= cor(fit$pars$Ability) #inconsistency here -- based on overall ability, rather than conditional ability as for sd / mean.
@@ -700,57 +711,38 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
       sdat$logitDSD <- .01
       # sdat$AbilitySD <- array(1,sdat$Nscales)
     }
-    # browser()
     if(!skipebayes) fit <- optimIRT(standata=sdat,Niter=iter,cores=cores,init = init,mml=mml,...)
 
-
-
-
-
-
-    #check these - seems right but check again...
-    rownames(fit$pars$A)[itemIndex$new] <- itemIndex$original
-    rownames(fit$pars$B)[itemIndex$new]<- itemIndex$original
-    rownames(fit$pars$C)[itemIndex$new] <- itemIndex$original
-    rownames(fit$pars$D)[itemIndex$new] <- itemIndex$original
     if(!mml){
       rownames(fit$pars$Ability)[idIndex$new] <- idIndex$original
       colnames(fit$pars$Ability)[scaleIndex$new] <- scaleIndex$original
     }
+
+    rownames(fit$pars$A)[itemIndex$new] <- itemIndex$original
+    rownames(fit$pars$B)[itemIndex$new]<- itemIndex$original
+    rownames(fit$pars$C)[itemIndex$new] <- itemIndex$original
+    rownames(fit$pars$D)[itemIndex$new] <- itemIndex$original
 
     return(fit)
   }
 
   rm(dat)
 
-  JMLseq <- list(
-    if(carefulfit) list(est=c('A','B','C','D','Ability'),ebayes=FALSE,narrowPriors=TRUE),
-    list(est=c('A','B','C','D','Ability'),ebayes=FALSE,narrowPriors=FALSE),
-    if(ebayes) list(est=c('A','B','C',',D','Ability'),ebayes=TRUE,narrowPriors=FALSE)
-  )
+  JMLseq <- list()
+  if(carefulfit) JMLseq[[1]] <- list(est=c('A','B','C','D','Ability'),ebayes=FALSE,narrowPriors=TRUE)
+  JMLseq[[length(JMLseq)+1]] <- list(est=c('A','B','C','D','Ability'),ebayes=FALSE,narrowPriors=FALSE)
+  if(ebayes) JMLseq[[length(JMLseq)+1]] <- list(est=c('A','B','C',',D','Ability'),ebayes=TRUE,narrowPriors=FALSE)
 
   fit <- NA
-  basetol=tol
   for(i in 1:length(JMLseq)){
-    ebayescounter <- 0
-    finished=FALSE
     if(i < length(JMLseq)) tol= basetol*ifelse(JMLseq[[i]]$narrowPriors,100,10) else tol = basetol
-    if(!is.null(JMLseq[[i]])){
-      if(JMLseq[[i]]$ebayes %in% 'TRUE') fitML <- fit #store fit before ebayes step
-      while(!finished){
-        ebayescounter <- ebayescounter + 1
-        # stochastic <- F#(i == length(JMLseq))
-        fit <- JMLfit(est = JMLseq[[i]]$est,sdat = sdat, ebayes=JMLseq[[i]]$ebayes,
-          fit = fit,
-          narrowPriors = JMLseq[[i]]$narrowPriors,
-          tol=tol,...)
-        if(ebayescounter >= ebayesiter || !JMLseq[[i]]$ebayes) finished=TRUE
-      }
-    }
+    # if(JMLseq[[i]]$ebayes %in% 'TRUE') fitML <- fit #store fit before ebayes step
+    fit <- JMLfit(est = JMLseq[[i]]$est,sdat = sdat, ebayes=JMLseq[[i]]$ebayes,
+      fit = fit,
+      narrowPriors = JMLseq[[i]]$narrowPriors,
+      tol=tol,...)
   }
-
-  if(ebayes) fit$fitML <- fitML
-
+  # if(ebayes) fit$fitML <- fitML
 
   if(normalise && !mml){   #normalise pars
     for(i in 1:ncol(fit$pars$Ability)){

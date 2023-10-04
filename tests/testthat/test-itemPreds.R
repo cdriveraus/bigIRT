@@ -146,6 +146,11 @@ cores=2
       betaScale = 10,
       normalise = F,ebayes = F,ebayesmultiplier = 2,itemSpecificBetas = F)
 
+    # np=normaliseIRT(A = fit$itemPars$A,B= fit$itemPars$B,Ability = fit$personPars$X1,normbase = 'Ability')
+    #
+    # bigIRT:::IRTcurve(a = fit$itemPars$A[1],b = fit$itemPars$B[1],c = fit$itemPars$C[1],theta = sort(fit$personPars$X1))
+    # bigIRT:::IRTcurve(a = np$A[1],b = np$B[1],c = fit$itemPars$C[1],theta = sort(np$Ability))
+    #
 
     fit$pars$C
     fit$pars$logitCbeta

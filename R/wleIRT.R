@@ -1,15 +1,20 @@
 optimBisection <- function(fn, maxiter=200,tol=.001,mn=-5, mx=5,...){
 
   startingPhaseCount <- 1 #start with specified range (ideally sensible but narrow), expand as needed
-
   while(startingPhaseCount < 10){
     fnmn <- fn(mn,...) #function values at initial minimum
     fnmx <- fn(mx,...) #function values at initial maximum
 
-    if(sign(fnmn)!=sign(fnmx)) startingPhaseCount <- 999 #set to ensure progress beyond starting phase
-    else {
+    if(is.na(fnmn)) mn <- mn + (mx-mn)/3 #reduce minimum boundary
+    if(is.na(fnmx)) mx <- mx - (mx-mn)/3 #reduce maximum boundary
+
+    if(all(!is.na(c(fnmn,fnmx))) && sign(fnmn) != sign(fnmx)){ #if min and max could be computed, and if they have different signs
+        startingPhaseCount <- 999 #set to ensure progress beyond starting phase
+    } else {
+      if(all(!is.na(c(fnmn,fnmx)))){ #if min and max could be computed but were same sign, expand boundaries
       mn <- mn - (mx-mn) #expand minimum boundary
       mx <- mx + (mx-mn) #expand maximum boundary
+      }
     }
   }
 
