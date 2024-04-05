@@ -761,7 +761,6 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   if(normalise && mml) warning('Cannot normalize mml currently')
 
   ###compute some output details
-
   fit$itemPars <- data.frame(item=rownames(fit$pars$B),A=fit$pars$A,B=fit$pars$B,C=fit$pars$C,D=fit$pars$D)
   colnames(fit$itemPars)[1] <- item
   if(ncol(itemPreds)>0){
@@ -788,22 +787,22 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   if(fit$dat$NAitemPreds > 0 && pl > 1){
     dimnames(fit$pars$Abeta)[[2]] <- (AitemPreds)
     fit$covariateEffects$A <- fit$pars$Abeta
-    fit$covariateEffects$AStd <- t(t(fit$pars$Abeta) * apply(fit$dat$itemPreds[,fit$dat$AitemPreds],2,sd) / sd(fit$pars$A))
+    fit$covariateEffects$AStd <- t(t(fit$pars$Abeta) * apply(fit$dat$itemPreds[,fit$dat$AitemPreds,drop=FALSE],2,sd) / sd(fit$pars$A))
   }
   if(fit$dat$NBitemPreds > 0){
     dimnames(fit$pars$Bbeta)[[2]] <- (BitemPreds)
     fit$covariateEffects$B<- fit$pars$Bbeta
-    fit$covariateEffects$BStd <- t(t(fit$pars$Bbeta) * apply(fit$dat$itemPreds[,fit$dat$BitemPreds],2,sd) / sd(fit$pars$B))
+    fit$covariateEffects$BStd <- t(t(fit$pars$Bbeta) * apply(fit$dat$itemPreds[,fit$dat$BitemPreds,drop=FALSE],2,sd) / sd(fit$pars$B))
   }
   if(fit$dat$NCitemPreds > 0 && pl > 2){
     dimnames(fit$pars$Cbeta)[[2]] <- (CitemPreds)
     fit$covariateEffects$C<- fit$pars$Cbeta
-    fit$covariateEffects$CStd <- t(t(fit$pars$Cbeta) * apply(fit$dat$itemPreds[,fit$dat$CitemPreds],2,sd) / sd(fit$pars$C))
+    fit$covariateEffects$CStd <- t(t(fit$pars$Cbeta) * apply(fit$dat$itemPreds[,fit$dat$CitemPreds,drop=FALSE],2,sd) / sd(fit$pars$C))
   }
   if(fit$dat$NDitemPreds > 0 && pl > 3){
     dimnames(fit$pars$Dbeta)[[2]] <- (DitemPreds)
     fit$covariateEffects$D<- fit$pars$Dbeta
-    fit$covariateEffects$DStd <- t(t(fit$pars$Dbeta) * apply(fit$dat$itemPreds[,fit$dat$DitemPreds],2,sd) / sd(fit$pars$D))
+    fit$covariateEffects$DStd <- t(t(fit$pars$Dbeta) * apply(fit$dat$itemPreds[,fit$dat$DitemPreds,drop=FALSE],2,sd) / sd(fit$pars$D))
   }
 
 
