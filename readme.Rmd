@@ -40,9 +40,19 @@ dat <- simIRT(Nsubs = 1000,Nitems = 50,Nscales = 1,
 #normalise true parameters and store
 trueitempars <- normaliseIRT(B = dat$B, A = dat$A, Ability = dat$Ability)
 
-#convert to wide for mirt
-wdat <- data.frame(dcast(data.table(dat$dat),formula = 'id ~ Item',value.var='score')[,-1])
+#fit using bigIRT
+bigirtfit <- fitIRT(dat$dat, pl=3, cores=4, dropPerfectScores = FALSE, stochastic=TRUE,
+  score = 'score', id = 'id', scale = 'Scale', item = 'Item')
 
+#view item and person parameter estimates
+print(bigirtfit$itemPars)
+print(bigirtfit$personPars)
+
+#get normalized parameter estimates (normalised on ability)
+bigirtpars <- normaliseIRT(B = bigirtfit$itemPars$B, A = bigirtfit$itemPars$A, Ability = bigirtfit$pars$Ability)
+
+#convert to wide data for mirt
+wdat <- data.frame(dcast(data.table(dat$dat),formula = 'id ~ Item',value.var='score')[,-1])
 
 #fit using mirt
 mirtfit <- mirt(wdat,model=1, itemtype = '3PL',method = "EM")
@@ -54,12 +64,6 @@ mirtItempars <- rbindlist(lapply(mirtItempars, function(x) as.data.frame(x)))
 mirtPersonpars <- fscores(mirtfit)[,1]
 mirtpars<- normaliseIRT(B = -mirtItempars$d / mirtItempars$a1, A = mirtItempars$a1, Ability = mirtPersonpars)
 
-#fit using bigIRT
-bigirtfit <- fitIRT(dat$dat, pl=3, cores=4, dropPerfectScores = FALSE, stochastic=TRUE,
-  score = 'score', id = 'id', scale = 'Scale', item = 'Item')
-
-#get normalized parameter estimates
-bigirtpars <- normaliseIRT(B = bigirtfit$itemPars$B, A = bigirtfit$itemPars$A, Ability = bigirtfit$pars$Ability)
 
 #combine parameter outputs
 itempars <- rbind(

@@ -486,7 +486,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
       sdat$invspASD <- sd(afunci(itemDat$A),na.rm=TRUE)*ebayesmultiplier+1e-5
 
       sdat$BMeandat <- mean(itemDat$B,na.rm=TRUE)
-      sdat$BSD <- sd(itemDat$B,na.rm=TRUE)*ebayesmultiplier+1e-5
+      sdat$BSDx <- sd(itemDat$B,na.rm=TRUE)*ebayesmultiplier+1e-5
 
       sdat$logitCMeandat <- mean(logit(itemDat$C+1e-8),na.rm=TRUE)
       sdat$logitCSD <- sd(logit(itemDat$C+1e-8),na.rm=TRUE)*ebayesmultiplier+1e-5
@@ -633,7 +633,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     invspAMeandat=invspAMeandat,
     invspASD=invspASD,
     BMeandat=BMeandat,
-    BSD=BSD,
+    BSDx=BSD,
     logitCMeandat=logitCMeandat,
     logitCSD=logitCSD,
     logitDMeandat=logitDMeandat,
@@ -689,7 +689,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
 
       if(length(fit$pars$Bpars) > 2){
         if(sdat$fixedBMean ==0) sdat$BMeandat <- mean(fit$pars$Bpars[!fit$pars$Bpars %in% boxplot.stats(fit$pars$Bpars)$out])
-        sdat$BSD <- sd(fit$pars$Bpars[!fit$pars$Bpars %in% boxplot.stats(fit$pars$Bpars)$out])*ebayesmultiplier+1e-5
+        sdat$BSDx <- sd(fit$pars$Bpars[!fit$pars$Bpars %in% boxplot.stats(fit$pars$Bpars)$out])*ebayesmultiplier+1e-5
       }
 
       if(pl > 2 && length(fit$pars$logitCpars) > 2){
@@ -722,7 +722,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
 
         sdat$AbilityCorr= cor(fit$pars$Ability) #inconsistency here -- based on overall ability, rather than conditional ability as for sd / mean.
       }
-      if(any(is.na(c(sdat$BSD,sdat$invspASD,sdat$logitCSD,sdat$AbilitySD)))){
+      if(any(is.na(c(sdat$BSDx,sdat$invspASD,sdat$logitCSD,sdat$AbilitySD)))){
         skipebayes <- TRUE
         warning('NA when computing item sd parameters, ebayes set to FALSE')
       }
@@ -731,7 +731,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     if(narrowPriors){
       sdat$dopriors <- 1L
       sdat$ASD <- .1
-      # sdat$BSD <- 1
+      # sdat$BSDx <- 1
       sdat$logitCSD <- .01
       sdat$logitDSD <- .01
       # sdat$AbilitySD <- array(1,sdat$Nscales)

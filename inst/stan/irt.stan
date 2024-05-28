@@ -107,7 +107,7 @@ int fixedAbilityMean; //Logical, are the means of the ability parameters user sp
 
 int dopriors; //Logical -- use priors? if not, the following are all ignored.
 real invspASD; // standard deviation of the inverse softplus A parameters.
-real BSD;// standard deviation of the B parameters.
+real BSDx;// standard deviation of the B parameters.
 real logitCSD; // standard deviation of the logit C parameters.
 real logitDSD; // standard deviation of the logit C parameters.
 vector[Nscales] AbilitySD; // standard deviation of the ability parameters.
@@ -270,7 +270,7 @@ target+=ll;
 //following sections add the prior probability model for any free parameters
 if(dopriors){
   if(NfixedA < Nitems)  invspApars ~ normal(invspAMean,invspASD);
-  if(NfixedB < Nitems) Bpars ~ normal(BMean,BSD);
+  if(NfixedB < Nitems) Bpars ~ normal(BMean,BSDx);
   if(NfixedC < Nitems)logitCpars ~ normal(logitCMean,logitCSD);
   if(NfixedD < Nitems) logitDpars ~ normal(logitDMean,logitDSD);
 
