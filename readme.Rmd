@@ -25,14 +25,14 @@ remotes::install_github('cdriveraus/bigIRT', INSTALL_opts = "--no-multiarch", de
 
 This example generates data from a 3 parameter logistic model, fits the model using mirt and bigIRT, and compares the parameter estimates.
 
-```{r, results=FALSE,plot=FALSE}
+```{r, results=FALSE,plot=FALSE, message=FALSE, warning=FALSE}
 library(bigIRT)
 library(data.table)
 library(mirt)
 library(ggplot2)
 
 #generate data
-dat <- simIRT(Nsubs = 1000,Nitems = 50,Nscales = 1,
+dat <- simIRT(Nsubs = 400,Nitems = 50,Nscales = 1,
   logitCMean = -2,logitCSD = 1,AMean = 1,ASD = .3,
   BMean=0,BSD = .5,
   AbilityMean = 0,AbilitySD = 1)
@@ -41,12 +41,12 @@ dat <- simIRT(Nsubs = 1000,Nitems = 50,Nscales = 1,
 trueitempars <- normaliseIRT(B = dat$B, A = dat$A, Ability = dat$Ability)
 
 #fit using bigIRT
-bigirtfit <- fitIRT(dat$dat, pl=3, cores=4, dropPerfectScores = FALSE, stochastic=TRUE,
+bigirtfit <- fitIRT(dat$dat, pl=3, cores=2, dropPerfectScores = FALSE, stochastic=TRUE,
   score = 'score', id = 'id', scale = 'Scale', item = 'Item')
 
 #view item and person parameter estimates
-print(bigirtfit$itemPars)
-print(bigirtfit$personPars)
+#print(bigirtfit$itemPars)
+#print(bigirtfit$personPars)
 
 #get normalized parameter estimates (normalised on ability)
 bigirtpars <- normaliseIRT(B = bigirtfit$itemPars$B, A = bigirtfit$itemPars$A, Ability = bigirtfit$pars$Ability)
