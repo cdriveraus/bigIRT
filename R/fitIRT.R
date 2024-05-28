@@ -300,44 +300,67 @@ dropPerfectScores <- function(dat,scoreref.='score',itemref.='Item',idref.='id',
 # }
 
 
-#' Title
+#' Fit a binary Item Response Theory (IRT) model
 #'
-#' @param dat
-#' @param score
-#' @param id
-#' @param item
-#' @param scale
-#' @param pl
-#' @param Adata
-#' @param Bdata
-#' @param Cdata
-#' @param personDat
-#' @param invspAMeandat
-#' @param invspASD
-#' @param BMeandat
-#' @param BSD
-#' @param logitCMeandat
-#' @param logitCSD
-#' @param logitDMeandat
-#' @param logitDSD
-#' @param AbilityMeandat
-#' @param AbilitySD
-#' @param AMeanSD
-#' @param BMeanSD
-#' @param logitCMeanSD
-#' @param logitDMeanSD
-#' @param AbilityMeanSD
-#' @param iter
-#' @param cores
-#' @param carefulfit
-#' @param ebayes
-#' @param ebayesmultiplier
-#' @param estMeans
-#' @param priors
-#' @param normalise
-#' @param trainingRows
-#' @param tol
-#' @param ...
+#' This function fits a binary Item Response Theory (IRT) model using various parameters and options.
+#'
+#' @param dat A data frame containing the data to be analyzed.
+#' @param score Character. The name of the column in \code{dat} representing the response. Default is 'score'.
+#' @param id Character. The name of the column in \code{dat} representing the individual. Default is 'id'.
+#' @param item Character. The name of the column in \code{dat} representing the item. Default is 'Item'.
+#' @param scale Character. The name of the column in \code{dat} representing the scale of each item. Default is 'Scale'.
+#' @param pl Integer. The number of parameters for the logistic model (1PL, 2PL, 3PL, or 4PL). Default is 1.
+#' @param personDat Data frame. Any fixed ability data for persons. Default is NA.
+#' @param personPreds Character vector. Names of predictors for person parameters found in data. Default is an empty character vector.
+#' @param itemDat Data frame. Any fixed item data. Default is NA.
+#' @param AitemPreds Character vector. Names of predictors for item discrimination parameters. Default is an empty character vector.
+#' @param BitemPreds Character vector. Names of predictors for item difficulty parameters. Default is an empty character vector.
+#' @param CitemPreds Character vector. Names of predictors for item guessing parameters. Default is an empty character vector.
+#' @param DitemPreds Character vector. Names of predictors for item upper asymptote (slipping) parameters. Default is an empty character vector.
+#' @param itemSpecificBetas Logical. Whether to allow item-specific betas for covariate effects, or simply estimate one effect per covariate. Default is FALSE.
+#' @param betaScale Numeric. Scale of the prior for beta parameters. Default is 10.
+#' @param invspAMeandat Numeric. Mean for the prior distribution of the raw discrimination parameters,
+#' which subsequently have a 'softplus' log(1+exp(x)) applied. Default is 0.542, giving a mean for A pars of ~ 1.
+#' @param invspASD Numeric. Standard deviation for the prior distribution of the raw discrimination parameters. Default is 2.
+#' @param BMeandat Numeric. Mean for the prior distribution of the item difficulty parameters. Default is 0.
+#' @param BSD Numeric. Standard deviation for the prior distribution of the item difficulty parameters. Default is 10.
+#' @param logitCMeandat Numeric. Mean for the prior distribution of the item guessing parameters (on logit scale). Default is -4.
+#' @param logitCSD Numeric. Standard deviation for the prior distribution of the item guessing parameters (on logit scale). Default is 2.
+#' @param logitDMeandat Numeric. Mean for the prior distribution of the item upper asymptote parameters (on logit scale). Default is 4.
+#' @param logitDSD Numeric. Standard deviation for the prior distribution of the item upper asymptote parameters (on logit scale). Default is 2.
+#' @param AbilityMeandat Numeric array. Mean for the prior distribution of the ability parameters. Default is 0 for each scale.
+#' @param AbilitySD Numeric array. Standard deviation for the prior distribution of the ability parameters. Default is 10 for each scale.
+#' @param AbilityCorr Matrix. Correlation matrix for the ability parameters. Default is an identity matrix.
+#' @param AMeanSD Numeric. Standard deviation for the prior distribution of the discrimination parameters. Default is 1.
+#' @param BMeanSD Numeric. Standard deviation for the prior distribution of the difficulty parameters. Default is \code{BSD}.
+#' @param logitCMeanSD Numeric. Standard deviation for the prior distribution of the guessing parameters (on logit scale). Default is \code{logitCSD}.
+#' @param logitDMeanSD Numeric. Standard deviation for the prior distribution of the upper asymptote parameters (on logit scale). Default is \code{logitDSD}.
+#' @param AbilityMeanSD Numeric array. Standard deviation for the prior distribution of the ability parameters. Default is 1 for each scale.
+#' @param iter Integer. Maximum number of iterations for the fitting algorithm. Default is 2000.
+#' @param cores Integer. Number of cores to use for parallel computation. Default is 6.
+#' @param carefulfit Logical. Whether to use a slower, careful fitting procedure. Default is FALSE. Experimental.
+#' @param ebayes Logical. Whether to use empirical Bayes estimation. Default is TRUE. With ebayes, the priors are adapted based on a first pass estimate.
+#' @param ebayesmultiplier Numeric. Multiplier for the widths of the empirical Bayes priors. Default is 2, as this appears to work better in practice.
+#' @param ebayesFromFixed Logical. Whether to initialize empirical Bayes from any specifed fixed values Default is FALSE.
+#' @param ebayesiter Integer. Number of iterations for empirical Bayes estimation. Default is 1.
+#' @param estMeans Character vector. Which means to estimate from 'ability', 'A', 'B', 'C', 'D'. Default is c('ability', 'B', 'C', 'D'), with
+#' discrimination means fixed.
+#' @param priors Logical. Whether to use prior distributions. Default is TRUE.
+#' @param integrateEachAbility Logical. Whether to integrate across each ability. Default is FALSE.
+#' @param integrateEachAbilityFixedSE Logical. Whether to integrate each ability with fixed standard error. Default is FALSE.
+#' @param mml Logical. Experimental and not working well. Whether to use marginal maximum likelihood estimation. Default is FALSE.
+#' @param NintegratePoints Integer. Number of integration points for numerical integration. Default is 5.
+#' @param normalise Logical. Whether to normalize the output estimates. Default is FALSE.
+#' @param normaliseScale Numeric. Scale for normalization. Default is 1.
+#' @param normaliseMean Numeric. Mean for normalization. Default is 0.
+#' @param dropPerfectScores Logical. Whether to drop perfect scores from each subject and item before estimation. Default is TRUE.
+#' @param trainingRows Integer vector. Rows of data to use for estimation of parameters. Default is all rows in \code{dat}.
+#' @param init Initial values for the fitting algorithm. Default is NA.
+#' @param tol Numeric. Tolerance for convergence. Default attempts to sensibly adjust for amount of data.
+#' @param ... Additional arguments passed to the fitting function.
+#'
+#' @return A list containing the fitted IRT model parameters and additional information about the fit.
+#'
 #'
 #' @return
 #' @export
@@ -373,18 +396,20 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   AMeanSD=1,BMeanSD=BSD,logitCMeanSD=logitCSD,logitDMeanSD=logitDSD,
   AbilityMeanSD=array(1,dim=c(length(unique(dat[[scale]])))),
   iter=2000,cores=6,carefulfit=FALSE,
-  ebayes=TRUE,ebayesmultiplier=1,ebayesFromFixed=FALSE,ebayesiter=1,
+  ebayes=TRUE,ebayesmultiplier=2,ebayesFromFixed=FALSE,ebayesiter=1,
   estMeans=c('ability','B','C','D'),priors=TRUE,
   integrateEachAbility=FALSE, integrateEachAbilityFixedSE=FALSE,
   mml=FALSE,NintegratePoints=5,
   normalise=FALSE,normaliseScale=1,normaliseMean=0,
   dropPerfectScores=TRUE,trainingRows=1:nrow(dat),
-  init=NA,tol=1e-2,...){
+  init=NA,tol=1e-8 * 10^(log(nrow(dat), 10)),...){
 
   sdat <-list() #initialize standata object
   basetol=tol
 
   itemPreds <- unique(c(AitemPreds,BitemPreds,CitemPreds,DitemPreds))
+
+  if(mml) stop('MML currently disabled -- hopefully working one day!')
 
   #setup unlikely names to use in data.table calls to avoid overlap from user defined names
   idref. <- id; scaleref. <- scale; itemref. <- item;
@@ -723,7 +748,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     rownames(fit$pars$C)[itemIndex$new] <- itemIndex$original
     rownames(fit$pars$D)[itemIndex$new] <- itemIndex$original
 
-    return(fit)
+    return(list(fit=fit,sdat=sdat))
   }
 
   rm(dat)
@@ -741,6 +766,8 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
       fit = fit,
       narrowPriors = JMLseq[[i]]$narrowPriors,
       tol=tol,...)
+    sdat <- fit$sdat
+    fit <- fit$fit
   }
   # if(ebayes) fit$fitML <- fitML
 
