@@ -21,7 +21,7 @@ normaliseIRT(
 
 \item{A}{Vector of item discrimination parameters.}
 
-\item{normbase}{The base from which the normalisation should be calculated. Can be 'Ability', 'B', or 'A'.}
+\item{normbase}{The base from which the normalisation should be calculated. Can be 'Ability' or 'B'.}
 
 \item{normaliseScale}{The scale to normalise to.}
 

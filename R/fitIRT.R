@@ -6,6 +6,11 @@ logit <- function(x)  log(x)-log((1-x))
 afunc <- function(x) log1p(exp(x))
 afunci <- function(x) log(exp(x)-1)
 
+cfunc <- function(x) inv_logit(x)*.5
+cfunci <- function(x) logit(x*2)
+dfunc <- function(x) inv_logit(x)*.5+.5
+dfunci <- function(x) logit((x-.5)*2)
+
 pcalc <- function(score,ability,B,A=1,C=0,D=1){
   p <- C + (1.0-C) / ( 1.0 + exp( (-A * (ability - B))  ) )
 }
@@ -388,8 +393,8 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   DitemPreds=character(),
   itemSpecificBetas=FALSE,
   betaScale=10,
-  invspAMeandat=.542,invspASD=2,BMeandat=0,BSD=10, logitCMeandat=-4,logitCSD=2,
-  logitDMeandat=4,logitDSD=2,
+  invspAMeandat=.542,invspASD=1,BMeandat=0,BSD=10, logitCMeandat=-4,logitCSD=4,
+  logitDMeandat=4,logitDSD=4,
   AbilityMeandat=array(0,dim=c(length(unique(dat[[scale]])))),
   AbilitySD=array(10,dim=c(length(unique(dat[[scale]])))),
   AbilityCorr=diag(1,c(length(unique(dat[[scale]])))),

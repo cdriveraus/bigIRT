@@ -1,18 +1,18 @@
 Package: bigIRT
 Title: Fits item response theory models to big data
-Version: 0.1.7
+Version: 0.1.8
 Authors@R: 
     person(given = "Charles",
            family = "Driver",
            role = c("aut", "cre"),
-           email = "charles.driver@ife.uzh.ch",
+           email = "charles.driver@psychologie.uzh.ch",
            comment = c(ORCID = "0000-0002-4174-2970"))
 Description: Fits item response theory models to big data.
 License: MIT + file LICENSE
 Encoding: UTF-8
 LazyData: true
 Roxygen: list(markdown = TRUE)
-RoxygenNote: 7.2.3
+RoxygenNote: 7.3.1
 Depends: 
     R (>= 3.5.0),
     data.table

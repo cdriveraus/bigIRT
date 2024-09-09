@@ -2,7 +2,7 @@
 % Please edit documentation in R/fitIRT.R
 \name{fitIRT}
 \alias{fitIRT}
-\title{Title}
+\title{Fit a binary Item Response Theory (IRT) model}
 \usage{
 fitIRT(
   dat,
@@ -21,7 +21,7 @@ fitIRT(
   itemSpecificBetas = FALSE,
   betaScale = 10,
   invspAMeandat = 0.542,
-  invspASD = 0.5,
+  invspASD = 2,
   BMeandat = 0,
   BSD = 10,
   logitCMeandat = -4,
@@ -43,7 +43,7 @@ fitIRT(
   ebayesmultiplier = 2,
   ebayesFromFixed = FALSE,
   ebayesiter = 1,
-  estMeans = c("ability", "A", "B", "C", "D"),
+  estMeans = c("ability", "B", "C", "D"),
   priors = TRUE,
   integrateEachAbility = FALSE,
   integrateEachAbilityFixedSE = FALSE,
@@ -55,15 +55,122 @@ fitIRT(
   dropPerfectScores = TRUE,
   trainingRows = 1:nrow(dat),
   init = NA,
-  tol = 0.01,
+  tol = 1e-08 * 10^(log(nrow(dat), 10)),
   ...
 )
 }
 \arguments{
-\item{...}{}
+\item{dat}{A data frame containing the data to be analyzed.}
+
+\item{score}{Character. The name of the column in \code{dat} representing the response. Default is 'score'.}
+
+\item{id}{Character. The name of the column in \code{dat} representing the individual. Default is 'id'.}
+
+\item{item}{Character. The name of the column in \code{dat} representing the item. Default is 'Item'.}
+
+\item{scale}{Character. The name of the column in \code{dat} representing the scale of each item. Default is 'Scale'.}
+
+\item{pl}{Integer. The number of parameters for the logistic model (1PL, 2PL, 3PL, or 4PL). Default is 1.}
+
+\item{personDat}{Data frame. Any fixed ability data for persons. Default is NA.}
+
+\item{personPreds}{Character vector. Names of predictors for person parameters found in data. Default is an empty character vector.}
+
+\item{itemDat}{Data frame. Any fixed item data. Default is NA.}
+
+\item{AitemPreds}{Character vector. Names of predictors for item discrimination parameters. Default is an empty character vector.}
+
+\item{BitemPreds}{Character vector. Names of predictors for item difficulty parameters. Default is an empty character vector.}
+
+\item{CitemPreds}{Character vector. Names of predictors for item guessing parameters. Default is an empty character vector.}
+
+\item{DitemPreds}{Character vector. Names of predictors for item upper asymptote (slipping) parameters. Default is an empty character vector.}
+
+\item{itemSpecificBetas}{Logical. Whether to allow item-specific betas for covariate effects, or simply estimate one effect per covariate. Default is FALSE.}
+
+\item{betaScale}{Numeric. Scale of the prior for beta parameters. Default is 10.}
+
+\item{invspAMeandat}{Numeric. Mean for the prior distribution of the raw discrimination parameters,
+which subsequently have a 'softplus' log(1+exp(x)) applied. Default is 0.542, giving a mean for A pars of ~ 1.}
+
+\item{invspASD}{Numeric. Standard deviation for the prior distribution of the raw discrimination parameters. Default is 2.}
+
+\item{BMeandat}{Numeric. Mean for the prior distribution of the item difficulty parameters. Default is 0.}
+
+\item{BSD}{Numeric. Standard deviation for the prior distribution of the item difficulty parameters. Default is 10.}
+
+\item{logitCMeandat}{Numeric. Mean for the prior distribution of the item guessing parameters (on logit scale). Default is -4.}
+
+\item{logitCSD}{Numeric. Standard deviation for the prior distribution of the item guessing parameters (on logit scale). Default is 2.}
+
+\item{logitDMeandat}{Numeric. Mean for the prior distribution of the item upper asymptote parameters (on logit scale). Default is 4.}
+
+\item{logitDSD}{Numeric. Standard deviation for the prior distribution of the item upper asymptote parameters (on logit scale). Default is 2.}
+
+\item{AbilityMeandat}{Numeric array. Mean for the prior distribution of the ability parameters. Default is 0 for each scale.}
+
+\item{AbilitySD}{Numeric array. Standard deviation for the prior distribution of the ability parameters. Default is 10 for each scale.}
+
+\item{AbilityCorr}{Matrix. Correlation matrix for the ability parameters. Default is an identity matrix.}
+
+\item{AMeanSD}{Numeric. Standard deviation for the prior distribution of the discrimination parameters. Default is 1.}
+
+\item{BMeanSD}{Numeric. Standard deviation for the prior distribution of the difficulty parameters. Default is \code{BSD}.}
+
+\item{logitCMeanSD}{Numeric. Standard deviation for the prior distribution of the guessing parameters (on logit scale). Default is \code{logitCSD}.}
+
+\item{logitDMeanSD}{Numeric. Standard deviation for the prior distribution of the upper asymptote parameters (on logit scale). Default is \code{logitDSD}.}
+
+\item{AbilityMeanSD}{Numeric array. Standard deviation for the prior distribution of the ability parameters. Default is 1 for each scale.}
+
+\item{iter}{Integer. Maximum number of iterations for the fitting algorithm. Default is 2000.}
+
+\item{cores}{Integer. Number of cores to use for parallel computation. Default is 6.}
+
+\item{carefulfit}{Logical. Whether to use a slower, careful fitting procedure. Default is FALSE. Experimental.}
+
+\item{ebayes}{Logical. Whether to use empirical Bayes estimation. Default is TRUE. With ebayes, the priors are adapted based on a first pass estimate.}
+
+\item{ebayesmultiplier}{Numeric. Multiplier for the widths of the empirical Bayes priors. Default is 2, as this appears to work better in practice.}
+
+\item{ebayesFromFixed}{Logical. Whether to initialize empirical Bayes from any specifed fixed values Default is FALSE.}
+
+\item{ebayesiter}{Integer. Number of iterations for empirical Bayes estimation. Default is 1.}
+
+\item{estMeans}{Character vector. Which means to estimate from 'ability', 'A', 'B', 'C', 'D'. Default is c('ability', 'B', 'C', 'D'), with
+discrimination means fixed.}
+
+\item{priors}{Logical. Whether to use prior distributions. Default is TRUE.}
+
+\item{integrateEachAbility}{Logical. Whether to integrate across each ability. Default is FALSE.}
+
+\item{integrateEachAbilityFixedSE}{Logical. Whether to integrate each ability with fixed standard error. Default is FALSE.}
+
+\item{mml}{Logical. Experimental and not working well. Whether to use marginal maximum likelihood estimation. Default is FALSE.}
+
+\item{NintegratePoints}{Integer. Number of integration points for numerical integration. Default is 5.}
+
+\item{normalise}{Logical. Whether to normalize the output estimates. Default is FALSE.}
+
+\item{normaliseScale}{Numeric. Scale for normalization. Default is 1.}
+
+\item{normaliseMean}{Numeric. Mean for normalization. Default is 0.}
+
+\item{dropPerfectScores}{Logical. Whether to drop perfect scores from each subject and item before estimation. Default is TRUE.}
+
+\item{trainingRows}{Integer vector. Rows of data to use for estimation of parameters. Default is all rows in \code{dat}.}
+
+\item{init}{Initial values for the fitting algorithm. Default is NA.}
+
+\item{tol}{Numeric. Tolerance for convergence. Default attempts to sensibly adjust for amount of data.}
+
+\item{...}{Additional arguments passed to the fitting function.}
+}
+\value{
+A list containing the fitted IRT model parameters and additional information about the fit.
 }
 \description{
-Title
+This function fits a binary Item Response Theory (IRT) model using various parameters and options.
 }
 \examples{
 #Generate some data (here 2pl model

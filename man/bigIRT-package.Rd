@@ -41,3 +41,7 @@ cor(data.frame(True=dat$B,Est=fit$pars$B))
 \references{
 Stan Development Team (NA). RStan: the R interface to Stan. R package version 2.26.1. https://mc-stan.org
 }
+\author{
+\strong{Maintainer}: Charles Driver \email{charles.driver@ife.uzh.ch} (\href{https://orcid.org/0000-0002-4174-2970}{ORCID})
+
+}
