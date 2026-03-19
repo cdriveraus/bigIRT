@@ -41,7 +41,7 @@ if(identical(Sys.getenv("NOT_CRAN"), "true")& .Machine$sizeof.pointer != 4){
 
     fit <- fitIRT(dat$dat,cores=cores,pl=2,plot=F,verbose=1,priors=T,
       personPreds = c('V1','V2'),dropPerfectScores = T,
-      integrateAbility = T,integrateWidth = .5,
+      # integrateAbility = T,integrateWidth = .5,
       # itemDat = itemdat,
       betaScale = 100,tol=1e-2,
       normalise = F,ebayes = T,ebayesmultiplier = 2)
@@ -63,7 +63,7 @@ if(identical(Sys.getenv("NOT_CRAN"), "true")& .Machine$sizeof.pointer != 4){
     lm(parstrue$Ability ~ fit$dat$personPreds[!duplicated(fit$dat$id),])
     testthat::expect_equivalent(
       c(predBetaStd),
-      c(fit$CovariateEffects$AbilityStd),
+      c(fit$covariateEffects$AbilityStd),
       tol=.1)
   })
 

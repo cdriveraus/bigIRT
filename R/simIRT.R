@@ -6,16 +6,8 @@ inv_log1p_exp <- function(x){
   log(exp(x)-1)
 }
 
-#' Simulate a person given an IRT scale covariance cholesky, covariates, and covariate effects.
-#'
-#' @param scaleChol
-#' @param covs
-#' @param covFuncList
-#'
-#' @return
-#' @export
-#'
-#' @examples
+# Simulate a person given an IRT scale covariance cholesky, covariates, and
+# covariate effects.
 if(F){
 
 # sim ---------------------------------------------------------------------
@@ -241,24 +233,64 @@ IRTcurve <- function(a,b,c,theta=seq(-3,3,.01),plot=TRUE,rescale=FALSE,add=FALSE
 
 #' Simulate IRT data
 #'
-#' @param Nsubs
-#' @param Nitems
-#' @param Nscales
-#' @param ASD
-#' @param AMean
-#' @param BSD
-#' @param BMean
-#' @param AbilitySD
-#' @param AbilityMean
+#' @param Nsubs Integer. Number of subjects.
+#' @param Nitems Integer. Number of items per scale.
+#' @param Nscales Integer. Number of scales.
+#' @param NitemsAnswered Integer (or length-`Nscales` integer vector). Number
+#'   of items answered per person per scale. Values below `Nitems` generate
+#'   sparse-response datasets.
+#' @param ASD Numeric. SD of simulated item discrimination values (`A`) before
+#'   optional normalization.
+#' @param AMean Numeric. Mean of simulated item discrimination values (`A`).
+#' @param BSD Numeric. SD of simulated item difficulty values (`B`).
+#' @param BMean Numeric. Mean of simulated item difficulty values (`B`).
+#' @param logitCSD Numeric. SD of simulated guessing values on logit scale.
+#' @param logitCMean Numeric. Mean of simulated guessing values on logit scale.
+#' @param AbilitySD Numeric. SD of simulated person abilities.
+#' @param AbilityMean Numeric. Mean of simulated person abilities.
+#' @param itemPreds Optional matrix/data frame of item-level predictors. Rows
+#'   should align with items.
+#' @param AitemPredEffects Optional numeric matrix/vector of effects of
+#'   `itemPreds` on item discrimination values.
+#' @param BitemPredEffects Optional numeric matrix/vector of effects of
+#'   `itemPreds` on item difficulty values.
+#' @param logitCitemPredEffects Optional numeric matrix/vector of effects of
+#'   `itemPreds` on guessing values (logit scale).
+#' @param personPreds Optional matrix/data frame of person-level predictors.
+#'   Rows should align with subjects.
+#' @param AbilityPredEffects Optional matrix of effects of `personPreds` on
+#'   person ability by scale.
+#' @param normalise Logical. If `TRUE`, simulated `A`, `B`, and `Ability` are
+#'   normalized within scale using [normaliseIRT()].
 #'
-#' @return
+#' @return A list with:
+#' \describe{
+#'   \item{Ability}{Matrix of true person abilities (`Nsubs x Nscales`).}
+#'   \item{A}{Matrix of true item discriminations (`Nitems x Nscales`).}
+#'   \item{B}{Matrix of true item difficulties (`Nitems x Nscales`).}
+#'   \item{C}{Matrix of true item guessing parameters (`Nitems x Nscales`).}
+#'   \item{dat}{Long-format response data as a `data.table`.}
+#' }
 #' @export
 #'
 #' @examples
+#' sim <- simIRT(Nsubs = 100, Nitems = 40, Nscales = 1, ASD = .2, BSD = .8)
+#' head(sim$dat)
 simIRT <- function(Nsubs=100,Nitems=200,Nscales=1, NitemsAnswered=Nitems,
   ASD=0,AMean=1,BSD=1,BMean=0,logitCSD=1,logitCMean=-2,AbilitySD=1,AbilityMean=0,
   itemPreds=NA, AitemPredEffects=NA,BitemPredEffects=NA,logitCitemPredEffects=NA,
   personPreds=NA, AbilityPredEffects=NA, normalise=FALSE){
+
+  if(length(NitemsAnswered) == 1){
+    NitemsAnswered <- rep(NitemsAnswered,Nscales)
+  }
+  if(length(NitemsAnswered) != Nscales){
+    stop("NitemsAnswered must have length 1 or Nscales.")
+  }
+  if(any(!is.finite(NitemsAnswered)) || any(NitemsAnswered < 1) ||
+     any(NitemsAnswered > Nitems) || any(NitemsAnswered %% 1 != 0)){
+    stop("NitemsAnswered must be integer values between 1 and Nitems.")
+  }
 
   Ability <- matrix(rnorm(Nsubs*Nscales,AbilityMean,AbilitySD),Nsubs)
   A <- matrix(rnorm(Nitems*Nscales,AMean,ASD),Nitems)
@@ -317,6 +349,13 @@ simIRT <- function(Nsubs=100,Nitems=200,Nscales=1, NitemsAnswered=Nitems,
 
     simdat$score <- rbinom(n = nrow(simdat),size = 1,
       prob = simdat$p )
+
+    if(NitemsAnswered[si] < Nitems){
+      simdat <- data.table(simdat)[,
+        .SD[sample(.N,size=NitemsAnswered[si])],
+        by=id
+      ]
+    }
 
     if(si==1) dat <- simdat else dat <- rbind(dat,simdat)
   }

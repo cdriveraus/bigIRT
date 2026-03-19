@@ -7,18 +7,21 @@
 wleIRT(fit)
 }
 \arguments{
-\item{fit}{A bigIRT model fit object.}
+\item{fit}{A fitted object returned by \code{\link[=fitIRT]{fitIRT()}}.}
 }
 \value{
-A list containing two matrices. The first matrix contains the WLEs for each subject and scale. The second matrix contains the SEs for each subject and scale.
+A list with:
+\describe{
+\item{wle}{Matrix of weighted likelihood estimates by subject and scale.}
+\item{wleSE}{Matrix of approximate standard errors for \code{wle}.}
+}
 }
 \description{
 Computes the WLE and SE for each subject and scale in a bigIRT model.
 }
 \examples{
-# Fit a bigIRT model
-#fit <- bigIRT(data, itempars)
-
-# Compute WLE and SE
-#wleIRT(fit)
+sim <- simIRT(Nsubs = 60, Nitems = 20, Nscales = 1)
+fit <- fitIRT(sim$dat, pl = 2, cores = 1, dropPerfectScores = FALSE)
+wle <- wleIRT(fit)
+str(wle)
 }

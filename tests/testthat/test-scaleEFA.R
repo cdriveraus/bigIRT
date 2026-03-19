@@ -4,6 +4,7 @@ if(identical(Sys.getenv("NOT_CRAN"), "true")& .Machine$sizeof.pointer != 4){
 
 
   test_that("ScaleEFA", { #placeholder, not working
+    skip("Placeholder exploratory test is not part of automated CI coverage.")
     set.seed(1)
 
     require(data.table)

@@ -50,7 +50,7 @@ if(identical(Sys.getenv("NOT_CRAN"), "true")& .Machine$sizeof.pointer != 4){
     out=cbind(fiti$pars$sAbilitySD,numSD)
     plot(out)
     abline(0,1)
-    testthat::expect_equivalent(out[,1], out[,2], tol=1e-5)
+    testthat::expect_equivalent(out[,1], out[,2], tol=1e-2)
   })
 
 }

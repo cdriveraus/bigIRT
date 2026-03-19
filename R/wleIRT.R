@@ -65,18 +65,21 @@ wleSEnumeric <- function(theta, A, B, C, score){
 #'
 #' Computes the WLE and SE for each subject and scale in a bigIRT model.
 #'
-#' @param fit A bigIRT model fit object.
+#' @param fit A fitted object returned by [fitIRT()].
 #'
-#' @return A list containing two matrices. The first matrix contains the WLEs for each subject and scale. The second matrix contains the SEs for each subject and scale.
+#' @return A list with:
+#' \describe{
+#'   \item{wle}{Matrix of weighted likelihood estimates by subject and scale.}
+#'   \item{wleSE}{Matrix of approximate standard errors for `wle`.}
+#' }
 #'
 #' @export
 #'
 #' @examples
-#' # Fit a bigIRT model
-#' #fit <- bigIRT(data, itempars)
-#'
-#' # Compute WLE and SE
-#' #wleIRT(fit)
+#' sim <- simIRT(Nsubs = 60, Nitems = 20, Nscales = 1)
+#' fit <- fitIRT(sim$dat, pl = 2, cores = 1, dropPerfectScores = FALSE)
+#' wle <- wleIRT(fit)
+#' str(wle)
 wleIRT <- function(fit){
 
   wle <- matrix(NA,nrow=fit$dat$Nsubs,ncol=fit$dat$Nscales)

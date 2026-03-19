@@ -27,8 +27,68 @@ simIRT(
 )
 }
 \arguments{
-\item{AbilityMean}{}
+\item{Nsubs}{Integer. Number of subjects.}
+
+\item{Nitems}{Integer. Number of items per scale.}
+
+\item{Nscales}{Integer. Number of scales.}
+
+\item{NitemsAnswered}{Integer (or length-\code{Nscales} integer vector). Number
+of items answered per person per scale. Values below \code{Nitems} generate
+sparse-response datasets.}
+
+\item{ASD}{Numeric. SD of simulated item discrimination values (\code{A}) before
+optional normalization.}
+
+\item{AMean}{Numeric. Mean of simulated item discrimination values (\code{A}).}
+
+\item{BSD}{Numeric. SD of simulated item difficulty values (\code{B}).}
+
+\item{BMean}{Numeric. Mean of simulated item difficulty values (\code{B}).}
+
+\item{logitCSD}{Numeric. SD of simulated guessing values on logit scale.}
+
+\item{logitCMean}{Numeric. Mean of simulated guessing values on logit scale.}
+
+\item{AbilitySD}{Numeric. SD of simulated person abilities.}
+
+\item{AbilityMean}{Numeric. Mean of simulated person abilities.}
+
+\item{itemPreds}{Optional matrix/data frame of item-level predictors. Rows
+should align with items.}
+
+\item{AitemPredEffects}{Optional numeric matrix/vector of effects of
+\code{itemPreds} on item discrimination values.}
+
+\item{BitemPredEffects}{Optional numeric matrix/vector of effects of
+\code{itemPreds} on item difficulty values.}
+
+\item{logitCitemPredEffects}{Optional numeric matrix/vector of effects of
+\code{itemPreds} on guessing values (logit scale).}
+
+\item{personPreds}{Optional matrix/data frame of person-level predictors.
+Rows should align with subjects.}
+
+\item{AbilityPredEffects}{Optional matrix of effects of \code{personPreds} on
+person ability by scale.}
+
+\item{normalise}{Logical. If \code{TRUE}, simulated \code{A}, \code{B}, and \code{Ability} are
+normalized within scale using \code{\link[=normaliseIRT]{normaliseIRT()}}.}
+}
+\value{
+A list with:
+\describe{
+\item{Ability}{Matrix of true person abilities (\verb{Nsubs x Nscales}).}
+\item{A}{Matrix of true item discriminations (\verb{Nitems x Nscales}).}
+\item{B}{Matrix of true item difficulties (\verb{Nitems x Nscales}).}
+\item{C}{Matrix of true item guessing parameters (\verb{Nitems x Nscales}).}
+\item{dat}{Long-format response data as a \code{data.table}.}
+}
 }
 \description{
 Simulate IRT data
+}
+\examples{
+sim <- simIRT(Nsubs = 100, Nitems = 40, Nscales = 1, ASD = .2, BSD = .8)
+head(sim$dat)
 }

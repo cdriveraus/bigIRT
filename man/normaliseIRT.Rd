@@ -10,7 +10,7 @@ normaliseIRT(
   A,
   normbase = "Ability",
   normaliseScale = 1,
-  normaliseMean = ifelse(normbase == "A", 1, 0),
+  normaliseMean = 0,
   robust = TRUE
 )
 }
@@ -25,7 +25,8 @@ normaliseIRT(
 
 \item{normaliseScale}{The scale to normalise to.}
 
-\item{normaliseMean}{The mean to normalise to. The default is 0 when normbase is 'Ability' or 'B', and 1 when normbase is 'A'.}
+\item{normaliseMean}{The mean to normalise to. The default is 0 for the
+supported \code{normbase} values ('Ability' or 'B').}
 
 \item{robust}{if TRUE, outliers (greater than 1.5x the interquartile range from the interquartile region of 25-75\%)
 are dropped before computing the mean and sd for normalisation.}

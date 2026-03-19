@@ -21,13 +21,13 @@ fitIRT(
   itemSpecificBetas = FALSE,
   betaScale = 10,
   invspAMeandat = 0.542,
-  invspASD = 2,
+  invspASD = 1,
   BMeandat = 0,
   BSD = 10,
   logitCMeandat = -4,
-  logitCSD = 2,
+  logitCSD = 4,
   logitDMeandat = 4,
-  logitDSD = 2,
+  logitDSD = 4,
   AbilityMeandat = array(0, dim = c(length(unique(dat[[scale]])))),
   AbilitySD = array(10, dim = c(length(unique(dat[[scale]])))),
   AbilityCorr = diag(1, c(length(unique(dat[[scale]])))),
@@ -42,13 +42,20 @@ fitIRT(
   ebayes = TRUE,
   ebayesmultiplier = 2,
   ebayesFromFixed = FALSE,
-  ebayesiter = 1,
   estMeans = c("ability", "B", "C", "D"),
   priors = TRUE,
   integrateEachAbility = FALSE,
   integrateEachAbilityFixedSE = FALSE,
-  mml = FALSE,
   NintegratePoints = 5,
+  sampledAbilityStep = FALSE,
+  sampledAbilityOuterIter = 2,
+  sampledAbilityJitter = 1e-06,
+  sampledAbilitySigmaScale = 0.5,
+  sampledAbilityDiagnostics = FALSE,
+  sampledAbilityPlot = FALSE,
+  sampledAbilityPlotEvery = 1L,
+  noptimsteps = 10,
+  noptimgradtol = 0.01,
   normalise = FALSE,
   normaliseScale = 1,
   normaliseMean = 0,
@@ -93,7 +100,7 @@ fitIRT(
 \item{invspAMeandat}{Numeric. Mean for the prior distribution of the raw discrimination parameters,
 which subsequently have a 'softplus' log(1+exp(x)) applied. Default is 0.542, giving a mean for A pars of ~ 1.}
 
-\item{invspASD}{Numeric. Standard deviation for the prior distribution of the raw discrimination parameters. Default is 2.}
+\item{invspASD}{Numeric. Standard deviation for the prior distribution of the raw discrimination parameters. Default is 1.}
 
 \item{BMeandat}{Numeric. Mean for the prior distribution of the item difficulty parameters. Default is 0.}
 
@@ -101,11 +108,11 @@ which subsequently have a 'softplus' log(1+exp(x)) applied. Default is 0.542, gi
 
 \item{logitCMeandat}{Numeric. Mean for the prior distribution of the item guessing parameters (on logit scale). Default is -4.}
 
-\item{logitCSD}{Numeric. Standard deviation for the prior distribution of the item guessing parameters (on logit scale). Default is 2.}
+\item{logitCSD}{Numeric. Standard deviation for the prior distribution of the item guessing parameters (on logit scale). Default is 4.}
 
 \item{logitDMeandat}{Numeric. Mean for the prior distribution of the item upper asymptote parameters (on logit scale). Default is 4.}
 
-\item{logitDSD}{Numeric. Standard deviation for the prior distribution of the item upper asymptote parameters (on logit scale). Default is 2.}
+\item{logitDSD}{Numeric. Standard deviation for the prior distribution of the item upper asymptote parameters (on logit scale). Default is 4.}
 
 \item{AbilityMeandat}{Numeric array. Mean for the prior distribution of the ability parameters. Default is 0 for each scale.}
 
@@ -135,8 +142,6 @@ which subsequently have a 'softplus' log(1+exp(x)) applied. Default is 0.542, gi
 
 \item{ebayesFromFixed}{Logical. Whether to initialize empirical Bayes from any specifed fixed values Default is FALSE.}
 
-\item{ebayesiter}{Integer. Number of iterations for empirical Bayes estimation. Default is 1.}
-
 \item{estMeans}{Character vector. Which means to estimate from 'ability', 'A', 'B', 'C', 'D'. Default is c('ability', 'B', 'C', 'D'), with
 discrimination means fixed.}
 
@@ -146,9 +151,33 @@ discrimination means fixed.}
 
 \item{integrateEachAbilityFixedSE}{Logical. Whether to integrate each ability with fixed standard error. Default is FALSE.}
 
-\item{mml}{Logical. Experimental and not working well. Whether to use marginal maximum likelihood estimation. Default is FALSE.}
-
 \item{NintegratePoints}{Integer. Number of integration points for numerical integration. Default is 5.}
+
+\item{sampledAbilityStep}{Logical. Whether to run sampled-ability outer updates after the base
+optimization step. Default is FALSE.}
+
+\item{sampledAbilityOuterIter}{Integer. Number of sampled-ability outer iterations. Default is 2.}
+
+\item{sampledAbilityJitter}{Numeric. Small jitter added to stabilize sampled-ability covariance
+calculations. Default is 1e-6.}
+
+\item{sampledAbilitySigmaScale}{Numeric. Multiplier applied to sampled-ability covariance templates.
+Default is 0.5.}
+
+\item{sampledAbilityDiagnostics}{Logical. Whether to store sampled-ability diagnostics in
+\code{fit$sampledAbilityDiagnostics}. Default is FALSE.}
+
+\item{sampledAbilityPlot}{Logical. Whether to plot sampled-ability diagnostics during outer
+iterations. Default is FALSE.}
+
+\item{sampledAbilityPlotEvery}{Integer. Plot sampled-ability diagnostics every N outer iterations
+when \code{sampledAbilityPlot=TRUE}. Default is 1.}
+
+\item{noptimsteps}{Integer. Number of optimizer iterations used inside each sampled-ability
+item/person sub-step. Default is 10.}
+
+\item{noptimgradtol}{Numeric. Convergence tolerance for combined sampled-ability gradient norm.
+Default is 1e-2.}
 
 \item{normalise}{Logical. Whether to normalize the output estimates. Default is FALSE.}
 

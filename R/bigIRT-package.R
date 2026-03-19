@@ -1,44 +1,32 @@
 #' The 'bigIRT' package.
 #'
-#' @description A DESCRIPTION OF THE PACKAGE
+#' @description
+#' Tools for fitting binary item response theory (IRT) models for large and
+#' sparse response data. The main entry point is [fitIRT()], which supports
+#' 1PL-4PL models, optional covariate effects on item and person parameters,
+#' empirical-Bayes style prior adaptation, and utility functions for simulation
+#' and post-estimation summaries.
 #'
-#' @docType package
 #' @name bigIRT-package
 #' @aliases bigIRT
 #' @useDynLib bigIRT, .registration = TRUE
 #' @import methods
 #' @import Rcpp data.table mize parallel
 #' @importFrom rstan sampling
+#' @keywords internal
 #'
 #' @references
 #' Stan Development Team (NA). RStan: the R interface to Stan. R package version 2.26.1. https://mc-stan.org
-#'@examples
-#' #Generate some data (here 2pl model
+#' @examples
+#' # Generate simple 2PL data and fit a model.
 #' require(data.table)
-#' dat <- simIRT(Nsubs = 5000,Nitems = 100,Nscales = 1,
-#'   logitCMean = -10,logitCSD = 0,AMean = 1,ASD = .3,
-#'   BMean=0,BSD = .5,
+#' dat <- simIRT(Nsubs = 500,Nitems = 50,Nscales = 1,
+#'   logitCMean = -10,logitCSD = 0,AMean = 1,ASD = .2,
+#'   BMean=0,BSD = .7,
 #'   AbilityMean = 0,AbilitySD = 1)
 #'
-#' #convert to wide for TAM
-#' wdat <- data.frame(dcast(data.table(dat$dat),formula = 'id ~ Item',value.var='score')[,-1])
+#' fit <- fitIRT(dat$dat,cores=1,pl=2,dropPerfectScores=FALSE)
 #'
-#'
-#' #fit using TAM
-#' require(TAM)
-#' tfit <-tam.mml.2pl(resp = wdat,est.variance = TRUE)
-#'
-#'
-#' #fit using bigIRT
-#' fit <- fitIRT(dat$dat,cores=2,pl=2)
-#'
-#' #some summary stuff:
-#' plot(dat$Ability,(fit$pars$Ability-dat$Ability)^2) #ability error given ability
-#' sqrt(mean((fit$pars$Ability-dat$Ability)^2)) #rms error stat
-#'
-#' #correlations of estimated vs true
-#' cor(data.frame(True=dat$Ability,Est=fit$pars$Ability))
-#' cor(data.frame(True=dat$A,Est=fit$pars$A))
-#' cor(data.frame(True=dat$B,Est=fit$pars$B))
-#'
-NULL
+#' head(fit$itemPars)
+#' head(fit$personPars)
+"_PACKAGE"

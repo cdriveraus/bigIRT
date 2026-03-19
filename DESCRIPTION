@@ -1,5 +1,5 @@
 Package: bigIRT
-Title: Fits item response theory models to big data
+Title: Item Response Theory for Large Sparse Data
 Version: 0.1.8
 Authors@R: 
     person(given = "Charles",
@@ -7,12 +7,15 @@ Authors@R:
            role = c("aut", "cre"),
            email = "charles.driver@psychologie.uzh.ch",
            comment = c(ORCID = "0000-0002-4174-2970"))
-Description: Fits item response theory models to big data.
+Description: Fits binary item response theory (IRT) models for large and sparse
+    data in long format. Supports 1PL to 4PL models, optional covariate effects
+    on item and person parameters, empirical-Bayes style prior adaptation, and
+    helper tools for simulation and weighted-likelihood scoring.
 License: MIT + file LICENSE
 Encoding: UTF-8
 LazyData: true
 Roxygen: list(markdown = TRUE)
-RoxygenNote: 7.3.1
+RoxygenNote: 7.3.3
 Depends: 
     R (>= 3.5.0),
     data.table
@@ -36,3 +39,5 @@ LinkingTo:
 Suggests: testthat
 Biarch: true
 SystemRequirements: GNU make
+URL: https://github.com/cdriveraus/bigIRT
+BugReports: https://github.com/cdriveraus/bigIRT/issues

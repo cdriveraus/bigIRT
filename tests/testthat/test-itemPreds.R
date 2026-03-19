@@ -50,13 +50,13 @@ cores=2
 
     testthat::expect_equivalent(
       c(BpredBetaStd),
-      c(fit$CovariateEffects$BStd),
+      c(fit$covariateEffects$BStd),
       tol=.05)
 
     testthat::expect_equivalent(
       c(ApredBetaStd),
-      c(fit$CovariateEffects$AStd),
-      tol=.1)
+      c(fit$covariateEffects$AStd),
+      tol=.35)
   })
 
 

@@ -103,8 +103,9 @@ scoreIRT <- function(fit, verbose=1L){
 }
 
 
-optimIRT <- function(standata, cores=6, mml=FALSE,split=TRUE,
-  verbose=0,plot=0,tol=1e-2,Niter=2000,askmore=FALSE,stochastic=FALSE,init=NA,dohess=FALSE){
+optimIRT <- function(standata, cores=6,split=TRUE,
+  verbose=0,plot=0,tol=1e-2,Niter=2000,askmore=FALSE,stochastic=FALSE,init=NA,dohess=FALSE,
+  free_par_index=NULL,fixed_par_full=NULL,fixed_par_samples=NULL,sample_weights=NULL){
   # verbose=1
   # cores=8
   # plot=10
@@ -138,7 +139,25 @@ optimIRT <- function(standata, cores=6, mml=FALSE,split=TRUE,
   iter <-0
   storedLp <- c()
 
-  singletarget<-function(parm,gradnoise=TRUE) {
+  if(is.null(fixed_par_samples)){
+    fixed_par_samples <- list()
+  }
+
+  # Reconstruct the full unconstrained parameter vector when only a subset of
+  # coordinates is being optimized in the outer sampled-ability routine.
+  build_full_par <- function(free_par, sample_id = 1L){
+    if(is.null(free_par_index)){
+      return(free_par)
+    }
+    base_par <- fixed_par_full
+    if(sample_id > 0L && length(fixed_par_samples) >= sample_id){
+      base_par <- fixed_par_samples[[sample_id]]
+    }
+    base_par[free_par_index] <- free_par
+    base_par
+  }
+
+  singletarget_full<-function(parm,gradnoise=TRUE) {
     iter <<- iter+1
     a=Sys.time()
     out<- try(rstan::log_prob(smf,upars=parm,adjust_transform=TRUE,gradient=TRUE),silent = FALSE)
@@ -154,9 +173,8 @@ optimIRT <- function(standata, cores=6, mml=FALSE,split=TRUE,
   }
 
   if(cores==1){
-    target = singletarget #we use this for importance sampling
-    if(!mml) smf <- stan_reinitsf(stanmodels$irt,standata)
-    if(mml) smf <- stan_reinitsf(stanmodels$irtmml,standata)
+    target_full = singletarget_full #we use this for importance sampling
+    smf <- stan_reinitsf(stanmodels$irt,standata)
 
   }
 
@@ -169,7 +187,7 @@ optimIRT <- function(standata, cores=6, mml=FALSE,split=TRUE,
       "standata <- standata_specificsubjects(standata,stanindices[[nodeid]])",
       "if(!1 %in% stanindices[[nodeid]]) standata$dopriors <- 0L",
       "g = eval(parse(text=paste0('gl','obalenv()')))", #avoid spurious cran check -- assigning to global environment only on created parallel workers.
-      paste0("assign('smf',bigIRT:::stan_reinitsf(bigIRT:::stanmodels$irt",ifelse(mml,'mml',''),",standata),pos = g)"),
+      "assign('smf',bigIRT:::stan_reinitsf(bigIRT:::stanmodels$irt,standata),pos = g)",
       "NULL"
     )
 
@@ -209,7 +227,7 @@ optimIRT <- function(standata, cores=6, mml=FALSE,split=TRUE,
 
 
 
-    target<-function(parm,gradnoise=TRUE){
+    target_full<-function(parm,gradnoise=TRUE){
       iter <<- iter+1
       a=Sys.time()
       # clusterIDexport(cl,'parm')
@@ -254,11 +272,41 @@ optimIRT <- function(standata, cores=6, mml=FALSE,split=TRUE,
 
   }#end multicore
 
+  target <- function(parm,gradnoise=TRUE){
+    if(is.null(free_par_index) && length(fixed_par_samples) == 0){
+      return(target_full(parm,gradnoise=gradnoise))
+    }
+
+    # Average the objective over fixed ability templates while only returning
+    # gradients for the currently free parameter block.
+    Nsamp <- max(length(fixed_par_samples),1L)
+    if(is.null(sample_weights)){
+      weights <- rep(1 / Nsamp,Nsamp)
+    } else {
+      weights <- sample_weights / sum(sample_weights)
+    }
+
+    out_list <- vector("list", Nsamp)
+    for(si in seq_len(Nsamp)){
+      out_list[[si]] <- target_full(build_full_par(parm, si),gradnoise=gradnoise)
+    }
+
+    out <- sum(vapply(seq_len(Nsamp),function(si) weights[si] * out_list[[si]][1],numeric(1)))
+    if(is.null(free_par_index)){
+      grad <- Reduce(`+`,lapply(seq_len(Nsamp),function(si) weights[si] * attributes(out_list[[si]])$gradient))
+    } else {
+      grad <- Reduce(`+`,lapply(seq_len(Nsamp),function(si) weights[si] * attributes(out_list[[si]])$gradient[free_par_index]))
+    }
+    attributes(out) <- list(gradient=grad)
+    out
+  }
+
 
   if(cores==1) npars=rstan::get_num_upars(smf)
   # if(cores > 1) npars=parallel::clusterEvalQ(benv$clms, eval(rstan::get_num_upars(smf),envir = globalenv()))[[1]]
   # if(cores > 1) npars=clusterIDeval(cl, 'rstan::get_num_upars(smf)')[[1]]
   if(cores > 1) npars=parallel::clusterEvalQ(benv$cl, rstan::get_num_upars(smf))[[1]]
+  if(!is.null(free_par_index)) npars <- length(free_par_index)
   if(is.na(init[1])) init=rnorm(npars,0,.1)
   #target(init)
 
@@ -321,13 +369,23 @@ optimIRT <- function(standata, cores=6, mml=FALSE,split=TRUE,
   try({parallel::stopCluster(clms)},silent=TRUE)
 
   standata$doGenQuant = 1L #generate extra values now
-  if(!mml) smf <- stan_reinitsf(stanmodels$irt,standata)
-  if(mml) smf <- stan_reinitsf(stanmodels$irtmml,standata)
+  smf <- stan_reinitsf(stanmodels$irt,standata)
+
+  final_full_par <- if(is.null(free_par_index) && length(fixed_par_samples) == 0){
+    optimfit$par
+  } else if(!is.null(fixed_par_full)) {
+    build_full_par(optimfit$par, 0L)
+  } else {
+    build_full_par(optimfit$par, 1L)
+  }
+  final_grad <- attributes(target(if(is.null(free_par_index)) final_full_par else optimfit$par))$gradient
+  optimfit$masked_grad_norm <- sqrt(sum(final_grad^2))
+  optimfit$par <- final_full_par
 
   return(list(optim=optimfit,
     parcov=parcov,
     stanfit=smf,
-    pars=rstan::constrain_pars(object = smf, optimfit$par),
+    pars=rstan::constrain_pars(object = smf, final_full_par),
     dat=standata))
 
 }

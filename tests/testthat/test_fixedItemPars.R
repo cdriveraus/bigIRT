@@ -38,7 +38,7 @@ if(identical(Sys.getenv("NOT_CRAN"), "true")& .Machine$sizeof.pointer != 4){
 
 
     fitis <- fitIRT(dat$dat,cores=cores,pl=2,plot=F,verbose=0,priors=TRUE,
-      itemPreds = itemPreds,
+      BitemPreds = itemPreds,AitemPreds = itemPreds,
       personDat = persondat,
       itemDat = itemdat,
       # betaScale = 1,
@@ -109,7 +109,6 @@ if(identical(Sys.getenv("NOT_CRAN"), "true")& .Machine$sizeof.pointer != 4){
 
     testthat::expect_equivalent(0, mean(fit$pars$A^2- c(dat$A)^2),  tol=.01)
     testthat::expect_equivalent(0, mean(fitis$pars$A^2- c(dat$A)^2),  tol=.01)
-    }
   })
 
 
