@@ -41,6 +41,20 @@ if(identical(Sys.getenv("NOT_CRAN"), "true")& .Machine$sizeof.pointer != 4){
     )
 
     expect_true(nrow(fitSampled$sampledAbilityDiagnostics) > 0)
+    diagdf <- fitSampled$sampledAbilityDiagnostics
+    expect_true(all(c(
+      "stage", "itemGradNorm", "personGradNorm", "combinedGradNorm",
+      "accepted", "rejected", "reject_reason", "sigmaScaleUsed",
+      "personStepDamping", "itemStepDamping", "meanPosteriorSD_ratio"
+    ) %in% colnames(diagdf)))
+    expect_true(all(diagdf$stage %in% c("init", "item", "person")))
+    expect_true(any(diagdf$stage == "item"))
+    expect_true(any(diagdf$stage == "person"))
+    expect_true(all(is.finite(diagdf$combinedGradNorm[diagdf$stage %in% c("item", "person")])))
+    expect_true(is.list(fitSampled$sampledAbilityStatus))
+    expect_true(is.list(fitSampled$sampledAbilityControl))
+    expect_true(fitSampled$sampledAbilityStatus$accepted_outer_iters >= 1)
+    expect_true(fitSampled$sampledAbilityStatus$rejected_outer_iters >= 0)
 
 
     fitJML$itemPars$Item <- as.integer(fitJML$itemPars$Item)

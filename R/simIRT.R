@@ -262,13 +262,28 @@ IRTcurve <- function(a,b,c,theta=seq(-3,3,.01),plot=TRUE,rescale=FALSE,add=FALSE
 #'   person ability by scale.
 #' @param normalise Logical. If `TRUE`, simulated `A`, `B`, and `Ability` are
 #'   normalized within scale using [normaliseIRT()].
+#' @param mirt Logical. If `TRUE`, simulate a multidimensional response process
+#'   where each item can load on multiple latent factors. In this mode, `Nitems`
+#'   is the total number of items (not items-per-scale).
+#' @param loadingSparsity Numeric in `[0,1]`. Probability that a non-primary
+#'   loading is active when `mirt=TRUE` and `loadings` is not supplied.
+#' @param primaryScale Optional integer vector of length `Nitems` giving each
+#'   item's primary scale index (`1..Nscales`) when `mirt=TRUE`.
+#' @param loadings Optional numeric `Nitems x Nscales` matrix of true item
+#'   loadings used directly when `mirt=TRUE`. If omitted, loadings are sampled.
+#' @param crossLoadingSD Numeric. SD of sampled non-primary loading values when
+#'   `mirt=TRUE` and `loadings` is not supplied.
+#' @param returnRowLoadings Logical. If `TRUE` and `mirt=TRUE`, include per-row
+#'   loading columns (`A_1`, ..., `A_K`) in `dat`.
 #'
 #' @return A list with:
 #' \describe{
 #'   \item{Ability}{Matrix of true person abilities (`Nsubs x Nscales`).}
 #'   \item{A}{Matrix of true item discriminations (`Nitems x Nscales`).}
-#'   \item{B}{Matrix of true item difficulties (`Nitems x Nscales`).}
-#'   \item{C}{Matrix of true item guessing parameters (`Nitems x Nscales`).}
+#'   \item{B}{Matrix/vector of true item difficulties. Matrix in legacy mode,
+#'   vector in `mirt=TRUE` mode.}
+#'   \item{C}{Matrix/vector of true item guessing parameters. Matrix in legacy
+#'   mode, vector in `mirt=TRUE` mode.}
 #'   \item{dat}{Long-format response data as a `data.table`.}
 #' }
 #' @export
@@ -279,7 +294,9 @@ IRTcurve <- function(a,b,c,theta=seq(-3,3,.01),plot=TRUE,rescale=FALSE,add=FALSE
 simIRT <- function(Nsubs=100,Nitems=200,Nscales=1, NitemsAnswered=Nitems,
   ASD=0,AMean=1,BSD=1,BMean=0,logitCSD=1,logitCMean=-2,AbilitySD=1,AbilityMean=0,
   itemPreds=NA, AitemPredEffects=NA,BitemPredEffects=NA,logitCitemPredEffects=NA,
-  personPreds=NA, AbilityPredEffects=NA, normalise=FALSE){
+  personPreds=NA, AbilityPredEffects=NA, normalise=FALSE,
+  mirt=FALSE, loadingSparsity=0.3, primaryScale=NA, loadings=NA,
+  crossLoadingSD=0.15, returnRowLoadings=TRUE){
 
   if(length(NitemsAnswered) == 1){
     NitemsAnswered <- rep(NitemsAnswered,Nscales)
@@ -293,6 +310,133 @@ simIRT <- function(Nsubs=100,Nitems=200,Nscales=1, NitemsAnswered=Nitems,
   }
 
   Ability <- matrix(rnorm(Nsubs*Nscales,AbilityMean,AbilitySD),Nsubs)
+
+  if(isTRUE(mirt)){
+    if(Nscales < 2) stop("mirt=TRUE requires Nscales >= 2.")
+    if(!is.numeric(loadingSparsity) || length(loadingSparsity) != 1 || loadingSparsity < 0 || loadingSparsity > 1){
+      stop("loadingSparsity must be a scalar in [0, 1].")
+    }
+
+    if(length(primaryScale) == 1 && is.na(primaryScale[1])){
+      primaryScale <- rep(seq_len(Nscales), length.out = Nitems)
+    } else {
+      if(length(primaryScale) != Nitems) stop("primaryScale must have length Nitems.")
+      primaryScale <- as.integer(primaryScale)
+      if(any(primaryScale < 1 | primaryScale > Nscales)) stop("primaryScale entries must be in 1..Nscales.")
+    }
+
+    if(length(loadings) == 1 && is.na(loadings[1])){
+      A <- matrix(0, nrow = Nitems, ncol = Nscales)
+      for(i in seq_len(Nitems)){
+        pi <- primaryScale[i]
+        A[i, pi] <- pmax(0.05, rnorm(1, AMean, ASD))
+        for(si in seq_len(Nscales)){
+          if(si == pi) next
+          if(runif(1) <= loadingSparsity){
+            A[i, si] <- rnorm(1, 0, crossLoadingSD)
+          }
+        }
+      }
+    } else {
+      A <- as.matrix(loadings)
+      storage.mode(A) <- "double"
+      if(!all(dim(A) == c(Nitems, Nscales))){
+        stop("`loadings` must be an Nitems x Nscales matrix when mirt=TRUE.")
+      }
+      if(any(!is.finite(A))) stop("`loadings` must be finite numeric values when provided.")
+    }
+    colnames(A) <- paste0("S", seq_len(Nscales))
+    rownames(A) <- as.character(seq_len(Nitems))
+
+    B <- rnorm(Nitems, BMean, BSD)
+    logitC <- rnorm(Nitems, logitCMean, logitCSD)
+
+    if(!all(is.na(itemPreds))){
+      if(nrow(as.matrix(itemPreds)) != Nitems){
+        stop("When mirt=TRUE, itemPreds must have Nitems rows.")
+      }
+      itemPredMat <- as.matrix(itemPreds)
+      if(all(!is.na(AitemPredEffects))){
+        eff <- as.numeric(itemPredMat %*% as.matrix(AitemPredEffects))
+        A[cbind(seq_len(Nitems), primaryScale)] <- A[cbind(seq_len(Nitems), primaryScale)] + eff
+      }
+      if(all(!is.na(BitemPredEffects))) B <- B + as.numeric(itemPredMat %*% as.matrix(BitemPredEffects))
+      if(all(!is.na(logitCitemPredEffects))) logitC <- logitC + as.numeric(itemPredMat %*% as.matrix(logitCitemPredEffects))
+    }
+
+    if(!all(is.na(personPreds))){
+      if(nrow(as.matrix(personPreds)) != Nsubs){
+        stop("When mirt=TRUE, personPreds must have Nsubs rows.")
+      }
+      if(all(!is.na(AbilityPredEffects))){
+        for(i in 1:Nscales){
+          Ability[,i] <- Ability[,i] + apply(personPreds,1,function(x) sum(AbilityPredEffects[i,,drop=FALSE] %*% x))
+        }
+      }
+    }
+
+    if(normalise){
+      for(i in 1:ncol(Ability)){
+        normpars <- normaliseIRT(B = B[primaryScale == i], Ability = Ability[,i], A = A[primaryScale == i, i])
+        B[primaryScale == i] <- normpars$B
+        Ability[,i] <- normpars$Ability
+        A[primaryScale == i, i] <- normpars$A
+      }
+    }
+
+    C <- inv_logit(logitC)
+    dat <- data.table(expand.grid(id = seq_len(Nsubs), Item = seq_len(Nitems)))
+    dat[, Scale := primaryScale[Item]]
+    dat[, Ability := Ability[cbind(id, Scale)]]
+    dat[, A := A[cbind(Item, Scale)]]
+    dat[, B := B[Item]]
+    dat[, C := C[Item]]
+
+    eta <- rowSums(A[dat$Item,,drop=FALSE] * Ability[dat$id,,drop=FALSE]) - B[dat$Item]
+    dat[, p := C + (1 - C) / (1 + exp(-eta))]
+    dat[, pcorrect := p]
+    dat[, score := rbinom(.N, size = 1, prob = p)]
+
+    keepKeys <- rbindlist(lapply(seq_len(Nscales), function(si){
+      n_ans <- NitemsAnswered[si]
+      item_pool <- which(primaryScale == si)
+      if(!length(item_pool)) return(NULL)
+      if(n_ans >= length(item_pool)){
+        data.table(id = rep(seq_len(Nsubs), each = length(item_pool)),
+          Item = rep(item_pool, times = Nsubs))
+      } else {
+        data.table(id = rep(seq_len(Nsubs), each = n_ans),
+          Item = unlist(lapply(seq_len(Nsubs), function(.i) sample(item_pool, size = n_ans))))
+      }
+    }), use.names = TRUE, fill = TRUE)
+    dat <- dat[keepKeys, on = .(id, Item), nomatch = 0]
+    dat <- dat[order(id, Item)]
+    if(isTRUE(returnRowLoadings)){
+      rowLoads <- as.data.table(A[dat$Item,,drop=FALSE])
+      setnames(rowLoads, paste0("A_", seq_len(Nscales)))
+      dat <- cbind(dat, rowLoads)
+    }
+
+    if(!all(is.na(itemPreds))){
+      itemPredDt <- as.data.table(itemPreds)
+      itemPredDt[, Item := seq_len(.N)]
+      dat <- merge.data.table(dat, itemPredDt, by = "Item")
+    }
+    if(!all(is.na(personPreds))){
+      personPredDt <- as.data.table(personPreds)
+      personPredDt[, id := seq_len(.N)]
+      dat <- merge.data.table(dat, personPredDt, by = "id")
+    }
+    return(list(
+      Ability = Ability,
+      A = A,
+      B = B,
+      C = C,
+      primaryScale = primaryScale,
+      dat = as.data.table(dat)
+    ))
+  }
+
   A <- matrix(rnorm(Nitems*Nscales,AMean,ASD),Nitems)
   B <- matrix(rnorm(Nitems*Nscales,BMean,BSD),Nitems)
   logitC <- matrix(rnorm(Nitems*Nscales,logitCMean,logitCSD),Nitems)

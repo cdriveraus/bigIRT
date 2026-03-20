@@ -13,7 +13,8 @@ personCovarianceMatrices_R(
   d = NULL,
   prior_precision = NULL,
   jitter = 1e-08,
-  max_attempts = 8
+  max_attempts = 8,
+  return_precision = TRUE
 )
 }
 \arguments{
@@ -39,10 +40,15 @@ array.}
 \item{jitter}{Initial diagonal jitter added before Cholesky factorisation.}
 
 \item{max_attempts}{Maximum number of jitter expansions before failing.}
+
+\item{return_precision}{Logical. If \code{TRUE}, also return posterior
+precision and precision Cholesky arrays. If \code{FALSE}, compute and return
+only covariance (plus jitter diagnostics).}
 }
 \value{
-A list with per-person posterior \code{covariance},
-\code{precision}, and \code{precision_chol} arrays.
+A list with posterior \code{covariance}; and if
+\code{return_precision=TRUE}, also \code{precision} and
+\code{precision_chol} arrays.
 }
 \description{
 This function mirrors \code{\link{personCovarianceMatrices}} but performs the

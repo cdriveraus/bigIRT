@@ -15,14 +15,30 @@ pcalc <- function(score,ability,B,A=1,C=0,D=1){
   p <- C + (1.0-C) / ( 1.0 + exp( (-A * (ability - B))  ) )
 }
 
+a_matrix_to_vector <- function(x){
+  as.array(as.vector(t(as.matrix(x))))
+}
+
+a_vector_to_matrix <- function(x, nitems, nscales){
+  matrix(as.numeric(x), nrow = nitems, ncol = nscales, byrow = TRUE)
+}
+
 checkP <- function(fit){ #for checking max a posteriori model parameters using R based calc instead of stan based
   p=rep(NA,fit$dat$Nobs)
+  use_matrix_a <- !is.null(dim(fit$pars$A)) && length(dim(fit$pars$A)) == 2
   for(i in 1:length(p)){
+    if(use_matrix_a){
+      aload <- fit$pars$A[fit$dat$item[i],]
+      eta <- sum(aload * fit$pars$Ability[fit$dat$id[i],]) - fit$itemPars$B[fit$dat$item[i]]
+      pmid <- fit$itemPars$C[fit$dat$item[i]] + (fit$itemPars$D[fit$dat$item[i]] - fit$itemPars$C[fit$dat$item[i]]) * inv_logit(eta)
+      p[i] <- pmid
+    } else {
     p[i] <- fit$itemPars$C[fit$dat$item[i]] + (1.0-fit$itemPars$C[fit$dat$item[i]]) / ( 1.0 + exp(
       (-fit$itemPars$A[fit$dat$item[i]] * (
         fit$personPars[fit$dat$id[i], 1+fit$dat$scale[i]] -
           fit$itemPars$B[fit$dat$item[i]]
       ))));
+    }
 
     if(fit$dat$score[i]==0) p[i]= 1.0-p[i];
   }
@@ -245,7 +261,7 @@ bigIRT_param_layout <- function(sdat){
   }
 
   freeAbility <- sdat$Nsubs * sdat$Nscales - sdat$NfixedAbility
-  freeA <- sdat$Nitems - sdat$NfixedA
+  freeA <- (if(!is.null(sdat$NitemScales)) sdat$NitemScales else (sdat$Nitems * sdat$Nscales)) - sdat$NfixedA
   freeB <- sdat$Nitems - sdat$NfixedB
   freeC <- sdat$Nitems - sdat$NfixedC
   freeD <- sdat$Nitems - sdat$NfixedD
@@ -321,6 +337,9 @@ bigIRT_sampled_optimizer_setup <- function(standata, cores=6, verbose=0, plot=0)
       out
     }
     npars_full <- rstan::get_num_upars(smf)
+    standata_genq <- standata
+    standata_genq$doGenQuant <- 1L
+    smf_genq <- stan_reinitsf(stanmodels$irt,standata_genq)
     cleanup <- function(){ invisible(NULL) }
   } else {
     splitby <- 'id'
@@ -387,6 +406,9 @@ bigIRT_sampled_optimizer_setup <- function(standata, cores=6, verbose=0, plot=0)
       out
     }
     npars_full <- parallel::clusterEvalQ(benv$cl, rstan::get_num_upars(smf))[[1]]
+    standata_genq <- standata
+    standata_genq$doGenQuant <- 1L
+    smf_genq <- stan_reinitsf(stanmodels$irt,standata_genq)
     cleanup <- function() try({parallel::stopCluster(benv$cl)},silent=TRUE)
   }
 
@@ -394,113 +416,312 @@ bigIRT_sampled_optimizer_setup <- function(standata, cores=6, verbose=0, plot=0)
     standata = standata,
     target_full = target_full,
     npars_full = npars_full,
+    smf_genq = smf_genq,
     cleanup = cleanup
   )
 }
 
-bigIRT_sampled_optimizer_step <- function(engine, tol=1e-2, Niter=2000,
-  askmore=FALSE, stochastic=FALSE, init=NA, dohess=FALSE,
-  free_par_index=NULL, fixed_par_full=NULL, fixed_par_samples=NULL, sample_weights=NULL){
+## Build a sampled-step objective once so repeated target evaluations inside mize
+## do not rebuild block/sample bookkeeping.
+bigIRT_sampled_make_objective <- function(engine, free_par_index=NULL,
+  fixed_par_full=NULL, fixed_par_samples=NULL, sample_weights=NULL){
   if(is.null(fixed_par_samples)) fixed_par_samples <- list()
+  has_mask <- !is.null(free_par_index)
+  has_samples <- length(fixed_par_samples) > 0
+  Nsamp <- if(has_samples) length(fixed_par_samples) else 1L
+  weights <- if(is.null(sample_weights)) rep(1 / Nsamp, Nsamp) else sample_weights / sum(sample_weights)
+  npars <- if(has_mask) length(free_par_index) else engine$npars_full
 
   build_full_par <- function(free_par, sample_id = 1L){
-    if(is.null(free_par_index)) return(free_par)
+    if(!has_mask) return(free_par)
     base_par <- fixed_par_full
-    if(sample_id > 0L && length(fixed_par_samples) >= sample_id){
+    if(sample_id > 0L && has_samples){
       base_par <- fixed_par_samples[[sample_id]]
     }
     base_par[free_par_index] <- free_par
     base_par
   }
 
-  target <- function(parm,gradnoise=TRUE){
-    if(is.null(free_par_index) && length(fixed_par_samples) == 0){
-      return(engine$target_full(parm,gradnoise=gradnoise))
+  target <- function(parm){
+    if(!has_mask && !has_samples){
+      return(engine$target_full(parm,gradnoise=TRUE))
     }
 
-    Nsamp <- max(length(fixed_par_samples),1L)
-    weights <- if(is.null(sample_weights)) rep(1 / Nsamp,Nsamp) else sample_weights / sum(sample_weights)
-    out_list <- vector("list", Nsamp)
+    out <- 0
+    grad <- NULL
     for(si in seq_len(Nsamp)){
-      out_list[[si]] <- engine$target_full(build_full_par(parm, si),gradnoise=gradnoise)
-    }
-
-    out <- sum(vapply(seq_len(Nsamp),function(si) weights[si] * out_list[[si]][1],numeric(1)))
-    grad <- if(is.null(free_par_index)){
-      Reduce(`+`,lapply(seq_len(Nsamp),function(si) weights[si] * attributes(out_list[[si]])$gradient))
-    } else {
-      Reduce(`+`,lapply(seq_len(Nsamp),function(si) weights[si] * attributes(out_list[[si]])$gradient[free_par_index]))
+      tsi <- engine$target_full(build_full_par(parm, si),gradnoise=TRUE)
+      gsi <- attributes(tsi)$gradient
+      if(!is.null(free_par_index)) gsi <- gsi[free_par_index]
+      out <- out + weights[si] * tsi[1]
+      if(is.null(grad)) grad <- weights[si] * gsi else grad <- grad + weights[si] * gsi
     }
     attributes(out) <- list(gradient=grad)
     out
   }
 
-  npars <- if(is.null(free_par_index)) engine$npars_full else length(free_par_index)
+  list(
+    target = target,
+    build_full_par = build_full_par,
+    npars = npars,
+    Nsamp = Nsamp,
+    has_mask = has_mask,
+    has_samples = has_samples,
+    free_par_index = free_par_index
+  )
+}
+
+## Run one optimizer call for a pre-built sampled-ability objective. By default
+## this can skip generated-quantity materialization so rejected proposals remain cheap.
+bigIRT_sampled_optimizer_step <- function(engine, objective, tol=1e-2, Niter=2000, init=NA,
+  materialize_fit = TRUE){
+  target <- objective$target
+  npars <- objective$npars
+  eval_count <- 0L
+  target_counted <- function(parm){
+    eval_count <<- eval_count + 1L
+    target(parm)
+  }
   if(is.na(init[1])) init <- rnorm(npars,0,.1)
-
-  continue <- TRUE
-  converged <- FALSE
-  while(continue && !converged){
-    if(!stochastic){
-      mizelpg <- list(
-        fg=function(pars){
-          r <- -target(pars)
-          list(fn=r[1],gr= -attributes(r)$gradient)
-        },
-        fn=function(x) -target(x),
-        gr=function(pars) -attributes(target(pars))$gradient
-      )
-      optimfit <- mize::mize(init, fg=mizelpg, max_iter=Niter,
-        method="L-BFGS",memory=100,
-        line_search='Schmidt',c1=1e-10,c2=.9,step0='schmidt',ls_max_fn=999,
-        abs_tol=tol,grad_tol=0,rel_tol=0,step_tol=0,ginf_tol=0)
-      init <- optimfit$par
+  mizelpg <- list(
+    fg=function(pars){
+      r <- -target_counted(pars)
+      list(fn=r[1],gr= -attributes(r)$gradient)
+    },
+    fn=function(x) -target_counted(x),
+    gr=function(pars) -attributes(target_counted(pars))$gradient
+  )
+  if(Niter <= 1){
+    # Strict budget mode for profiling/debugging: one gradient evaluation and
+    # one conservative normalized ascent step (no line-search loop).
+    r0 <- target_counted(init)
+    g0 <- attributes(r0)$gradient
+    gnorm <- sqrt(sum(g0^2))
+    if(is.finite(gnorm) && gnorm > 0){
+      step_scale <- 0.01
+      par1 <- init + step_scale * g0 / gnorm
     } else {
-      optimfit <- sgd(
-        init=init,
-        maxiter=Niter,
-        fitfunc = target,
-        itertol = tol)
-      init <- optimfit$par
+      par1 <- init
     }
-    if(askmore){
-      continue <- ifelse(readline('Continue optimizing?') %in% c('y','Y','T','TRUE','yes','Yes','YES'),TRUE, FALSE)
-    } else continue <- FALSE
-  }
-
-  if(dohess){
-    jac <- matrix(NA,length(optimfit$par),length(optimfit$par))
-    basegrad <- attributes(target(optimfit$par))$gradient
-    for(i in 1:length(optimfit$par)){
-      newpar <- optimfit$par
-      newpar[i] <- newpar[i] + .001
-      jac[,i] <- (attributes(target(newpar))$gradient-basegrad)/ .001
-    }
-    parcov <- try(solve(-jac))
-  } else parcov <- NULL
-
-  standata <- engine$standata
-  standata$doGenQuant <- 1L
-  smf <- stan_reinitsf(stanmodels$irt,standata)
-
-  final_full_par <- if(is.null(free_par_index) && length(fixed_par_samples) == 0){
-    optimfit$par
-  } else if(!is.null(fixed_par_full)) {
-    build_full_par(optimfit$par, 0L)
+    optimfit <- list(
+      par = par1,
+      value = r0[1],
+      niter = 1L,
+      convergence = 0L,
+      method = "single_grad_step"
+    )
+    final_grad <- g0
   } else {
-    build_full_par(optimfit$par, 1L)
+    ls_max_fn <- max(1L, min(20L, as.integer(Niter)))
+    optimfit <- mize::mize(init, fg=mizelpg, max_iter=Niter,
+      method="L-BFGS",memory=100,
+      line_search='Schmidt',c1=1e-10,c2=.9,step0='schmidt',ls_max_fn=ls_max_fn,
+      abs_tol=tol,grad_tol=0,rel_tol=0,step_tol=0,ginf_tol=0)
+    final_grad <- NULL
   }
-  final_grad <- attributes(target(if(is.null(free_par_index)) final_full_par else optimfit$par))$gradient
+
+  final_full_par <- if(!objective$has_mask && !objective$has_samples){
+    optimfit$par
+  } else if(objective$has_mask) {
+    objective$build_full_par(optimfit$par, 0L)
+  } else {
+    objective$build_full_par(optimfit$par, 1L)
+  }
+  if(is.null(final_grad)){
+    final_eval <- target_counted(if(objective$has_mask) optimfit$par else final_full_par)
+    final_grad <- attributes(final_eval)$gradient
+    optimfit$logLik <- final_eval[1]
+  } else {
+    optimfit$logLik <- r0[1]
+  }
   optimfit$masked_grad_norm <- sqrt(sum(final_grad^2))
+  optimfit$target_evals <- eval_count
+  optimfit$logprob_evals <- eval_count * objective$Nsamp
   optimfit$par <- final_full_par
+
+  if(!isTRUE(materialize_fit)){
+    return(list(
+      optim=optimfit,
+      stanfit=engine$smf_genq,
+      pars=NULL,
+      dat=engine$standata
+    ))
+  }
 
   list(
     optim=optimfit,
-    parcov=parcov,
-    stanfit=smf,
-    pars=rstan::constrain_pars(object = smf, final_full_par),
-    dat=standata
+    stanfit=engine$smf_genq,
+    pars=rstan::constrain_pars(object = engine$smf_genq, final_full_par),
+    dat=engine$standata
   )
+}
+
+## Build sampled-ability tuning settings from flat arguments plus an optional
+## override list so the current API stays backward compatible.
+## Inputs: user-facing sampled-ability controls.
+## Returns: one validated control list; mutates nothing.
+bigIRT_sampled_build_control <- function(sampledAbilitySigmaScale = 0.5,
+  sampledAbilityStepTol = 1e-3, sampledAbilitySpreadTol = 0.02,
+  sampledAbilityPatience = 3L, sampledAbilityControl = NULL, noptimgradtol = 1e-2){
+
+  control <- list(
+    sigma_scale_init = as.numeric(sampledAbilitySigmaScale),
+    sigma_scale_min = 0.05,
+    sigma_scale_max = 0.5,
+    sigma_scale_expand = 1.1,
+    sigma_scale_shrink = 0.5,
+    step_damping_init = 1.0,
+    step_damping_min = 0.0625,
+    max_backtracks = 5L,
+    noptimgradtol = as.numeric(noptimgradtol),
+    sampledAbilityStepTol = as.numeric(sampledAbilityStepTol),
+    sampledAbilitySpreadTol = as.numeric(sampledAbilitySpreadTol),
+    sampledAbilityPatience = as.integer(sampledAbilityPatience),
+    max_rejected_outer = 5L,
+    max_worsening_outer = 10L
+  )
+  if(is.list(sampledAbilityControl) && length(sampledAbilityControl)){
+    control[names(sampledAbilityControl)] <- sampledAbilityControl
+  }
+
+  control$max_backtracks <- max(1L, as.integer(control$max_backtracks))
+  control$sampledAbilityPatience <- max(1L, as.integer(control$sampledAbilityPatience))
+  control$max_rejected_outer <- max(1L, as.integer(control$max_rejected_outer))
+  control$max_worsening_outer <- max(1L, as.integer(control$max_worsening_outer))
+  control$sigma_scale_min <- max(1e-8, as.numeric(control$sigma_scale_min))
+  control$sigma_scale_max <- max(control$sigma_scale_min, as.numeric(control$sigma_scale_max))
+  control$sigma_scale_expand <- max(1, as.numeric(control$sigma_scale_expand))
+  control$sigma_scale_shrink <- min(max(as.numeric(control$sigma_scale_shrink), 1e-8), 0.999)
+  control$step_damping_init <- max(1e-8, as.numeric(control$step_damping_init))
+  control$step_damping_min <- min(control$step_damping_init, max(1e-8, as.numeric(control$step_damping_min)))
+  control$sigmaScale <- min(max(as.numeric(control$sigma_scale_init), control$sigma_scale_min), control$sigma_scale_max)
+  control
+}
+
+## Evaluate a sampled-ability objective at a full unconstrained parameter vector.
+## The objective itself may operate on only a masked subset of coordinates.
+## Inputs: objective contract from bigIRT_sampled_make_objective() and a full
+## unconstrained parameter vector.
+## Returns: scalar target value; mutates nothing.
+bigIRT_sampled_eval_objective <- function(objective, full_par){
+  parm <- if(objective$has_mask) full_par[objective$free_par_index] else full_par
+  objective$target(parm)[1]
+}
+
+## Materialize a full fit object only once a sampled-ability proposal is accepted,
+## or when diagnostics explicitly require generated quantities.
+## Inputs: cached optimizer engine plus a full unconstrained parameter vector.
+## Returns: fit-like list with constrained pars; mutates nothing outside the
+## returned object.
+bigIRT_sampled_materialize_fit <- function(engine, full_par, optim=NULL){
+  if(is.null(optim)) optim <- list(par = full_par)
+  optim$par <- full_par
+  list(
+    optim = optim,
+    stanfit = engine$smf_genq,
+    pars = rstan::constrain_pars(object = engine$smf_genq, full_par),
+    dat = engine$standata
+  )
+}
+
+## Apply a damped acceptance rule to an already-optimized block proposal. This
+## keeps the outer loop stable without rerunning the optimizer at each backtrack.
+## Inputs: current and proposed full parameter vectors plus a sampled objective.
+## Returns: accepted/rejected proposal summary and the accepted full vector if any;
+## mutates nothing.
+bigIRT_sampled_accept_proposal <- function(current_par, proposed_par, objective, control){
+  idx <- if(objective$has_mask) objective$free_par_index else seq_along(current_par)
+  objective_before <- bigIRT_sampled_eval_objective(objective, current_par)
+  damping <- control$step_damping_init
+  attempts <- 0L
+  accepted <- FALSE
+  accepted_par <- current_par
+  last_trial <- current_par
+  objective_after <- objective_before
+  reject_reason <- "objective_decrease"
+
+  while(attempts < control$max_backtracks && damping >= control$step_damping_min){
+    attempts <- attempts + 1L
+    trial_par <- current_par
+    trial_par[idx] <- current_par[idx] + damping * (proposed_par[idx] - current_par[idx])
+    trial_obj <- bigIRT_sampled_eval_objective(objective, trial_par)
+    last_trial <- trial_par
+    objective_after <- trial_obj
+    if(is.finite(trial_obj) && trial_obj >= (objective_before - 1e-8 * max(1, abs(objective_before)))){
+      accepted <- TRUE
+      accepted_par <- trial_par
+      reject_reason <- NA_character_
+      break
+    }
+    damping <- damping * 0.5
+  }
+
+  if(!accepted && !is.finite(objective_after)) reject_reason <- "non_finite_objective"
+
+  list(
+    accepted = accepted,
+    full_par = accepted_par,
+    trial_par = last_trial,
+    damping = if(accepted) damping else max(damping, control$step_damping_min),
+    objective_before = objective_before,
+    objective_after = objective_after,
+    attempts = attempts,
+    reject_reason = reject_reason
+  )
+}
+
+## Compare two gradient norms while handling missing or non-finite values.
+## Inputs: current and reference gradient norms.
+## Returns: TRUE only when the current norm is finite and no better than the
+## reference norm; mutates nothing.
+bigIRT_sampled_gradient_worsened <- function(current_grad, reference_grad){
+  is.finite(current_grad) && is.finite(reference_grad) &&
+    current_grad > (reference_grad + 1e-8 * max(1, abs(reference_grad)))
+}
+
+## Compare two gradient norms and treat the current one as improved when it is
+## no larger than the reference up to numerical tolerance.
+## Inputs: current and reference gradient norms.
+## Returns: TRUE when the current norm is no worse than the reference; mutates nothing.
+bigIRT_sampled_gradient_improved <- function(current_grad, reference_grad){
+  is.finite(current_grad) && (!is.finite(reference_grad) ||
+    current_grad <= (reference_grad + 1e-8 * max(1, abs(reference_grad))))
+}
+
+## Flag posterior-spread blow-up from the accepted-iteration baseline.
+## Inputs: relative posterior-SD summaries.
+## Returns: TRUE when either configured spread guard is exceeded; mutates nothing.
+bigIRT_sampled_spread_explosion <- function(mean_ratio, max_ratio){
+  is.finite(mean_ratio) && is.finite(max_ratio) &&
+    (mean_ratio > 1.2 || max_ratio > 1.35)
+}
+
+## Check whether posterior spread is stable enough to allow sigma expansion and
+## convergence accounting.
+## Inputs: relative posterior-SD summaries plus sampled-ability controls.
+## Returns: TRUE when posterior spread remains within the configured tolerance;
+## mutates nothing.
+bigIRT_sampled_spread_stable <- function(mean_ratio, max_ratio, control){
+  is.finite(mean_ratio) && abs(mean_ratio - 1) <= control$sampledAbilitySpreadTol &&
+    is.finite(max_ratio) && max_ratio <= 1.35
+}
+
+## Update the adaptive sigma scale after one outer iteration.
+## Inputs: control list, sigma used this iteration, and acceptance diagnostics.
+## Returns: next sigma scale clipped to configured bounds; mutates nothing.
+bigIRT_sampled_update_sigma_scale <- function(control, sigmaScaleUsed,
+  accepted, gradientsImproved = FALSE, gradientsWorsened = FALSE, spreadStable = FALSE){
+
+  if(isTRUE(accepted) && isTRUE(gradientsImproved) && isTRUE(spreadStable)){
+    return(min(control$sigma_scale_max, sigmaScaleUsed * control$sigma_scale_expand))
+  }
+  if(isTRUE(accepted) && isTRUE(gradientsWorsened)){
+    return(max(control$sigma_scale_min, sigmaScaleUsed * control$sigma_scale_shrink))
+  }
+  if(isTRUE(accepted)){
+    return(min(max(sigmaScaleUsed, control$sigma_scale_min), control$sigma_scale_max))
+  }
+  max(control$sigma_scale_min, sigmaScaleUsed * control$sigma_scale_shrink)
 }
 
 ## Build a small deterministic support around the current person estimate.
@@ -529,36 +750,191 @@ bigIRT_sigma_points <- function(mu, Sigma, jitter = 1e-6, sigmaScale = 0.5){
 
 ## Approximate each person's local posterior with a Gaussian centered on the
 ## current person estimates and scaled by the local curvature returned by Stan.
-bigIRT_person_posterior <- function(fit, sdat, jitter = 1e-6){
-  priorSD <- pmax(as.numeric(sdat$AbilitySD), jitter)
-  priorCov <- diag(priorSD, length(priorSD)) %*% sdat$AbilityCorr %*% diag(priorSD, length(priorSD))
-  priorPrec <- solve(priorCov + diag(jitter, nrow(priorCov)))
-  likeSD <- fit$pars$sAbilitySD
-  if(is.null(dim(likeSD))) likeSD <- matrix(likeSD, ncol = sdat$Nscales)
+## Inputs: accepted fit state and standata.
+## Returns: person-wise Gaussian posterior summaries; mutates nothing.
+bigIRT_person_posterior <- function(fit, sdat, jitter = 1e-6, priorPrec = NULL){
+  if(is.null(priorPrec)){
+    priorSD <- pmax(as.numeric(sdat$AbilitySD), jitter)
+    priorCov <- diag(priorSD, length(priorSD)) %*% sdat$AbilityCorr %*% diag(priorSD, length(priorSD))
+    priorPrec <- solve(priorCov + diag(jitter, nrow(priorCov)))
+  }
   meanMat <- fit$pars$Ability
   if(is.null(dim(meanMat))) meanMat <- matrix(meanMat, ncol = sdat$Nscales)
 
-  covList <- vector("list", sdat$Nsubs)
-  secondMoment <- array(0, dim = c(sdat$Nscales, sdat$Nscales, sdat$Nsubs))
-  for(i in seq_len(sdat$Nsubs)){
-    likPrecDiag <- rep(0, sdat$Nscales)
-    valid <- is.finite(likeSD[i,]) & likeSD[i,] > jitter
-    likPrecDiag[valid] <- 1 / (likeSD[i,valid]^2)
-    postCov <- solve(priorPrec + diag(likPrecDiag, sdat$Nscales) + diag(jitter, sdat$Nscales))
-    covList[[i]] <- postCov
-    secondMoment[,,i] <- postCov + tcrossprod(meanMat[i,])
+  useRowEffective <- all(c("b_row", "c_row", "d_row", "row_loadings") %in% names(fit$pars))
+  if(useRowEffective){
+    rowLoadings <- fit$pars$row_loadings
+    if(nrow(rowLoadings) != sdat$Nobs || ncol(rowLoadings) != sdat$Nscales){
+      stop("Unexpected row-effective loading matrix dimensions from Stan.")
+    }
+    covObj <- personCovarianceMatrices(
+      id = sdat$id,
+      theta_mean = meanMat,
+      b = fit$pars$b_row,
+      c = fit$pars$c_row,
+      d = fit$pars$d_row,
+      loadings = rowLoadings,
+      prior_precision = priorPrec,
+      jitter = jitter,
+      return_precision = FALSE
+    )
+    covList <- vector("list", sdat$Nsubs)
+    for(i in seq_len(sdat$Nsubs)){
+      covList[[i]] <- covObj$covariance[,,i]
+    }
+    backend <- covObj$backend
+    rowEff <- list(
+      id = sdat$id,
+      theta_mean = meanMat,
+      b = fit$pars$b_row,
+      c = fit$pars$c_row,
+      d = fit$pars$d_row,
+      loadings = rowLoadings,
+      source = "stan_gq"
+    )
+  } else {
+    likeSD <- fit$pars$sAbilitySD
+    if(is.null(dim(likeSD))) likeSD <- matrix(likeSD, ncol = sdat$Nscales)
+    covList <- vector("list", sdat$Nsubs)
+    for(i in seq_len(sdat$Nsubs)){
+      likPrecDiag <- rep(0, sdat$Nscales)
+      valid <- is.finite(likeSD[i,]) & likeSD[i,] > jitter
+      likPrecDiag[valid] <- 1 / (likeSD[i,valid]^2)
+      covList[[i]] <- solve(priorPrec + diag(likPrecDiag, sdat$Nscales) + diag(jitter, sdat$Nscales))
+    }
+    rowEff <- NULL
+    backend <- "legacy_sAbilitySD"
   }
 
   postMean <- colMeans(meanMat)
-  postCov <- apply(secondMoment, c(1,2), mean) - tcrossprod(postMean)
+  postCov <- matrix(0, nrow = sdat$Nscales, ncol = sdat$Nscales)
+  for(i in seq_len(sdat$Nsubs)) postCov <- postCov + covList[[i]]
+  postCov <- postCov / sdat$Nsubs
+  postCov <- postCov + crossprod(meanMat) / sdat$Nsubs - tcrossprod(postMean)
   postSD <- sqrt(pmax(diag(postCov), jitter))
   postCorr <- cov2cor(postCov + diag(jitter, sdat$Nscales))
 
-  list(mean=meanMat,cov=covList,meanPrior=postMean,sdPrior=postSD,corrPrior=postCorr)
+  list(
+    mean = meanMat,
+    cov = covList,
+    meanPrior = postMean,
+    sdPrior = postSD,
+    corrPrior = postCorr,
+    rowEffective = rowEff,
+    backend = backend
+  )
+}
+
+## Refresh the Laplace posterior and sigma-point templates from the current fit.
+## Inputs: accepted fit state, standata, parameter layout, and sigma settings.
+## Returns: posterior summaries plus sigma-point full-parameter templates;
+## mutates nothing.
+bigIRT_person_posterior_and_sigma <- function(fit, sdat, layout, jitter = 1e-6,
+  sigmaScale = 0.5, priorPrec = NULL){
+  if(is.null(priorPrec)){
+    priorSD <- pmax(as.numeric(sdat$AbilitySD), jitter)
+    priorCov <- diag(priorSD, length(priorSD)) %*% sdat$AbilityCorr %*% diag(priorSD, length(priorSD))
+    priorPrec <- solve(priorCov + diag(jitter, nrow(priorCov)))
+  }
+
+  useRowEffective <- all(c("b_row", "c_row", "d_row", "row_loadings") %in% names(fit$pars))
+  if(!useRowEffective){
+    posterior <- bigIRT_person_posterior(fit, sdat, jitter = jitter, priorPrec = priorPrec)
+    sigmaTemplates <- bigIRT_sigma_templates(fit, sdat, posterior, layout, jitter = jitter, sigmaScale = sigmaScale)
+    return(list(posterior = posterior, sigmaTemplates = sigmaTemplates))
+  }
+
+  rowLoadings <- fit$pars$row_loadings
+  if(nrow(rowLoadings) != sdat$Nobs || ncol(rowLoadings) != sdat$Nscales){
+    stop("Unexpected row-effective loading matrix dimensions from Stan.")
+  }
+  meanMat <- fit$pars$Ability
+  if(is.null(dim(meanMat))) meanMat <- matrix(meanMat, ncol = sdat$Nscales)
+  sigmaObj <- bigIRT_person_sigma_points_cpp(
+    id = sdat$id,
+    theta_mean = meanMat,
+    b = fit$pars$b_row,
+    c = fit$pars$c_row,
+    d = fit$pars$d_row,
+    loadings = rowLoadings,
+    prior_precision = priorPrec,
+    jitter = jitter,
+    sigma_scale = sigmaScale
+  )
+
+  abilitySamples <- sigmaObj$ability_samples
+  Nsamp <- dim(abilitySamples)[3]
+  abilityMask <- fit$dat$Abilityparsindex > 0
+  fullSamples <- vector("list", Nsamp)
+  for(si in seq_len(Nsamp)){
+    fullPar <- fit$optim$par
+    fullPar[layout$ability] <- abilitySamples[,,si][abilityMask]
+    fullSamples[[si]] <- fullPar
+  }
+  sigmaTemplates <- list(samples = fullSamples, weights = as.numeric(sigmaObj$weights))
+
+  meanMat <- as.matrix(meanMat)
+  postMean <- colMeans(meanMat)
+  postCov <- as.matrix(sigmaObj$cov_mean) + crossprod(meanMat) / sdat$Nsubs - tcrossprod(postMean)
+  postSD <- sqrt(pmax(diag(postCov), jitter))
+  postCorr <- cov2cor(postCov + diag(jitter, sdat$Nscales))
+  posterior <- list(
+    posteriorSDMat = as.matrix(sigmaObj$posterior_sd),
+    meanPrior = postMean,
+    sdPrior = postSD,
+    corrPrior = postCorr,
+    backend = sigmaObj$backend
+  )
+
+  list(posterior = posterior, sigmaTemplates = sigmaTemplates)
+}
+
+## Extract scalar summaries from the current sampled-ability posterior so the
+## outer loop can detect uncertainty blow-up without storing dense matrices.
+bigIRT_sampled_posterior_metrics <- function(posterior){
+  posteriorSD <- if(!is.null(posterior$posteriorSDMat)){
+    as.numeric(posterior$posteriorSDMat)
+  } else if(!is.null(posterior$cov)) {
+    unlist(lapply(posterior$cov, function(x) sqrt(pmax(diag(x), 0))))
+  } else numeric()
+
+  list(
+    meanPosteriorSD = if(length(posteriorSD)) mean(posteriorSD, na.rm = TRUE) else NA_real_,
+    maxPosteriorSD = if(length(posteriorSD)) max(posteriorSD, na.rm = TRUE) else NA_real_
+  )
+}
+
+## Update convergence bookkeeping after an accepted sampled-ability outer step.
+## Inputs: prior accepted-window list and one accepted-iteration metrics record.
+## Returns: truncated accepted-window list; mutates nothing.
+bigIRT_sampled_update_window <- function(window, metrics, control){
+  window[[length(window) + 1L]] <- metrics
+  if(length(window) > control$sampledAbilityPatience){
+    window <- window[(length(window) - control$sampledAbilityPatience + 1L):length(window)]
+  }
+  window
+}
+
+## Check whether the accepted sampled-ability outer-step window is small enough
+## to treat the alternating scheme as converged.
+## Inputs: accepted-window history and sampled-ability controls.
+## Returns: TRUE only when the full accepted window satisfies all tolerances;
+## mutates nothing.
+bigIRT_sampled_window_converged <- function(window, control){
+  if(length(window) < control$sampledAbilityPatience) return(FALSE)
+  all(vapply(window, function(x){
+    isTRUE(x$accepted) &&
+      is.finite(x$combinedGradNorm) && x$combinedGradNorm < control$noptimgradtol &&
+      is.finite(x$itemStepRms) && x$itemStepRms < control$sampledAbilityStepTol &&
+      is.finite(x$personStepRms) && x$personStepRms < control$sampledAbilityStepTol &&
+      is.finite(x$meanPosteriorSD_ratio) && abs(x$meanPosteriorSD_ratio - 1) < control$sampledAbilitySpreadTol
+  }, logical(1)))
 }
 
 ## Convert person-level sigma points into full unconstrained parameter vectors
 ## with only the ability coordinates replaced, leaving item parameters intact.
+## Inputs: accepted fit state, posterior object, and parameter layout.
+## Returns: weighted full-parameter templates for the item step; mutates nothing.
 bigIRT_sigma_templates <- function(fit, sdat, posterior, layout, jitter = 1e-6, sigmaScale = 0.5){
   if(length(layout$ability) == 0) return(list(samples=list(fit$optim$par),weights=1))
 
@@ -593,9 +969,18 @@ bigIRT_sigma_templates <- function(fit, sdat, posterior, layout, jitter = 1e-6, 
 }
 
 ## Summarize each sampled-ability sub-step so failures are visible after fitting.
+## Inputs: fit-like object plus outer-loop bookkeeping for one sub-step.
+## Returns: one diagnostics row; mutates nothing.
 bigIRT_sampled_diag_snapshot <- function(fit, layout, stage, outerIter,
   posterior = NULL, sigmaScale = NA_real_, itemGradNorm = NA_real_,
-  personGradNorm = NA_real_, prevPar = NULL){
+  personGradNorm = NA_real_, prevPar = NULL,
+  accepted = NA, rejected = NA, reject_reason = NA_character_,
+  sigmaScaleUsed = NA_real_, personStepDamping = NA_real_,
+  itemStepDamping = NA_real_, personObjectiveBefore = NA_real_,
+  personObjectiveAfter = NA_real_, itemObjectiveBefore = NA_real_,
+  itemObjectiveAfter = NA_real_, meanPosteriorSD_ratio = NA_real_,
+  maxPosteriorSD_ratio = NA_real_, cumulativeMeanPosteriorSD_ratio = NA_real_,
+  cumulativeMaxPosteriorSD_ratio = NA_real_, sdAbility_ratio = NA_real_){
 
   abilityMat <- fit$pars$Ability
   if(is.null(dim(abilityMat))) abilityMat <- matrix(abilityMat, ncol = fit$dat$Nscales)
@@ -610,12 +995,17 @@ bigIRT_sampled_diag_snapshot <- function(fit, layout, stage, outerIter,
   }
 
   posteriorSD <- if(!is.null(posterior)) {
-    unlist(lapply(posterior$cov, function(x) sqrt(pmax(diag(x), 0))))
+    if(!is.null(posterior$posteriorSDMat)){
+      as.numeric(posterior$posteriorSDMat)
+    } else if(!is.null(posterior$cov)) {
+      unlist(lapply(posterior$cov, function(x) sqrt(pmax(diag(x), 0))))
+    } else numeric()
   } else numeric()
 
   data.frame(
     outerIter = outerIter,
     stage = stage,
+    logLik = if(!is.null(fit$optim$logLik)) fit$optim$logLik else NA_real_,
     meanA = mean(fit$pars$A, na.rm = TRUE),
     medianA = stats::median(fit$pars$A, na.rm = TRUE),
     minA = min(fit$pars$A, na.rm = TRUE),
@@ -628,6 +1018,21 @@ bigIRT_sampled_diag_snapshot <- function(fit, layout, stage, outerIter,
     meanPosteriorSD = if(length(posteriorSD)) mean(posteriorSD, na.rm = TRUE) else NA_real_,
     maxPosteriorSD = if(length(posteriorSD)) max(posteriorSD, na.rm = TRUE) else NA_real_,
     sigmaScale = sigmaScale,
+    accepted = accepted,
+    rejected = rejected,
+    reject_reason = if(length(reject_reason)) reject_reason else NA_character_,
+    sigmaScaleUsed = sigmaScaleUsed,
+    personStepDamping = personStepDamping,
+    itemStepDamping = itemStepDamping,
+    personObjectiveBefore = personObjectiveBefore,
+    personObjectiveAfter = personObjectiveAfter,
+    itemObjectiveBefore = itemObjectiveBefore,
+    itemObjectiveAfter = itemObjectiveAfter,
+    meanPosteriorSD_ratio = meanPosteriorSD_ratio,
+    maxPosteriorSD_ratio = maxPosteriorSD_ratio,
+    cumulativeMeanPosteriorSD_ratio = cumulativeMeanPosteriorSD_ratio,
+    cumulativeMaxPosteriorSD_ratio = cumulativeMaxPosteriorSD_ratio,
+    sdAbility_ratio = sdAbility_ratio,
     itemGradNorm = itemGradNorm,
     personGradNorm = personGradNorm,
     combinedGradNorm = sqrt(sum(c(itemGradNorm, personGradNorm)^2, na.rm = TRUE)),
@@ -636,7 +1041,8 @@ bigIRT_sampled_diag_snapshot <- function(fit, layout, stage, outerIter,
   )
 }
 
-bigIRT_plot_sampled_diag_df <- function(diagdf, logGrad = TRUE, main = "Sampled Ability Diagnostics"){
+bigIRT_plot_sampled_diag_df <- function(diagdf, logGrad = TRUE,
+  main = "Sampled Ability Diagnostics", showExtra = TRUE){
   if(is.null(diagdf) || nrow(diagdf) == 0) return(invisible(NULL))
 
   stageCols <- c(init = "grey40", item = "firebrick3", person = "steelblue3")
@@ -644,12 +1050,13 @@ bigIRT_plot_sampled_diag_df <- function(diagdf, logGrad = TRUE, main = "Sampled 
   x <- seq_len(nrow(diagdf))
   oldpar <- graphics::par(no.readonly = TRUE)
   on.exit(graphics::par(oldpar))
-  graphics::par(mfrow = c(2,2), mar = c(4,4,2,1))
+  use_extra <- isTRUE(showExtra) && all(c("accepted", "sigmaScaleUsed", "meanPosteriorSD_ratio") %in% names(diagdf))
+  graphics::par(mfrow = if(use_extra) c(3,3) else c(2,2), mar = c(4,4,2,1))
 
   grady <- diagdf$combinedGradNorm
-  if(logGrad) grady <- log10(pmax(grady, .Machine$double.eps))
+  if(logGrad) grady <- log(grady+1)
   graphics::plot(x, grady, type = "b", pch = 19, col = cols,
-    xlab = "Update", ylab = if(logGrad) "log10 gradient norm" else "gradient norm",
+    xlab = "Update", ylab = if(logGrad) "log(gradient norm +1)" else "gradient norm",
     main = paste(main, "Gradients"))
   graphics::legend("topright", legend = names(stageCols), col = stageCols, pch = 19, bty = "n")
 
@@ -671,6 +1078,49 @@ bigIRT_plot_sampled_diag_df <- function(diagdf, logGrad = TRUE, main = "Sampled 
     xlab = "Update", ylab = "Step RMS", main = paste(main, "Parameter Movement"))
   graphics::lines(x, diagdf$personStepRms, type = "b", pch = 1, col = cols)
 
+  if(use_extra){
+    accept_y <- ifelse(diagdf$accepted %in% TRUE, 1, ifelse(diagdf$rejected %in% TRUE, 0, NA_real_))
+    graphics::plot(x, accept_y, type = "h", lwd = 2, col = cols,
+      xlab = "Update", ylab = "Accepted", ylim = c(-0.1, 1.1),
+      main = paste(main, "Acceptance"))
+    graphics::axis(2, at = c(0, 1), labels = c("reject", "accept"))
+
+    graphics::plot(x, diagdf$sigmaScaleUsed, type = "b", pch = 19, col = cols,
+      xlab = "Update", ylab = "Sigma scale", main = paste(main, "Sigma Scale"))
+
+    graphics::plot(x, diagdf$meanPosteriorSD_ratio, type = "b", pch = 19, col = cols,
+      xlab = "Update", ylab = "Posterior SD ratio", main = paste(main, "Posterior Spread"))
+    graphics::lines(x, diagdf$maxPosteriorSD_ratio, type = "b", pch = 1, col = cols)
+    graphics::abline(h = c(1.2, 1.35), lty = 2, col = "grey50")
+
+    valid_ll <- is.finite(diagdf$logLik)
+    if(any(valid_ll)){
+      ll_min <- min(-diagdf$logLik[valid_ll])
+      ll_shift <- log(1+(-diagdf$logLik-min(nll)))
+      print(diagdf$logLik)
+      graphics::plot(x, ll_shift, type = "b", pch = 19, col = cols,
+        xlab = "Update", ylab = "log(1 + logLik - min(logLik))",
+        main = paste(main, "Log-Likelihood (scaled)"))
+      graphics::legend("topleft", legend = names(stageCols), col = stageCols, pch = 19, bty = "n")
+
+      person_ll <- ifelse(diagdf$stage %in% "person", ll_shift, NA_real_)
+      item_ll <- ifelse(diagdf$stage %in% "item", ll_shift, NA_real_)
+      graphics::plot(x, person_ll, type = "b", pch = 19, col = stageCols["person"],
+        xlab = "Update", ylab = "log(1 + logLik - min(logLik))",
+        main = paste(main, "Person vs Item Log-Likelihood"))
+      graphics::lines(x, item_ll, type = "b", pch = 1, col = stageCols["item"])
+      graphics::legend("topleft", legend = c("person", "item"),
+        col = c(stageCols["person"], stageCols["item"]), pch = c(19, 1), bty = "n")
+    } else {
+      graphics::plot.new()
+      graphics::title(main = paste(main, "Log-Likelihood (scaled)"))
+      graphics::mtext("No finite logLik values", side = 3, line = -1.5)
+      graphics::plot.new()
+      graphics::title(main = paste(main, "Person vs Item Log-Likelihood"))
+      graphics::mtext("No finite logLik values", side = 3, line = -1.5)
+    }
+  }
+
   invisible(diagdf)
 }
 
@@ -679,14 +1129,16 @@ bigIRT_plot_sampled_diag_df <- function(diagdf, logGrad = TRUE, main = "Sampled 
 #' @param fit A fitted \code{bigIRT} model returned by \code{fitIRT()} with
 #'   \code{sampledAbilityStep=TRUE}.
 #' @param logGrad Whether to plot gradient norms on the log10 scale.
+#' @param showExtra Whether to include acceptance, sigma-scale, spread-ratio,
+#'   and transformed raw log-likelihood panels when those diagnostics are available.
 #'
 #' @return Invisibly returns the diagnostic data frame used for plotting.
 #' @export
-plotSampledAbilityDiagnostics <- function(fit, logGrad = TRUE){
+plotSampledAbilityDiagnostics <- function(fit, logGrad = TRUE, showExtra = TRUE){
   if(is.null(fit$sampledAbilityDiagnostics) || nrow(fit$sampledAbilityDiagnostics) == 0){
     stop("No sampled-ability diagnostics found on fit object.")
   }
-  bigIRT_plot_sampled_diag_df(fit$sampledAbilityDiagnostics, logGrad = logGrad)
+  bigIRT_plot_sampled_diag_df(fit$sampledAbilityDiagnostics, logGrad = logGrad, showExtra = showExtra)
 }
 
 # fitIRTstepwise <- function(dat,itemsteps,item='Item',id='id',normalise=FALSE,ebayes=FALSE,...){ #need to rethink...
@@ -773,6 +1225,20 @@ plotSampledAbilityDiagnostics <- function(fit, logGrad = TRUE){
 #' @param personDat Data frame. Any fixed ability data for persons. Default is NA.
 #' @param personPreds Character vector. Names of predictors for person parameters found in data. Default is an empty character vector.
 #' @param itemDat Data frame. Any fixed item data. Default is NA.
+#' @param loadings Optional numeric matrix (`Nitems x Nscales`) defining
+#'   item-by-scale discrimination structure. Each cell can be:
+#'   \itemize{
+#'   \item a numeric value (fixed loading),
+#'   \item `NA` (free loading, estimated),
+#'   \item or omitted by leaving the whole argument as `NA`, which uses the
+#'   legacy one-hot bridge from `scale`.
+#'   }
+#'   Row names are matched to item ids and column names are matched to scale ids
+#'   when provided.
+#' @param loadingsFixed Optional logical matrix (`Nitems x Nscales`) that
+#'   forces fixed/free status for each loading entry. `TRUE` means fixed,
+#'   `FALSE` means free, `NA` defers to `loadings` values. If omitted, fixed/free
+#'   status is inferred from whether `loadings` entries are `NA`.
 #' @param AitemPreds Character vector. Names of predictors for item discrimination parameters. Default is an empty character vector.
 #' @param BitemPreds Character vector. Names of predictors for item difficulty parameters. Default is an empty character vector.
 #' @param CitemPreds Character vector. Names of predictors for item guessing parameters. Default is an empty character vector.
@@ -821,6 +1287,15 @@ plotSampledAbilityDiagnostics <- function(fit, logGrad = TRUE){
 #'   iterations. Default is FALSE.
 #' @param sampledAbilityPlotEvery Integer. Plot sampled-ability diagnostics every N outer iterations
 #'   when \code{sampledAbilityPlot=TRUE}. Default is 1.
+#' @param sampledAbilityStepTol Numeric. RMS movement tolerance used by the
+#'   sampled-ability multi-criterion stopping rule. Default is 1e-3.
+#' @param sampledAbilitySpreadTol Numeric. Relative posterior-spread tolerance
+#'   used by the sampled-ability stopping rule. Default is 0.02.
+#' @param sampledAbilityPatience Integer. Number of consecutive accepted outer
+#'   iterations required for sampled-ability convergence. Default is 3.
+#' @param sampledAbilityControl Optional named list of advanced sampled-ability
+#'   stabilization settings. Flat arguments supply the defaults and entries in
+#'   this list override them.
 #' @param noptimsteps Integer. Number of optimizer iterations used inside each sampled-ability
 #'   item/person sub-step. Default is 10.
 #' @param noptimgradtol Numeric. Convergence tolerance for combined sampled-ability gradient norm.
@@ -851,9 +1326,21 @@ plotSampledAbilityDiagnostics <- function(fit, logGrad = TRUE){
 #'
 #'   print(fit$personPars)
 #'   print(fit$itemPars)
+#'
+#' #Explicit multidimensional loading specification (2D example)
+#' #Rows/cols are aligned by names to item ids and scale ids.
+#' item_ids <- as.character(unique(dat$dat$Item))
+#' scale_ids <- as.character(unique(dat$dat$Scale))
+#' L <- matrix(NA_real_, nrow = length(item_ids), ncol = length(scale_ids),
+#'   dimnames = list(item_ids, scale_ids))
+#' L[1, ] <- c(0.8, 0.2) #fixed cross-loading
+#' L[2, 2] <- 0          #fixed zero loading
+#' fit_mirt <- fitIRT(dat$dat, pl = 2, cores = 1, loadings = L)
+#' head(fit_mirt$itemPars[, grep("^A(_|$)", names(fit_mirt$itemPars)), drop = FALSE])
 fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   personDat=NA, personPreds=character(),
   itemDat=NA,
+  loadings=NA, loadingsFixed=NA,
   AitemPreds=character(),
   BitemPreds=character(),
   CitemPreds=character(),
@@ -872,9 +1359,11 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   estMeans=c('ability','B','C','D'),priors=TRUE,
   integrateEachAbility=FALSE, integrateEachAbilityFixedSE=FALSE,
   NintegratePoints=5,
-  sampledAbilityStep=FALSE,sampledAbilityOuterIter=2,sampledAbilityJitter=1e-6,
+  sampledAbilityStep=FALSE,sampledAbilityOuterIter=50,sampledAbilityJitter=1e-6,
   sampledAbilitySigmaScale=0.5,sampledAbilityDiagnostics=FALSE,
-  sampledAbilityPlot=FALSE,sampledAbilityPlotEvery=1L,noptimsteps=10,
+  sampledAbilityPlot=FALSE,sampledAbilityPlotEvery=1L,
+  sampledAbilityStepTol=1e-3,sampledAbilitySpreadTol=0.02,
+  sampledAbilityPatience=3L,sampledAbilityControl=NULL,noptimsteps=10,
   noptimgradtol=1e-2,
   normalise=FALSE,normaliseScale=1,normaliseMean=0,
   dropPerfectScores=TRUE,trainingRows=1:nrow(dat),
@@ -970,21 +1459,86 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     }
   }
 
-  #setup item structure to define fixed / free pars
-  itemSetup <- data.table(itemIndex,A=ifelse(pl>1,as.numeric(NA),1),B=as.numeric(NA),
+  # setup item structure to define fixed / free pars
+  itemSetup <- data.table(itemIndex, A=as.numeric(NA), B=as.numeric(NA),
     C=ifelse(pl>2,as.numeric(NA),0),D=ifelse(pl>3,as.numeric(NA),1))
+  legacyLoadingMat <- matrix(0, nrow = Nitems, ncol = Nscales)
+  legacyLoadingMat[cbind(seq_len(Nitems), itemSetup$scale)] <- if(pl > 1) NA_real_ else 1
 
-  if(!all(is.na(itemDat))){ #if fixed item pars
+  if(!all(is.na(itemDat))){ # if fixed item pars
     if(!'data.table' %in% class(itemDat)) itemDat <- as.data.table(itemDat)
     itemDat <- itemDat[get(itemref.) %in% itemSetup$original,]
     setupRows <- match(itemDat[[itemref.]],itemSetup$original)
-    itemSetup[setupRows,c('A','B','C'):=itemDat[,c('A','B','C')]]
-    if(pl<2) itemSetup[,'A':=1]
+    itemSetup[setupRows,c('B','C'):=itemDat[,c('B','C')]]
+    if('D' %in% colnames(itemDat)) itemSetup[setupRows,'D':=itemDat[,D]]
+    if('A' %in% colnames(itemDat)){
+      legacyLoadingMat[cbind(setupRows, itemSetup$scale[setupRows])] <- itemDat$A
+    }
     if(pl<3) itemSetup[,'C':=0]
     if(pl<4) itemSetup[,'D':=1]
   }
-  itemSetup[,paste0(c('A','B','C','D'),'data'):= .SD, .SDcols=c('A','B','C','D')] #create data columns
-  setnafill(itemSetup,fill = -99,cols = paste0(c('A','B','C','D'),'data')) #and fill with arbitrary value to avoid NA in stan
+
+  loadingIsDefault <- length(loadings) == 1 && is.na(loadings[1])
+  if(loadingIsDefault){
+    loadingValues <- legacyLoadingMat
+  } else {
+    if(pl < 2) stop("Custom `loadings` require pl >= 2.")
+    loadingsInput <- as.matrix(loadings)
+    storage.mode(loadingsInput) <- "double"
+    if(length(dim(loadingsInput)) != 2) stop("`loadings` must be a matrix-like object.")
+    if(nrow(loadingsInput) != Nitems || ncol(loadingsInput) != Nscales){
+      stop("`loadings` must have dimensions Nitems x Nscales after indexing.")
+    }
+    if(!is.null(rownames(loadingsInput))){
+      rowMap <- match(itemSetup$original, rownames(loadingsInput))
+      if(any(is.na(rowMap))) stop("Could not align `loadings` row names to items.")
+      loadingsInput <- loadingsInput[rowMap,,drop=FALSE]
+    }
+    if(!is.null(colnames(loadingsInput))){
+      colMap <- match(scaleIndex$original, colnames(loadingsInput))
+      if(any(is.na(colMap))) stop("Could not align `loadings` column names to scales.")
+      loadingsInput <- loadingsInput[,colMap,drop=FALSE]
+    }
+    loadingValues <- loadingsInput
+  }
+
+  loadingFixedFromValues <- !is.na(loadingValues)
+  loadingMaskDefault <- length(loadingsFixed) == 1 && is.na(loadingsFixed[1])
+  if(!loadingMaskDefault){
+    loadingMask <- as.matrix(loadingsFixed)
+    if(length(dim(loadingMask)) != 2 || nrow(loadingMask) != Nitems || ncol(loadingMask) != Nscales){
+      stop("`loadingsFixed` must have dimensions Nitems x Nscales after indexing.")
+    }
+    if(!is.null(rownames(loadingMask))){
+      rowMap <- match(itemSetup$original, rownames(loadingMask))
+      if(any(is.na(rowMap))) stop("Could not align `loadingsFixed` row names to items.")
+      loadingMask <- loadingMask[rowMap,,drop=FALSE]
+    }
+    if(!is.null(colnames(loadingMask))){
+      colMap <- match(scaleIndex$original, colnames(loadingMask))
+      if(any(is.na(colMap))) stop("Could not align `loadingsFixed` column names to scales.")
+      loadingMask <- loadingMask[,colMap,drop=FALSE]
+    }
+    loadingMask <- as.logical(loadingMask)
+    loadingMaskSelector <- !is.na(loadingMask)
+    loadingFixedFromValues[loadingMaskSelector] <- loadingMask[loadingMaskSelector]
+  }
+  if(any(loadingFixedFromValues & is.na(loadingValues))){
+    stop("All fixed loading entries must have numeric values.")
+  }
+  loadingValues[!loadingFixedFromValues] <- NA_real_
+  if(pl < 2){
+    loadingValues[,] <- 0
+    loadingValues[cbind(seq_len(Nitems), itemSetup$scale)] <- 1
+    loadingFixedFromValues[,] <- TRUE
+  }
+
+  itemSetup$A <- loadingValues[cbind(seq_len(Nitems), itemSetup$scale)]
+  itemSetup[,paste0(c('B','C','D'),'data'):= .SD, .SDcols=c('B','C','D')] #create data columns
+  setnafill(itemSetup,fill = -99,cols = paste0(c('B','C','D'),'data')) #and fill with arbitrary value to avoid NA in stan
+  Adata <- a_matrix_to_vector(loadingValues)
+  Adata[is.na(Adata)] <- -99
+  fixedAlog <- as.integer(a_matrix_to_vector(loadingFixedFromValues))
 
   #setup person structure to define fixed / free pars
   AbilitySetup <- data.table(idIndex)
@@ -1052,24 +1606,25 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     Nsubs=Nsubs,
     Nitems=Nitems,
     Nscales=Nscales,
+    NitemScales=as.integer(Nitems * Nscales),
     id=array(dat[[idref.]]),
     dopriors=as.integer(priors),
     outlierfix=0L,
     outlierscale=2,
-    NfixedA=as.integer(sum(!is.na(itemSetup$A))),
+    NfixedA=as.integer(sum(fixedAlog)),
     NfixedB=as.integer(sum(!is.na(itemSetup$B))),
     NfixedC=as.integer(sum(!is.na(itemSetup$C))),
     NfixedD=as.integer(sum(!is.na(itemSetup$D))),
     NfixedAbility=as.integer(sum(!is.na(unlist(AbilitySetup[,scaleIndex$original,with=FALSE])))),
-    whichfixedA=array(as.integer(which(!is.na(itemSetup$A)))),
+    whichfixedA=array(as.integer(which(fixedAlog == 1L))),
     whichfixedB=array(as.integer(which(!is.na(itemSetup$B)))),
     whichfixedC=array(as.integer(which(!is.na(itemSetup$C)))),
     whichfixedD=array(as.integer(which(!is.na(itemSetup$D)))),
-    fixedAlog=array(as.integer((!is.na(itemSetup$A)))),
+    fixedAlog=array(as.integer(fixedAlog)),
     fixedB=array(as.integer((!is.na(itemSetup$B)))),
     fixedClogit=array(as.integer((!is.na(itemSetup$C)))),
     fixedDlogit=array(as.integer((!is.na(itemSetup$D)))),
-    whichnotfixedA=array(as.integer(which(is.na(itemSetup$A)))),
+    whichnotfixedA=array(as.integer(which(fixedAlog == 0L))),
     whichnotfixedB=array(as.integer(which(is.na(itemSetup$B)))),
     whichnotfixedC=array(as.integer(which(is.na(itemSetup$C)))),
     whichnotfixedD=array(as.integer(which(is.na(itemSetup$D)))),
@@ -1085,7 +1640,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     itemMean = dat$itemMean[!duplicated(dat[[itemref.]])],
     personMean = dat$personMean[!duplicated(dat[[idref.]])],
     scale=array(dat[[scaleref.]]),
-    Adata=array(itemSetup$Adata),
+    Adata=Adata,
     Bdata=array(itemSetup$Bdata),
     Cdata=array(itemSetup$Cdata),
     Ddata=array(itemSetup$Ddata),
@@ -1126,6 +1681,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     rowIndexPar=0L,
     originalRow=dat$`.originalRow`,
     doGenQuant=0L,
+    doRowEff=as.integer(isTRUE(sampledAbilityStep)),
     integrateAbility=as.integer(integrateEachAbility),
     integrateAbilityFixedSE=as.integer(integrateEachAbilityFixedSE),
     NintegratePoints=as.integer(NintegratePoints),
@@ -1138,6 +1694,21 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   sdat$freeCref=array(as.integer(cumsum(1-as.numeric(sdat$fixedClogit))))
   sdat$freeDref=array(as.integer(cumsum(1-as.numeric(sdat$fixedDlogit))))
 
+  apply_fit_dimnames <- function(fit){
+    rownames(fit$pars$Ability)[idIndex$new] <- idIndex$original
+    colnames(fit$pars$Ability)[scaleIndex$new] <- scaleIndex$original
+    if(!is.null(dim(fit$pars$A)) && length(dim(fit$pars$A)) == 2){
+      rownames(fit$pars$A)[itemIndex$new] <- itemIndex$original
+      colnames(fit$pars$A)[scaleIndex$new] <- scaleIndex$original
+    } else {
+      rownames(fit$pars$A)[itemIndex$new] <- itemIndex$original
+    }
+    rownames(fit$pars$B)[itemIndex$new] <- itemIndex$original
+    rownames(fit$pars$C)[itemIndex$new] <- itemIndex$original
+    rownames(fit$pars$D)[itemIndex$new] <- itemIndex$original
+    fit
+  }
+
 
   JMLfit <- function(est, sdat, ebayes=FALSE, fit=NA,narrowPriors=FALSE,...){
     skipebayes <- FALSE
@@ -1145,7 +1716,11 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     message(paste0(ifelse(narrowPriors,'Narrow priors ', ifelse(ebayes,'Empirical Bayes ','Free estimation ')),'step...'))
 
     if(!all(is.na(fit))){
-      sdat$Adata = fit$pars$A
+      sdat$Adata = if(!is.null(dim(fit$pars$A)) && length(dim(fit$pars$A)) == 2){
+        a_matrix_to_vector(fit$pars$A)
+      } else {
+        fit$pars$A
+      }
       sdat$Bdata = fit$pars$B
       sdat$Cdata = fit$pars$C
       sdat$Ddata = fit$pars$D
@@ -1211,14 +1786,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
       # sdat$AbilitySD <- array(1,sdat$Nscales)
     }
     if(!skipebayes) fit <- optimIRT(standata=sdat,Niter=iter,cores=cores,init = init,...)
-
-    rownames(fit$pars$Ability)[idIndex$new] <- idIndex$original
-    colnames(fit$pars$Ability)[scaleIndex$new] <- scaleIndex$original
-
-    rownames(fit$pars$A)[itemIndex$new] <- itemIndex$original
-    rownames(fit$pars$B)[itemIndex$new]<- itemIndex$original
-    rownames(fit$pars$C)[itemIndex$new] <- itemIndex$original
-    rownames(fit$pars$D)[itemIndex$new] <- itemIndex$original
+    fit <- apply_fit_dimnames(fit)
 
     return(list(fit=fit,sdat=sdat))
   }
@@ -1244,16 +1812,20 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   }
 
   if(sampledAbilityStep && length(which(sdat$Abilityparsindex > 0)) > 0){
+    # Sampled-ability outer loop:
+    # 1. optimize person coordinates from the current accepted state,
+    # 2. refresh the local Laplace/sigma approximation,
+    # 3. optimize item coordinates under the sigma templates,
+    # 4. accept or reject the whole outer iteration with damping/backtracking,
+    # 5. adapt sigma scale and evaluate multi-criterion stopping.
     layout <- bigIRT_param_layout(sdat)
     sampledAbilityHistory <- list()
     sampledAbilityDiag <- list()
+    sampledAbilityTiming <- list()
     collectSampledAbilityDiag <- isTRUE(sampledAbilityDiagnostics) || isTRUE(sampledAbilityPlot)
     optimdots <- list(...)
     sampledVerbose <- if("verbose" %in% names(optimdots)) optimdots$verbose else 0
     sampledPlot <- if("plot" %in% names(optimdots)) optimdots$plot else 0
-    sampledAskmore <- if("askmore" %in% names(optimdots)) optimdots$askmore else FALSE
-    sampledStochastic <- if("stochastic" %in% names(optimdots)) optimdots$stochastic else FALSE
-    sampledDohess <- if("dohess" %in% names(optimdots)) optimdots$dohess else FALSE
     sampledOpt <- bigIRT_sampled_optimizer_setup(
       standata = sdat,
       cores = cores,
@@ -1261,163 +1833,520 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
       plot = sampledPlot
     )
     on.exit(sampledOpt$cleanup(), add = TRUE)
-    sampled_step <- function(init, free_par_index=NULL, fixed_par_full=NULL,
-      fixed_par_samples=NULL, sample_weights=NULL){
+    sampled_step <- function(init, objective){
       bigIRT_sampled_optimizer_step(
         engine = sampledOpt,
+        objective = objective,
         Niter = noptimsteps,
         tol = basetol,
-        askmore = sampledAskmore,
-        stochastic = sampledStochastic,
         init = init,
-        dohess = sampledDohess,
-        free_par_index = free_par_index,
-        fixed_par_full = fixed_par_full,
-        fixed_par_samples = fixed_par_samples,
-        sample_weights = sample_weights
+        materialize_fit = FALSE
       )
     }
+    wall_time_sec <- function() as.numeric(proc.time()[["elapsed"]])
     fullInit <- if(is.na(init[1])) rep(0, sampledOpt$npars_full) else init
-
-    # Start from the same unconstrained default vector as JML, but move the
-    # person-side parameters first so the item step never conditions on fixed
-    # zero abilities.
-    message("Sampled ability initialization: person step")
-    fit <- sampled_step(
-      init = fullInit[layout$person],
-      free_par_index = layout$person,
-      fixed_par_full = fullInit
+    if(sampledAbilityOuterIter < 1) stop("sampledAbilityOuterIter must be >= 1 when sampledAbilityStep=TRUE.")
+    sampledControl <- bigIRT_sampled_build_control(
+      sampledAbilitySigmaScale = sampledAbilitySigmaScale,
+      sampledAbilityStepTol = sampledAbilityStepTol,
+      sampledAbilitySpreadTol = sampledAbilitySpreadTol,
+      sampledAbilityPatience = sampledAbilityPatience,
+      sampledAbilityControl = sampledAbilityControl,
+      noptimgradtol = noptimgradtol
     )
-    rownames(fit$pars$Ability)[idIndex$new] <- idIndex$original
-    colnames(fit$pars$Ability)[scaleIndex$new] <- scaleIndex$original
-    rownames(fit$pars$A)[itemIndex$new] <- itemIndex$original
-    rownames(fit$pars$B)[itemIndex$new] <- itemIndex$original
-    rownames(fit$pars$C)[itemIndex$new] <- itemIndex$original
-    rownames(fit$pars$D)[itemIndex$new] <- itemIndex$original
-    if(collectSampledAbilityDiag){
-      sampledAbilityDiag[[length(sampledAbilityDiag)+1]] <- bigIRT_sampled_diag_snapshot(
-        fit,
-        layout,
-        stage = "init",
-        outerIter = 0,
-        sigmaScale = sampledAbilitySigmaScale,
-        personGradNorm = fit$optim$masked_grad_norm,
-        prevPar = fullInit
-      )
-    }
+    currentPar <- fullInit
+    posterior <- NULL
+    priorSD <- pmax(as.numeric(sdat$AbilitySD), sampledAbilityJitter)
+    priorCov <- diag(priorSD, length(priorSD)) %*% sdat$AbilityCorr %*% diag(priorSD, length(priorSD))
+    sampledPriorPrec <- solve(priorCov + diag(sampledAbilityJitter, nrow(priorCov)))
+    acceptedWindow <- list()
+    acceptedOuterIter <- 0L
+    rejectedOuterIter <- 0L
+    rejectedConsecutive <- 0L
+    worseningConsecutive <- 0L
+    lastAcceptedCombinedGrad <- NA_real_
+    lastAcceptedPersonGrad <- NA_real_
+    lastAcceptedItemGrad <- NA_real_
+    lastObservedCombinedGrad <- NA_real_
+    lastAcceptedPosteriorMetrics <- NULL
+    bestAcceptedCombinedGrad <- NA_real_
+    bestAcceptedPosteriorMetrics <- NULL
+    bestAcceptedAbilitySD <- NA_real_
+    sampledStatus <- list(
+      converged = FALSE,
+      reason = "max_outer_iter",
+      accepted_outer_iters = 0L,
+      rejected_outer_iters = 0L
+    )
+    fit <- NULL
 
     for(outeri in seq_len(sampledAbilityOuterIter)){
-      # Refresh the local Gaussian approximation for each person before the
-      # uncertainty-aware item step.
-      posterior <- bigIRT_person_posterior(fit, sdat, jitter = sampledAbilityJitter)
-      sigmaTemplates <- bigIRT_sigma_templates(
-        fit,
-        sdat,
-        posterior,
-        layout,
-        jitter = sampledAbilityJitter,
-        sigmaScale = sampledAbilitySigmaScale
-      )
-
-      message(paste0("Sampled ability outer step ", outeri, ": item update"))
-      prevPar <- fit$optim$par
-      fit <- sampled_step(
-        init = fit$optim$par[layout$item],
-        free_par_index = layout$item,
-        fixed_par_full = fit$optim$par,
-        fixed_par_samples = sigmaTemplates$samples,
-        sample_weights = sigmaTemplates$weights
-      )
-      itemGradNorm <- fit$optim$masked_grad_norm
-      if(collectSampledAbilityDiag){
-        sampledAbilityDiag[[length(sampledAbilityDiag)+1]] <- bigIRT_sampled_diag_snapshot(
-          fit,
-          layout,
-          stage = "item",
-          outerIter = outeri,
-          posterior = posterior,
-          sigmaScale = sampledAbilitySigmaScale,
-          itemGradNorm = itemGradNorm,
-          prevPar = prevPar
-        )
-      }
+      sigmaScaleUsed <- sampledControl$sigmaScale
+      basePar <- currentPar
+      rejectReason <- NA_character_
+      personStepDamping <- NA_real_
+      itemStepDamping <- NA_real_
+      personObjectiveBefore <- NA_real_
+      personObjectiveAfter <- NA_real_
+      itemObjectiveBefore <- NA_real_
+      itemObjectiveAfter <- NA_real_
+      meanPosteriorSD_ratio <- NA_real_
+      maxPosteriorSD_ratio <- NA_real_
+      cumulativeMeanPosteriorSD_ratio <- NA_real_
+      cumulativeMaxPosteriorSD_ratio <- NA_real_
+      sdAbility_ratio <- NA_real_
+      personOptElapsed <- 0
+      posteriorElapsed <- 0
+      itemOptElapsed <- 0
+      itemTargetEvals <- 0L
+      itemLogProbEvals <- 0L
+      itemGradNorm <- NA_real_
+      combinedGradNorm <- NA_real_
+      acceptedOuter <- FALSE
+      personDiagRow <- NULL
+      itemDiagRow <- NULL
+      personFit <- NULL
+      itemFit <- NULL
 
       message(paste0("Sampled ability outer step ", outeri, ": person update"))
-      prevPar <- fit$optim$par
-      fit <- sampled_step(
-        init = fit$optim$par[layout$person],
+      personObjective <- bigIRT_sampled_make_objective(
+        engine = sampledOpt,
         free_par_index = layout$person,
-        fixed_par_full = fit$optim$par
+        fixed_par_full = basePar
       )
-      personGradNorm <- fit$optim$masked_grad_norm
-
-      rownames(fit$pars$Ability)[idIndex$new] <- idIndex$original
-      colnames(fit$pars$Ability)[scaleIndex$new] <- scaleIndex$original
-      rownames(fit$pars$A)[itemIndex$new] <- itemIndex$original
-      rownames(fit$pars$B)[itemIndex$new] <- itemIndex$original
-      rownames(fit$pars$C)[itemIndex$new] <- itemIndex$original
-      rownames(fit$pars$D)[itemIndex$new] <- itemIndex$original
-
-      posterior <- bigIRT_person_posterior(fit, sdat, jitter = sampledAbilityJitter)
-      sampledAbilityHistory[[outeri]] <- list(
-        AbilityMeandat = posterior$meanPrior,
-        AbilitySD = posterior$sdPrior,
-        AbilityCorr = posterior$corrPrior,
-        sigmaScale = sampledAbilitySigmaScale,
-        itemGradNorm = itemGradNorm,
-        personGradNorm = personGradNorm,
-        combinedGradNorm = sqrt(itemGradNorm^2 + personGradNorm^2)
+      t0_person_opt <- wall_time_sec()
+      personStep <- sampled_step(
+        init = basePar[layout$person],
+        objective = personObjective
       )
-      if(collectSampledAbilityDiag){
-        sampledAbilityDiag[[length(sampledAbilityDiag)+1]] <- bigIRT_sampled_diag_snapshot(
-          fit,
+      personOptElapsed <- wall_time_sec() - t0_person_opt
+      personGradNorm <- personStep$optim$masked_grad_norm
+      personTargetEvals <- if(!is.null(personStep$optim$target_evals)) personStep$optim$target_evals else NA_integer_
+      personLogProbEvals <- if(!is.null(personStep$optim$logprob_evals)) personStep$optim$logprob_evals else NA_integer_
+      personAccept <- bigIRT_sampled_accept_proposal(basePar, personStep$optim$par, personObjective, sampledControl)
+      personStepDamping <- personAccept$damping
+      personObjectiveBefore <- personAccept$objective_before
+      personObjectiveAfter <- personAccept$objective_after
+
+      if(personAccept$accepted || collectSampledAbilityDiag){
+        personFit <- bigIRT_sampled_materialize_fit(
+          sampledOpt,
+          if(personAccept$accepted) personAccept$full_par else personAccept$trial_par,
+          optim = utils::modifyList(personStep$optim, list(
+            par = if(personAccept$accepted) personAccept$full_par else personAccept$trial_par
+          ))
+        )
+        personFit <- apply_fit_dimnames(personFit)
+      }
+
+      if(!personAccept$accepted){
+        rejectReason <- paste0("person_", personAccept$reject_reason)
+        rejectedOuterIter <- rejectedOuterIter + 1L
+        rejectedConsecutive <- rejectedConsecutive + 1L
+        sampledControl$sigmaScale <- bigIRT_sampled_update_sigma_scale(
+          sampledControl,
+          sigmaScaleUsed = sigmaScaleUsed,
+          accepted = FALSE
+        )
+        acceptedWindow <- list()
+        combinedGradNorm <- personGradNorm
+        if(bigIRT_sampled_gradient_worsened(combinedGradNorm, lastObservedCombinedGrad)){
+          worseningConsecutive <- worseningConsecutive + 1L
+        } else if(is.finite(combinedGradNorm)) {
+          worseningConsecutive <- 0L
+        }
+        if(is.finite(combinedGradNorm)) lastObservedCombinedGrad <- combinedGradNorm
+
+        if(collectSampledAbilityDiag && !is.null(personFit)){
+          personDiagRow <- bigIRT_sampled_diag_snapshot(
+            personFit,
+            layout,
+            stage = "person",
+            outerIter = outeri,
+            sigmaScale = sigmaScaleUsed,
+            sigmaScaleUsed = sigmaScaleUsed,
+            personGradNorm = personGradNorm,
+            prevPar = basePar,
+            accepted = FALSE,
+            rejected = TRUE,
+            reject_reason = rejectReason,
+            personStepDamping = personStepDamping,
+            personObjectiveBefore = personObjectiveBefore,
+            personObjectiveAfter = personObjectiveAfter
+          )
+          sampledAbilityDiag[[length(sampledAbilityDiag)+1]] <- personDiagRow
+        }
+
+        sampledAbilityTiming[[length(sampledAbilityTiming)+1]] <- data.frame(
+          outerIter = as.integer(outeri),
+          stage = "outer",
+          accepted = FALSE,
+          rejected = TRUE,
+          reject_reason = rejectReason,
+          sigmaScaleUsed = sigmaScaleUsed,
+          personStepDamping = personStepDamping,
+          itemStepDamping = NA_real_,
+          personObjectiveBefore = personObjectiveBefore,
+          personObjectiveAfter = personObjectiveAfter,
+          itemObjectiveBefore = NA_real_,
+          itemObjectiveAfter = NA_real_,
+          meanPosteriorSD_ratio = NA_real_,
+          maxPosteriorSD_ratio = NA_real_,
+          combinedGradNorm = combinedGradNorm,
+          person_opt_sec = personOptElapsed,
+          posterior_sec = NA_real_,
+          item_opt_sec = NA_real_,
+          person_target_evals = as.integer(personTargetEvals),
+          item_target_evals = 0L,
+          person_logprob_evals = as.integer(personLogProbEvals),
+          item_logprob_evals = 0L,
+          total_sec = personOptElapsed
+        )
+
+        sampledStatus$accepted_outer_iters <- acceptedOuterIter
+        sampledStatus$rejected_outer_iters <- rejectedOuterIter
+        if(rejectedConsecutive >= sampledControl$max_rejected_outer){
+          sampledStatus$reason <- "too_many_rejected_outer_iterations"
+          break
+        }
+        if(worseningConsecutive >= sampledControl$max_worsening_outer){
+          sampledStatus$reason <- "repeated_worsening_combined_gradient"
+          break
+        }
+        next
+      }
+
+      t0_post <- wall_time_sec()
+      postSigma <- bigIRT_person_posterior_and_sigma(
+        fit = personFit,
+        sdat = sdat,
+        layout = layout,
+        jitter = sampledAbilityJitter,
+        sigmaScale = sigmaScaleUsed,
+        priorPrec = sampledPriorPrec
+      )
+      posteriorCandidate <- postSigma$posterior
+      posteriorElapsed <- wall_time_sec() - t0_post
+      sigmaTemplates <- postSigma$sigmaTemplates
+      posteriorMetrics <- bigIRT_sampled_posterior_metrics(posteriorCandidate)
+      if(!is.null(lastAcceptedPosteriorMetrics)){
+        meanPosteriorSD_ratio <- posteriorMetrics$meanPosteriorSD / pmax(lastAcceptedPosteriorMetrics$meanPosteriorSD, sampledAbilityJitter)
+        maxPosteriorSD_ratio <- posteriorMetrics$maxPosteriorSD / pmax(lastAcceptedPosteriorMetrics$maxPosteriorSD, sampledAbilityJitter)
+      } else {
+        meanPosteriorSD_ratio <- 1
+        maxPosteriorSD_ratio <- 1
+      }
+      if(!is.null(bestAcceptedPosteriorMetrics)){
+        cumulativeMeanPosteriorSD_ratio <- posteriorMetrics$meanPosteriorSD / pmax(bestAcceptedPosteriorMetrics$meanPosteriorSD, sampledAbilityJitter)
+        cumulativeMaxPosteriorSD_ratio <- posteriorMetrics$maxPosteriorSD / pmax(bestAcceptedPosteriorMetrics$maxPosteriorSD, sampledAbilityJitter)
+      } else {
+        cumulativeMeanPosteriorSD_ratio <- 1
+        cumulativeMaxPosteriorSD_ratio <- 1
+      }
+      currentAbilitySD <- if(!is.null(personFit)) {
+        abilityMat <- personFit$pars$Ability
+        if(is.null(dim(abilityMat))) abilityMat <- matrix(abilityMat, ncol = sdat$Nscales)
+        stats::sd(as.numeric(abilityMat), na.rm = TRUE)
+      } else NA_real_
+      if(is.finite(bestAcceptedAbilitySD)){
+        sdAbility_ratio <- currentAbilitySD / pmax(bestAcceptedAbilitySD, sampledAbilityJitter)
+      } else {
+        sdAbility_ratio <- 1
+      }
+      if(collectSampledAbilityDiag && !is.null(personFit)){
+        personDiagRow <- bigIRT_sampled_diag_snapshot(
+          personFit,
           layout,
           stage = "person",
           outerIter = outeri,
-          posterior = posterior,
-          sigmaScale = sampledAbilitySigmaScale,
-          itemGradNorm = itemGradNorm,
+          posterior = posteriorCandidate,
+          sigmaScale = sigmaScaleUsed,
+          sigmaScaleUsed = sigmaScaleUsed,
           personGradNorm = personGradNorm,
-          prevPar = prevPar
+          prevPar = basePar,
+          accepted = NA,
+          rejected = NA,
+          personStepDamping = personStepDamping,
+          personObjectiveBefore = personObjectiveBefore,
+          personObjectiveAfter = personObjectiveAfter,
+          meanPosteriorSD_ratio = meanPosteriorSD_ratio,
+          maxPosteriorSD_ratio = maxPosteriorSD_ratio,
+          cumulativeMeanPosteriorSD_ratio = cumulativeMeanPosteriorSD_ratio,
+          cumulativeMaxPosteriorSD_ratio = cumulativeMaxPosteriorSD_ratio,
+          sdAbility_ratio = sdAbility_ratio
         )
       }
+
+      message(paste0("Sampled ability outer step ", outeri, ": item update"))
+      itemObjective <- bigIRT_sampled_make_objective(
+        engine = sampledOpt,
+        free_par_index = layout$item,
+        fixed_par_full = personAccept$full_par,
+        fixed_par_samples = sigmaTemplates$samples,
+        sample_weights = sigmaTemplates$weights
+      )
+      t0_item_opt <- wall_time_sec()
+      itemStep <- sampled_step(
+        init = personAccept$full_par[layout$item],
+        objective = itemObjective
+      )
+      itemOptElapsed <- wall_time_sec() - t0_item_opt
+      itemGradNorm <- itemStep$optim$masked_grad_norm
+      itemTargetEvals <- if(!is.null(itemStep$optim$target_evals)) itemStep$optim$target_evals else NA_integer_
+      itemLogProbEvals <- if(!is.null(itemStep$optim$logprob_evals)) itemStep$optim$logprob_evals else NA_integer_
+      itemAccept <- bigIRT_sampled_accept_proposal(personAccept$full_par, itemStep$optim$par, itemObjective, sampledControl)
+      itemStepDamping <- itemAccept$damping
+      itemObjectiveBefore <- itemAccept$objective_before
+      itemObjectiveAfter <- itemAccept$objective_after
+      combinedGradNorm <- suppressWarnings(sqrt(itemGradNorm^2 + personGradNorm^2))
+
+      if(itemAccept$accepted || collectSampledAbilityDiag){
+        itemFit <- bigIRT_sampled_materialize_fit(
+          sampledOpt,
+          if(itemAccept$accepted) itemAccept$full_par else itemAccept$trial_par,
+          optim = utils::modifyList(itemStep$optim, list(
+            par = if(itemAccept$accepted) itemAccept$full_par else itemAccept$trial_par
+          ))
+        )
+        itemFit <- apply_fit_dimnames(itemFit)
+      }
+
+      spreadExplosion <- bigIRT_sampled_spread_explosion(meanPosteriorSD_ratio, maxPosteriorSD_ratio)
+      cumulativeSpreadExplosion <- bigIRT_sampled_spread_explosion(cumulativeMeanPosteriorSD_ratio, cumulativeMaxPosteriorSD_ratio) ||
+        (is.finite(sdAbility_ratio) && sdAbility_ratio > 1.2)
+      gradientsWorsened <- bigIRT_sampled_gradient_worsened(combinedGradNorm, lastAcceptedCombinedGrad)
+      gradientsFarFromBest <- bigIRT_sampled_gradient_worsened(combinedGradNorm, bestAcceptedCombinedGrad)
+      if(!itemAccept$accepted){
+        rejectReason <- paste0("item_", itemAccept$reject_reason)
+      } else if((spreadExplosion && gradientsWorsened) || (cumulativeSpreadExplosion && gradientsFarFromBest)){
+        rejectReason <- "posterior_spread_explosion"
+      }
+
+      totalOuterElapsed <- itemOptElapsed + personOptElapsed + posteriorElapsed
+      acceptedOuter <- is.na(rejectReason)
+      if(collectSampledAbilityDiag && !is.null(personDiagRow)){
+        personDiagRow$accepted <- acceptedOuter
+        personDiagRow$rejected <- !acceptedOuter
+        personDiagRow$reject_reason <- rejectReason
+        personDiagRow$itemGradNorm <- itemGradNorm
+        personDiagRow$combinedGradNorm <- sqrt(sum(c(itemGradNorm, personGradNorm)^2, na.rm = TRUE))
+        sampledAbilityDiag[[length(sampledAbilityDiag)+1]] <- personDiagRow
+      }
+      if(collectSampledAbilityDiag && !is.null(itemFit)){
+        itemDiagRow <- bigIRT_sampled_diag_snapshot(
+          itemFit,
+          layout,
+          stage = "item",
+          outerIter = outeri,
+          posterior = posteriorCandidate,
+          sigmaScale = sigmaScaleUsed,
+          sigmaScaleUsed = sigmaScaleUsed,
+          itemGradNorm = itemGradNorm,
+          personGradNorm = personGradNorm,
+          prevPar = personAccept$full_par,
+          accepted = acceptedOuter,
+          rejected = !acceptedOuter,
+          reject_reason = rejectReason,
+          personStepDamping = personStepDamping,
+          itemStepDamping = itemStepDamping,
+          personObjectiveBefore = personObjectiveBefore,
+          personObjectiveAfter = personObjectiveAfter,
+          itemObjectiveBefore = itemObjectiveBefore,
+          itemObjectiveAfter = itemObjectiveAfter,
+          meanPosteriorSD_ratio = meanPosteriorSD_ratio,
+          maxPosteriorSD_ratio = maxPosteriorSD_ratio,
+          cumulativeMeanPosteriorSD_ratio = cumulativeMeanPosteriorSD_ratio,
+          cumulativeMaxPosteriorSD_ratio = cumulativeMaxPosteriorSD_ratio,
+          sdAbility_ratio = sdAbility_ratio
+        )
+        sampledAbilityDiag[[length(sampledAbilityDiag)+1]] <- itemDiagRow
+      }
+
+      if(acceptedOuter){
+        currentPar <- itemAccept$full_par
+        fit <- if(!is.null(itemFit) && identical(itemFit$optim$par, currentPar)) itemFit else
+          apply_fit_dimnames(bigIRT_sampled_materialize_fit(
+            sampledOpt,
+            currentPar,
+            optim = utils::modifyList(itemStep$optim, list(par = currentPar))
+          ))
+        posterior <- posteriorCandidate
+        acceptedOuterIter <- acceptedOuterIter + 1L
+        rejectedConsecutive <- 0L
+        if(bigIRT_sampled_gradient_worsened(combinedGradNorm, lastObservedCombinedGrad)){
+          worseningConsecutive <- worseningConsecutive + 1L
+        } else if(is.finite(combinedGradNorm)) {
+          worseningConsecutive <- 0L
+        }
+        if(is.finite(combinedGradNorm)) lastObservedCombinedGrad <- combinedGradNorm
+
+        acceptedMetrics <- list(
+          accepted = TRUE,
+          combinedGradNorm = combinedGradNorm,
+          itemStepRms = if(!is.null(itemDiagRow)) itemDiagRow$itemStepRms else sqrt(mean((currentPar[layout$item] - personAccept$full_par[layout$item])^2)),
+          personStepRms = if(!is.null(personDiagRow)) personDiagRow$personStepRms else sqrt(mean((personAccept$full_par[layout$person] - basePar[layout$person])^2)),
+          meanPosteriorSD_ratio = meanPosteriorSD_ratio
+        )
+        acceptedWindow <- bigIRT_sampled_update_window(acceptedWindow, acceptedMetrics, sampledControl)
+        sampledAbilityHistory[[length(sampledAbilityHistory)+1]] <- list(
+          outerIter = outeri,
+          AbilityMeandat = posterior$meanPrior,
+          AbilitySD = posterior$sdPrior,
+          AbilityCorr = posterior$corrPrior,
+          sigmaScale = sigmaScaleUsed,
+          itemGradNorm = itemGradNorm,
+          personGradNorm = personGradNorm,
+          combinedGradNorm = combinedGradNorm,
+          meanPosteriorSD_ratio = meanPosteriorSD_ratio,
+          maxPosteriorSD_ratio = maxPosteriorSD_ratio,
+          timing = list(
+            item_opt_sec = itemOptElapsed,
+            person_opt_sec = personOptElapsed,
+            posterior_sec = posteriorElapsed,
+            total_sec = totalOuterElapsed
+          )
+        )
+        gradientsImproved <- bigIRT_sampled_gradient_improved(combinedGradNorm, lastAcceptedCombinedGrad)
+        gradientsAcceptedWorsened <- bigIRT_sampled_gradient_worsened(combinedGradNorm, lastAcceptedCombinedGrad)
+        spreadStable <- bigIRT_sampled_spread_stable(meanPosteriorSD_ratio, maxPosteriorSD_ratio, sampledControl) &&
+          !isTRUE(cumulativeSpreadExplosion)
+        sampledControl$sigmaScale <- bigIRT_sampled_update_sigma_scale(
+          sampledControl,
+          sigmaScaleUsed = sigmaScaleUsed,
+          accepted = TRUE,
+          gradientsImproved = gradientsImproved,
+          gradientsWorsened = gradientsAcceptedWorsened,
+          spreadStable = spreadStable
+        )
+        lastAcceptedPosteriorMetrics <- posteriorMetrics
+        lastAcceptedCombinedGrad <- combinedGradNorm
+        lastAcceptedPersonGrad <- personGradNorm
+        lastAcceptedItemGrad <- itemGradNorm
+        if(!is.finite(bestAcceptedCombinedGrad) || combinedGradNorm < bestAcceptedCombinedGrad){
+          bestAcceptedCombinedGrad <- combinedGradNorm
+          bestAcceptedPosteriorMetrics <- posteriorMetrics
+          bestAcceptedAbilitySD <- currentAbilitySD
+        }
+        if(bigIRT_sampled_window_converged(acceptedWindow, sampledControl)){
+          sampledStatus$converged <- TRUE
+          sampledStatus$reason <- "accepted_window_below_tolerance"
+        }
+      } else {
+        rejectedOuterIter <- rejectedOuterIter + 1L
+        rejectedConsecutive <- rejectedConsecutive + 1L
+        sampledControl$sigmaScale <- bigIRT_sampled_update_sigma_scale(
+          sampledControl,
+          sigmaScaleUsed = sigmaScaleUsed,
+          accepted = FALSE
+        )
+        acceptedWindow <- list()
+        if(bigIRT_sampled_gradient_worsened(combinedGradNorm, lastObservedCombinedGrad)){
+          worseningConsecutive <- worseningConsecutive + 1L
+        } else if(is.finite(combinedGradNorm)) {
+          worseningConsecutive <- 0L
+        }
+        if(is.finite(combinedGradNorm)) lastObservedCombinedGrad <- combinedGradNorm
+      }
+
+      sampledAbilityTiming[[length(sampledAbilityTiming)+1]] <- data.frame(
+        outerIter = as.integer(outeri),
+        stage = "outer",
+        accepted = acceptedOuter,
+        rejected = !acceptedOuter,
+        reject_reason = ifelse(is.na(rejectReason), "", rejectReason),
+        sigmaScaleUsed = sigmaScaleUsed,
+        personStepDamping = personStepDamping,
+        itemStepDamping = itemStepDamping,
+        personObjectiveBefore = personObjectiveBefore,
+        personObjectiveAfter = personObjectiveAfter,
+        itemObjectiveBefore = itemObjectiveBefore,
+        itemObjectiveAfter = itemObjectiveAfter,
+        meanPosteriorSD_ratio = meanPosteriorSD_ratio,
+        maxPosteriorSD_ratio = maxPosteriorSD_ratio,
+        cumulativeMeanPosteriorSD_ratio = cumulativeMeanPosteriorSD_ratio,
+        cumulativeMaxPosteriorSD_ratio = cumulativeMaxPosteriorSD_ratio,
+        sdAbility_ratio = sdAbility_ratio,
+        combinedGradNorm = combinedGradNorm,
+        person_opt_sec = personOptElapsed,
+        posterior_sec = posteriorElapsed,
+        item_opt_sec = itemOptElapsed,
+        person_target_evals = as.integer(personTargetEvals),
+        item_target_evals = as.integer(itemTargetEvals),
+        person_logprob_evals = as.integer(personLogProbEvals),
+        item_logprob_evals = as.integer(itemLogProbEvals),
+        total_sec = totalOuterElapsed
+      )
 
       if(collectSampledAbilityDiag && isTRUE(sampledAbilityPlot) && outeri %% sampledAbilityPlotEvery == 0){
         diagdf <- data.table::rbindlist(sampledAbilityDiag, fill = TRUE)
         try(bigIRT_plot_sampled_diag_df(as.data.frame(diagdf)), silent = TRUE)
       }
 
-      combinedGradNorm <- suppressWarnings(sqrt(itemGradNorm^2 + personGradNorm^2))
-      if(is.finite(combinedGradNorm) && combinedGradNorm < noptimgradtol){
+      sampledStatus$accepted_outer_iters <- acceptedOuterIter
+      sampledStatus$rejected_outer_iters <- rejectedOuterIter
+      if(isTRUE(sampledStatus$converged)){
         message(paste0("Sampled ability outer steps converged at iteration ", outeri,
           " with combined gradient norm ", signif(combinedGradNorm, 4)))
         break
       }
+      if(rejectedConsecutive >= sampledControl$max_rejected_outer){
+        sampledStatus$reason <- "too_many_rejected_outer_iterations"
+        break
+      }
+      if(worseningConsecutive >= sampledControl$max_worsening_outer){
+        sampledStatus$reason <- "repeated_worsening_combined_gradient"
+        break
+      }
+    }
+    if(is.null(fit)){
+      fit <- apply_fit_dimnames(bigIRT_sampled_materialize_fit(sampledOpt, currentPar, optim = list(par = currentPar)))
     }
     fit$sampledAbilityHistory <- sampledAbilityHistory
+    fit$sampledAbilityTiming <- as.data.frame(data.table::rbindlist(sampledAbilityTiming, fill = TRUE))
     if(collectSampledAbilityDiag){
       fit$sampledAbilityDiagnostics <- as.data.frame(data.table::rbindlist(sampledAbilityDiag, fill = TRUE))
     }
+    fit$sampledAbilityControl <- sampledControl
+    fit$sampledAbilityStatus <- sampledStatus
     fit$personPosterior <- posterior
   }
 
   if(normalise){   #normalise pars
     for(i in 1:ncol(fit$pars$Ability)){
       selector <- rownames(fit$pars$B) %in% itemSetup$original[itemSetup$scale %in% i]
+      a_for_scale <- if(!is.null(dim(fit$pars$A)) && length(dim(fit$pars$A)) == 2){
+        fit$pars$A[selector,i]
+      } else {
+        fit$pars$A[selector]
+      }
 
       normpars <- normaliseIRT(B = fit$pars$B[selector],
         Ability = fit$pars$Ability[,i],
-        A=fit$pars$A[selector],normaliseScale = normaliseScale, normaliseMean = normaliseMean)
+        A=a_for_scale,normaliseScale = normaliseScale, normaliseMean = normaliseMean)
 
       fit$pars$Ability[,i] <- normpars$Ability
 
       fit$pars$B[selector]  <- normpars$B
-      fit$pars$A[selector] <-  normpars$A
+      if(!is.null(dim(fit$pars$A)) && length(dim(fit$pars$A)) == 2){
+        fit$pars$A[selector,i] <-  normpars$A
+      } else {
+        fit$pars$A[selector] <-  normpars$A
+      }
     }
   }
   ###compute some output details
-  fit$itemPars <- data.frame(item=rownames(fit$pars$B),A=fit$pars$A,B=fit$pars$B,C=fit$pars$C,D=fit$pars$D)
+  itemA <- if(!is.null(dim(fit$pars$A)) && length(dim(fit$pars$A)) == 2){
+    fit$pars$A[cbind(seq_len(nrow(fit$pars$A)), itemSetup$scale)]
+  } else {
+    fit$pars$A
+  }
+  fit$itemPars <- data.frame(item=rownames(fit$pars$B),A=itemA,B=fit$pars$B,C=fit$pars$C,D=fit$pars$D)
   colnames(fit$itemPars)[1] <- item
+  if(!is.null(dim(fit$pars$A)) && length(dim(fit$pars$A)) == 2 && ncol(fit$pars$A) > 1){
+    loadingCols <- as.data.frame(fit$pars$A)
+    colnames(loadingCols) <- paste0("A_", colnames(fit$pars$A))
+    fit$itemPars <- cbind(fit$itemPars, loadingCols)
+  }
   if(ncol(itemPreds)>0){
     colnames(fit$pars$itemPredsMean) <- colnames(itemPreds)
     fit$itemPars <- cbind(fit$itemPars, fit$pars$itemPredsMean)
@@ -1464,6 +2393,17 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     fit$covariateEffects$DStd <- t(t(fit$pars$Dbeta) * apply(fit$dat$itemPreds[,fit$dat$DitemPreds,drop=FALSE],2,sd) / sd(fit$pars$D))
   }
 
+  if(all(c("b_row", "c_row", "d_row", "row_loadings") %in% names(fit$pars))){
+    fit$rowEffective <- list(
+      id = fit$dat$id,
+      theta_mean = fit$pars$Ability,
+      b = fit$pars$b_row,
+      c = fit$pars$c_row,
+      d = fit$pars$d_row,
+      loadings = fit$pars$row_loadings,
+      source = "stan_gq"
+    )
+  }
 
   return(fit)
 }

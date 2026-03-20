@@ -64,7 +64,8 @@ upars_names<-function(fit){
 
   n<-with(fit$dat,{
     n<-c()
-    if(Nitems-NfixedA) n <- c(n,paste0('a',1:(Nitems-NfixedA)))
+    freeA <- (if(!is.null(NitemScales)) NitemScales else (Nitems * Nscales)) - NfixedA
+    if(freeA) n <- c(n,paste0('a',1:freeA))
     if(Nitems-NfixedB) n <- c(n,paste0('b',1:(Nitems-NfixedB)))
     if(Nitems-NfixedC) n <- c(n,paste0('c',1:(Nitems-NfixedC)))
 

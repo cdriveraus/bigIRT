@@ -84,23 +84,31 @@ wleIRT <- function(fit){
 
   wle <- matrix(NA,nrow=fit$dat$Nsubs,ncol=fit$dat$Nscales)
   wleSE <- matrix(NA,nrow=fit$dat$Nsubs,ncol=fit$dat$Nscales)
+  use_matrix_a <- !is.null(dim(fit$pars$A)) && length(dim(fit$pars$A)) == 2
 
   for(i in 1:nrow(wle)){
     for(j in 1:ncol(wle)){
+      row_sel <- fit$dat$id %in% i & fit$dat$scale %in% j
+      item_sel <- fit$dat$item[row_sel]
+      score_sel <- fit$dat$score[row_sel]
+      if(!length(item_sel)) next
+      A_sel <- if(use_matrix_a) fit$pars$A[cbind(item_sel, j)] else fit$itemPars$A[item_sel]
+      B_sel <- fit$itemPars$B[item_sel]
+      C_sel <- fit$itemPars$C[item_sel]
 
       wle[i,j] <-  optimBisection(
           fn = wleGradComplete,
-          A = fit$itemPars$A[fit$dat$item[fit$dat$id %in% i]],
-          B = fit$itemPars$B[fit$dat$item[fit$dat$id %in% i]],
-          C = fit$itemPars$C[fit$dat$item[fit$dat$id %in% i]],
-          score=fit$dat$score[fit$dat$id %in% i])
+          A = A_sel,
+          B = B_sel,
+          C = C_sel,
+          score = score_sel)
 
       wleSE[i,j] <- wleSEnumeric(
         theta = wle[i,j],
-        A = fit$itemPars$A[fit$dat$item[fit$dat$id %in% i]],
-        B = fit$itemPars$B[fit$dat$item[fit$dat$id %in% i]],
-        C = fit$itemPars$C[fit$dat$item[fit$dat$id %in% i]],
-        score=fit$dat$score[fit$dat$id %in% i])
+        A = A_sel,
+        B = B_sel,
+        C = C_sel,
+        score = score_sel)
     }
   }
   return(list(wle=wle,wleSE=wleSE))

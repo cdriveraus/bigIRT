@@ -1,0 +1,606 @@
+---
+title: "3-Factor MIRT: bigIRT (JML, Sampled) vs mirt"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+---
+
+```{r setup, message=FALSE, warning=FALSE}
+library(bigIRT)
+library(data.table)
+library(ggplot2)
+
+set.seed(20260319)
+```
+
+## Goal
+
+This standalone notebook demonstrates:
+
+1. how to simulate **3-factor MIRT** data with cross-loadings using `simIRT(mirt=TRUE)`,
+2. how to fit MIRT models with unknown loadings using `fitIRT(loadings=...)`,
+3. how sampled-ability optimization compares to baseline JML and the `mirt` package after a rotation/scale alignment step,
+4. where the full true and estimated loading matrices can be inspected directly.
+
+## 1) Simulate 3-factor MIRT data
+
+`simIRT(mirt=TRUE)` treats `Nitems` as total items and creates a full `A[item, factor]` loading matrix.
+
+```{r simulate}
+Nsubs <- 700
+Nitems <- 36
+Nscales <- 3
+
+sim <- simIRT(
+  Nsubs = Nsubs,
+  Nitems = Nitems,
+  Nscales = Nscales,
+  NitemsAnswered = c(10, 10, 10),
+  mirt = TRUE,
+  AMean = 1.0,
+  ASD = 0.20,
+  loadingSparsity = 0.25,
+  crossLoadingSD = 0.20,
+  BMean = 0,
+  BSD = 0.9,
+  logitCMean = -20,
+  logitCSD = 0
+)
+
+str(list(
+  Ability_dim = dim(sim$Ability),
+  A_dim = dim(sim$A),
+  B_len = length(sim$B),
+  dat_dim = dim(sim$dat)
+))
+```
+
+Inspect true loading sparsity:
+
+```{r loading-structure}
+A_true <- sim$A
+nonzero_per_item <- rowSums(abs(A_true) > 1e-8)
+table(nonzero_per_item)
+```
+
+## 2) Build unknown-loading fit input
+
+We estimate unknown loading values while keeping an interpretable sparse structure:
+
+- entries that are truly nonzero are set to `NA` (free),
+- entries that are truly zero are fixed at `0`.
+
+This is "unknown loadings" in the sense that magnitudes are estimated, not fixed.
+
+```{r fit-input}
+loading_mask <- matrix(0, nrow = nrow(A_true), ncol = ncol(A_true))
+loading_mask[abs(A_true) > 1e-8] <- NA_real_
+rownames(loading_mask) <- as.character(seq_len(nrow(loading_mask)))
+colnames(loading_mask) <- as.character(seq_len(ncol(loading_mask)))
+
+summary(as.vector(is.na(loading_mask)))
+```
+
+## 3) Fit baseline JML and sampled-ability MIRT
+
+```{r fit-models}
+fit_jml_time <- system.time({
+  fit_jml <- fitIRT(
+    sim$dat,
+    pl = 2,
+    cores = 1,
+    # iter = 40,
+    priors = TRUE,
+    ebayes = FALSE,
+    loadings = loading_mask,
+    dropPerfectScores = FALSE,
+    normalise = FALSE,
+    verbose = 0,
+    plot = FALSE
+  )
+})
+
+fit_samp_time <- system.time({
+  fit_samp <- fitIRT(
+    sim$dat,
+    pl = 2,
+    cores = 1,
+    # iter = 30,
+    priors = TRUE,
+    ebayes = FALSE,
+    loadings = loading_mask,
+    sampledAbilityStep = TRUE,
+    sampledAbilityOuterIter = 40,
+    noptimsteps = 10,
+    # sampledAbilitySigmaScale = 0.35,
+    sampledAbilityDiagnostics = F,
+    sampledAbilityPlot = T,#noptimgradtol = 1e-4,
+    dropPerfectScores = FALSE,
+    normalise = FALSE,
+    verbose = 0,
+    plot = FALSE
+  )
+})
+
+fit_jml_time
+fit_samp_time
+```
+
+Sampled-ability step timings (seconds) for each outer iteration:
+
+```{r sampled-timing}
+sampled_timing <- as.data.table(fit_samp$sampledAbilityTiming)
+if(is.null(sampled_timing) || nrow(sampled_timing) == 0){
+  stop("No sampledAbilityTiming found on fit object.")
+}
+
+timing_outer <- sampled_timing[stage == "outer",
+  .(
+    outerIter,
+    person_point_estimate_optim_sec = round(person_opt_sec, 4),
+    person_target_evals = person_target_evals,
+    posterior_summary_sec = round(posterior_sec, 4),
+    item_parameter_optim_sec = round(item_opt_sec, 4),
+    item_target_evals = item_target_evals,
+    total_outer_sec = round(total_sec, 4)
+  )
+]
+timing_outer
+
+timing_totals <- sampled_timing[stage == "outer",
+  .(
+    person_point_estimate_optim_sec = sum(person_opt_sec, na.rm = TRUE),
+    person_target_evals = sum(person_target_evals, na.rm = TRUE),
+    posterior_summary_sec = sum(posterior_sec, na.rm = TRUE),
+    item_parameter_optim_sec = sum(item_opt_sec, na.rm = TRUE),
+    item_target_evals = sum(item_target_evals, na.rm = TRUE),
+    total_outer_sec = sum(total_sec, na.rm = TRUE)
+  )
+]
+timing_totals
+```
+
+## 4) Fit `mirt` with a comparable 3-factor exploratory setup
+
+```{r fit-mirt}
+if(!requireNamespace("mirt", quietly = TRUE)){
+  stop("This notebook section requires the 'mirt' package.")
+}
+
+wide <- dcast(sim$dat, id ~ Item, value.var = "score", fill = NA)
+setorder(wide, id)
+resp_mat <- as.matrix(wide[, -1])
+
+fit_mirt_time <- system.time({
+  fit_mirt <- mirt::mirt(
+    data = resp_mat,
+    model = Nscales,
+    itemtype = "2PL",
+    method = "MHRM",
+    verbose = FALSE,
+    technical = list(NCYCLES = 500L)
+  )
+})
+
+fit_mirt_time
+```
+
+## 5) Alignment for sensible MIRT comparisons
+
+In MIRT, latent solutions can differ by orthogonal rotation and factor scaling.
+For apples-to-apples comparisons, align estimated abilities/loadings to the true latent frame.
+
+```{r alignment-functions}
+extract_ordered_A <- function(fit, Nitems, Nscales){
+  A <- as.matrix(fit$pars$A)
+  idx <- as.integer(rownames(A))
+  if(any(is.na(idx))) idx <- seq_len(nrow(A))
+  A[idx, seq_len(Nscales), drop = FALSE]
+}
+
+extract_ordered_theta <- function(fit, Nsubs, Nscales){
+  th <- as.matrix(fit$pars$Ability)
+  idx <- as.integer(rownames(th))
+  if(any(is.na(idx))) idx <- seq_len(nrow(th))
+  th[idx, seq_len(Nscales), drop = FALSE]
+}
+
+align_mirt_solution <- function(theta_est, A_est, theta_true, eps = 1e-8){
+  mu_est <- colMeans(theta_est)
+  mu_true <- colMeans(theta_true)
+  th_est_c <- sweep(theta_est, 2, mu_est, "-")
+  th_true_c <- sweep(theta_true, 2, mu_true, "-")
+
+  sd_est <- pmax(apply(th_est_c, 2, sd), eps)
+  sd_true <- pmax(apply(th_true_c, 2, sd), eps)
+
+  z_est <- th_est_c %*% diag(1 / sd_est, ncol(theta_est))
+  z_true <- th_true_c %*% diag(1 / sd_true, ncol(theta_true))
+
+  M <- t(z_est) %*% z_true
+  s <- svd(M)
+  Q <- s$u %*% t(s$v)
+
+  Tmat <- diag(1 / sd_est, ncol(theta_est)) %*% Q %*% diag(sd_true, ncol(theta_true))
+  theta_aligned <- th_est_c %*% Tmat + matrix(rep(mu_true, each = nrow(theta_est)), nrow(theta_est))
+  A_aligned <- A_est %*% solve(Tmat)
+
+  list(theta = theta_aligned, A = A_aligned, Q = Q, transform = Tmat)
+}
+
+calc_observed_nll <- function(fit){
+  p_obs <- pmin(pmax(bigIRT:::checkP(fit), 1e-10), 1 - 1e-10)
+  -mean(log(p_obs))
+}
+```
+
+## 6) Compute performance metrics
+
+```{r metrics}
+A_jml <- extract_ordered_A(fit_jml, Nitems, Nscales)
+A_samp <- extract_ordered_A(fit_samp, Nitems, Nscales)
+th_jml <- extract_ordered_theta(fit_jml, Nsubs, Nscales)
+th_samp <- extract_ordered_theta(fit_samp, Nsubs, Nscales)
+
+coef_items <- as.data.frame(mirt::coef(fit_mirt, simplify = TRUE)$items)
+a_cols <- grep("^a[0-9]+$", colnames(coef_items), value = TRUE)
+A_mirt_raw <- as.matrix(coef_items[, a_cols, drop = FALSE])
+item_order <- as.integer(rownames(A_mirt_raw))
+if(any(is.na(item_order))) item_order <- seq_len(nrow(A_mirt_raw))
+A_mirt <- A_mirt_raw[order(item_order), , drop = FALSE]
+th_mirt <- as.matrix(mirt::fscores(fit_mirt, method = "EAP", full.scores = TRUE))
+
+align_jml <- align_mirt_solution(th_jml, A_jml, sim$Ability)
+align_samp <- align_mirt_solution(th_samp, A_samp, sim$Ability)
+align_mirt <- align_mirt_solution(th_mirt, A_mirt, sim$Ability)
+
+free_idx <- which(is.na(loading_mask), arr.ind = TRUE)
+
+rmse <- function(x, y) sqrt(mean((x - y)^2))
+
+ability_rmse_jml <- rmse(align_jml$theta, sim$Ability)
+ability_rmse_samp <- rmse(align_samp$theta, sim$Ability)
+ability_rmse_mirt <- rmse(align_mirt$theta, sim$Ability)
+
+loading_rmse_jml <- rmse(
+  align_jml$A[free_idx],
+  A_true[free_idx]
+)
+loading_rmse_samp <- rmse(
+  align_samp$A[free_idx],
+  A_true[free_idx]
+)
+loading_rmse_mirt <- rmse(
+  align_mirt$A[free_idx],
+  A_true[free_idx]
+)
+
+loading_rmse_full_jml <- rmse(align_jml$A, A_true)
+loading_rmse_full_samp <- rmse(align_samp$A, A_true)
+loading_rmse_full_mirt <- rmse(align_mirt$A, A_true)
+
+nll_jml <- calc_observed_nll(fit_jml)
+nll_samp <- calc_observed_nll(fit_samp)
+
+eta_mirt <- th_mirt %*% t(A_mirt) + matrix(coef_items[order(item_order), "d"], nrow = nrow(th_mirt), ncol = nrow(A_mirt), byrow = TRUE)
+p_mirt <- pmin(pmax(plogis(eta_mirt), 1e-10), 1 - 1e-10)
+nll_mirt <- -mean(log(ifelse(sim$dat$score == 1, p_mirt[cbind(sim$dat$id, sim$dat$Item)], 1 - p_mirt[cbind(sim$dat$id, sim$dat$Item)])))
+
+perf <- data.table(
+  method = c("bigIRT_JML", "bigIRT_SampledAbility", "mirt_MHRM"),
+  elapsed_sec = c(unname(fit_jml_time["elapsed"]), unname(fit_samp_time["elapsed"]), unname(fit_mirt_time["elapsed"])),
+  observed_nll = c(nll_jml, nll_samp, nll_mirt),
+  ability_rmse = c(ability_rmse_jml, ability_rmse_samp, ability_rmse_mirt),
+  loading_rmse_free = c(loading_rmse_jml, loading_rmse_samp, loading_rmse_mirt),
+  loading_rmse_full = c(loading_rmse_full_jml, loading_rmse_full_samp, loading_rmse_full_mirt)
+)
+perf
+```
+
+## 7) Full true and estimated loading matrices
+
+```{r full-loading-matrices}
+print(round(A_true, 3))
+print(round(align_jml$A, 3))
+print(round(align_samp$A, 3))
+print(round(align_mirt$A, 3))
+```
+
+The matrices above are, in order:
+
+- true loadings,
+- bigIRT JML aligned estimates,
+- bigIRT sampled-ability aligned estimates,
+- mirt aligned estimates.
+
+### Loading heatmaps
+
+```{r loading-heatmaps}
+to_heatmap_dt <- function(M, method){
+  M <- as.matrix(M)
+  data.table(
+    item = rep(seq_len(nrow(M)), times = ncol(M)),
+    factor = rep(seq_len(ncol(M)), each = nrow(M)),
+    loading = as.numeric(M),
+    method = method
+  )
+}
+
+hm_dt <- rbindlist(list(
+  to_heatmap_dt(A_true, "True"),
+  to_heatmap_dt(align_jml$A, "bigIRT_JML"),
+  to_heatmap_dt(align_samp$A, "bigIRT_SampledAbility"),
+  to_heatmap_dt(align_mirt$A, "mirt_MHRM")
+))
+
+ggplot(hm_dt, aes(x = factor, y = item, fill = loading)) +
+  geom_tile() +
+  scale_fill_gradient2(low = "navy", mid = "white", high = "firebrick", midpoint = 0, limits = c(quantile(hm_dt$loading,c(.05, .95)))) +
+  facet_wrap(~ method, nrow = 1) +
+  scale_x_continuous(breaks = seq_len(Nscales)) +
+  theme_bw() +
+  labs(
+    title = "Full loading matrices as heatmaps",
+    x = "Latent factor",
+    y = "Item"
+  )
+```
+
+Interpretation:
+
+- Brighter red/blue means larger positive/negative loadings.
+- A good estimate reproduces the sparse pattern and dominant-factor structure of the true panel.
+- Differences between methods are easiest to spot here when scatterplots look similar.
+
+## 8) Visual checks
+
+### Ability recovery
+
+```{r ability-plot}
+plot_dt <- rbind(
+  data.table(
+    method = "JML",
+    true = as.vector(sim$Ability),
+    est = as.vector(align_jml$theta)
+  ),
+  data.table(
+    method = "SampledAbility",
+    true = as.vector(sim$Ability),
+    est = as.vector(align_samp$theta)
+  ),
+  data.table(
+    method = "mirt",
+    true = as.vector(sim$Ability),
+    est = as.vector(align_mirt$theta)
+  )
+)
+
+ggplot(plot_dt, aes(x = true, y = est)) +
+  geom_point(alpha = 0.15) +
+  geom_abline(intercept = 0, slope = 1, linetype = 2, color = "red") +
+  facet_wrap(~ method, nrow = 1) +
+  theme_bw() +
+  labs(title = "Ability recovery after MIRT alignment", x = "True ability", y = "Estimated ability (aligned)")
+```
+
+### Loading recovery (free entries only)
+
+```{r loading-plot}
+ld_dt <- rbind(
+  data.table(
+    method = "JML",
+    true = A_true[free_idx],
+    est = align_jml$A[free_idx]
+  ),
+  data.table(
+    method = "SampledAbility",
+    true = A_true[free_idx],
+    est = align_samp$A[free_idx]
+  ),
+  data.table(
+    method = "mirt",
+    true = A_true[free_idx],
+    est = align_mirt$A[free_idx]
+  )
+)
+
+ggplot(ld_dt, aes(x = true, y = est)) +
+  geom_point(alpha = 0.2) +
+  geom_abline(intercept = 0, slope = 1, linetype = 2, color = "red") +
+  facet_wrap(~ method, nrow = 1) +
+  theme_bw() +
+  labs(title = "Loading recovery on free MIRT entries", x = "True loading", y = "Estimated loading (aligned)")
+```
+
+## 9) Sampled-ability diagnostics and interpretation
+
+```{r sampled-diagnostics-check}
+diagdf <- as.data.table(fit_samp$sampledAbilityDiagnostics)
+if(is.null(diagdf) || nrow(diagdf) == 0){
+  stop("No sampled-ability diagnostics found. Refit with sampledAbilityDiagnostics=TRUE.")
+}
+
+diagdf[, iter_step := seq_len(.N)]
+diagdf[]
+
+timing_diag <- as.data.table(fit_samp$sampledAbilityTiming)[stage == "outer"]
+timing_diag[]
+```
+
+### Accepted vs rejected outer iterations
+
+```{r sampled-diagnostics-acceptance-summary}
+timing_diag[, .(
+  outerIter,
+  accepted,
+  rejected,
+  reject_reason,
+  sigmaScaleUsed,
+  meanPosteriorSD_ratio,
+  maxPosteriorSD_ratio,
+  combinedGradNorm
+)]
+```
+
+### Combined gradient norm over sampled steps
+
+```{r sampled-diagnostics-grad}
+ggplot(diagdf[stage %in% c("item", "person")],
+  aes(x = iter_step, y = combinedGradNorm, color = stage)) +
+  geom_line(linewidth = 0.6) +
+  scale_y_log10() +
+  theme_bw() +
+  labs(
+    title = "Sampled-ability convergence signal",
+    x = "Sampled update step",
+    y = "Combined gradient norm (log10)"
+  )
+```
+
+### Log-likelihood trajectory (stabilized scale)
+
+```{r sampled-diagnostics-loglik}
+loglik_dt <- copy(diagdf[stage %in% c("item", "person"), .(iter_step, stage, logLik)])
+if(!"logLik" %in% colnames(loglik_dt) || all(!is.finite(loglik_dt$logLik))){
+  warning("logLik not available in sampled diagnostics for this fit.")
+} else {
+  min_loglik <- min(loglik_dt$logLik[is.finite(loglik_dt$logLik)])
+  loglik_dt[, logLik_shift := log1p(pmax(logLik - min_loglik, 0))]
+
+  ggplot(loglik_dt, aes(x = iter_step, y = logLik_shift, color = stage)) +
+    geom_line(linewidth = 0.7) +
+    theme_bw() +
+    labs(
+      title = "Sampled objective trajectory: log(1 + logLik - min(logLik))",
+      x = "Sampled update step",
+      y = "log(1 + logLik - min(logLik))"
+    )
+}
+```
+
+### Acceptance / rejection path
+
+```{r sampled-diagnostics-acceptance}
+ggplot(timing_diag, aes(x = outerIter, y = as.numeric(accepted), color = reject_reason)) +
+  geom_point(size = 2) +
+  geom_line(linewidth = 0.5) +
+  scale_y_continuous(breaks = c(0, 1), labels = c("reject", "accept")) +
+  theme_bw() +
+  labs(
+    title = "Accepted vs rejected sampled outer iterations",
+    x = "Outer iteration",
+    y = NULL,
+    color = "Reject reason"
+  )
+```
+
+### Sigma-scale trajectory
+
+```{r sampled-diagnostics-sigmascale}
+ggplot(timing_diag, aes(x = outerIter, y = sigmaScaleUsed, color = accepted)) +
+  geom_line(linewidth = 0.7) +
+  geom_point(size = 2) +
+  theme_bw() +
+  labs(
+    title = "Adaptive sigma scale during sampled updates",
+    x = "Outer iteration",
+    y = "Sigma scale"
+  )
+```
+
+### Item vs person step movement
+
+```{r sampled-diagnostics-rms}
+move_dt <- melt(
+  diagdf[stage %in% c("item", "person"),
+    .(iter_step, stage, itemStepRms, personStepRms)],
+  id.vars = c("iter_step", "stage"),
+  variable.name = "movement_type",
+  value.name = "rms"
+)
+
+ggplot(move_dt[is.finite(rms)], aes(x = iter_step, y = rms, color = movement_type)) +
+  geom_line(linewidth = 0.6) +
+  scale_y_log10() +
+  facet_wrap(~ stage, ncol = 1) +
+  theme_bw() +
+  labs(
+    title = "Parameter movement by alternating sub-step",
+    x = "Sampled update step",
+    y = "RMS parameter movement (log10)"
+  )
+```
+
+### Posterior SD behavior during sampled updates
+
+```{r sampled-diagnostics-posterior-sd}
+ggplot(diagdf[stage %in% c("item", "person")], aes(x = iter_step)) +
+  geom_line(aes(y = meanPosteriorSD, color = "meanPosteriorSD"), linewidth = 0.7) +
+  geom_line(aes(y = maxPosteriorSD, color = "maxPosteriorSD"), linewidth = 0.7, linetype = 2) +
+  theme_bw() +
+  labs(
+    title = "Posterior uncertainty summary during sampled updates",
+    x = "Sampled update step",
+    y = "Posterior SD",
+    color = NULL
+  )
+```
+
+### Posterior SD growth ratios
+
+```{r sampled-diagnostics-posterior-ratio}
+ggplot(timing_diag, aes(x = outerIter)) +
+  geom_line(aes(y = meanPosteriorSD_ratio, color = "meanPosteriorSD_ratio"), linewidth = 0.7) +
+  geom_line(aes(y = maxPosteriorSD_ratio, color = "maxPosteriorSD_ratio"), linewidth = 0.7, linetype = 2) +
+  geom_hline(yintercept = 1.2, linetype = 2, color = "grey50") +
+  geom_hline(yintercept = 1.35, linetype = 3, color = "grey50") +
+  theme_bw() +
+  labs(
+    title = "Posterior spread ratios by outer iteration",
+    x = "Outer iteration",
+    y = "Ratio to previous accepted posterior spread",
+    color = NULL
+  )
+```
+
+### Raw log-likelihood by sub-step (stabilized scale)
+
+```{r sampled-diagnostics-objective}
+obj_raw <- copy(diagdf[stage %in% c("person", "item"), .(iter_step, outerIter, stage, logLik)])
+if(!"logLik" %in% colnames(obj_raw) || all(!is.finite(obj_raw$logLik))){
+  warning("Raw step logLik not available in sampled diagnostics for this fit.")
+} else {
+  min_loglik <- min(obj_raw$logLik[is.finite(obj_raw$logLik)])
+  obj_raw[, logLik_shift := log1p(pmax(logLik - min_loglik, 0))]
+
+  ggplot(obj_raw, aes(x = iter_step, y = logLik_shift, color = stage)) +
+    geom_line(linewidth = 0.7) +
+    geom_point(size = 1.6) +
+    theme_bw() +
+    labs(
+      title = "Raw sampled step objective: log(1 + logLik - min(logLik))",
+      x = "Sampled update step",
+      y = "log(1 + logLik - min(logLik))",
+      color = NULL
+    )
+}
+```
+
+How to interpret these diagnostic plots:
+
+- **Combined gradient norm** should trend downward; flattening near tolerance indicates convergence.
+- **Item/person RMS movement** should generally shrink across outer iterations; spikes can indicate local re-adjustments.
+- **Posterior SD curves** reflect uncertainty calibration as parameters settle; explosive growth suggests instability/jitter issues.
+- **Accepted/rejected path** should contain mostly accepted iterations once the loop stabilizes.
+- **Sigma-scale trajectory** should contract after rejected or unstable iterations and may expand again once the loop settles.
+- **Objective deltas** should usually stay non-negative after backtracking; repeated negatives indicate acceptance-policy bugs.
+
+## 10) Notes
+
+- This workflow uses sparse structure with unknown loading magnitudes.
+- Alignment is essential in MIRT; raw factor-wise comparisons can be misleading.
+- You can stress-test with:
+  - fewer responses per person (`NitemsAnswered`),
+  - more cross-loadings (`loadingSparsity`),
+  - weaker primary loadings (`ASD`, `AMean`).

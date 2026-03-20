@@ -108,165 +108,106 @@ bigIRT_attach_covariance_dimnames <- function(out, theta_mean, id_levels){
   person_names <- as.character(id_levels)
 
   dimnames(out$covariance) <- list(dim_names, dim_names, person_names)
-  dimnames(out$precision) <- list(dim_names, dim_names, person_names)
-  dimnames(out$precision_chol) <- list(dim_names, dim_names, person_names)
+  if(!is.null(out$precision)){
+    dimnames(out$precision) <- list(dim_names, dim_names, person_names)
+  }
+  if(!is.null(out$precision_chol)){
+    dimnames(out$precision_chol) <- list(dim_names, dim_names, person_names)
+  }
   out
 }
 
-bigIRT_get_person_covariance_cpp <- local({
-  cpp_fun <- NULL
+bigIRT_person_covariance_cpp_impl <- function(id, theta_mean, b, c, d, row_ptr,
+  load_idx, load_val, prior_precision, jitter, max_attempts, return_precision = TRUE){
+  .Call(
+    `_bigIRT_person_covariance_cpp_impl`,
+    id, theta_mean, b, c, d, row_ptr, load_idx, load_val, prior_precision,
+    jitter, max_attempts, as.logical(return_precision)
+  )
+}
 
-  function(){
-    if(!is.null(cpp_fun)) return(cpp_fun)
+bigIRT_person_sigma_points_cpp_impl <- function(id, theta_mean, b, c, d, row_ptr,
+  load_idx, load_val, prior_precision, jitter, max_attempts, sigma_scale){
+  .Call(
+    `_bigIRT_person_sigma_points_cpp_impl`,
+    id, theta_mean, b, c, d, row_ptr, load_idx, load_val, prior_precision,
+    jitter, max_attempts, as.numeric(sigma_scale)
+  )
+}
 
-    Rcpp::cppFunction(
-      depends = "RcppEigen",
-      env = environment(),
-      code = '
-        #include <RcppEigen.h>
-        using Eigen::MatrixXd;
-        using Eigen::VectorXd;
+bigIRT_person_sigma_points_cpp_dense_impl <- function(id, theta_mean, b, c, d, loadings,
+  prior_precision, jitter, max_attempts, sigma_scale){
+  .Call(
+    `_bigIRT_person_sigma_points_cpp_dense_impl`,
+    id, theta_mean, b, c, d, loadings, prior_precision,
+    jitter, max_attempts, as.numeric(sigma_scale)
+  )
+}
 
-        inline double stable_inv_logit(const double x) {
-          if (x >= 0.0) {
-            const double z = std::exp(-x);
-            return 1.0 / (1.0 + z);
-          } else {
-            const double z = std::exp(x);
-            return z / (1.0 + z);
-          }
-        }
+bigIRT_person_sigma_points_cpp <- function(id, theta_mean, b, loadings, c = NULL, d = NULL,
+  prior_precision = NULL, jitter = 1e-8, max_attempts = 8, sigma_scale = 0.5){
+  theta_mean <- as.matrix(theta_mean)
+  if(!is.numeric(theta_mean)) stop("theta_mean must be numeric.")
+  Nsubs <- nrow(theta_mean)
+  K <- ncol(theta_mean)
+  Nobs <- length(id)
 
-        // [[Rcpp::export]]
-        Rcpp::List person_covariance_cpp_impl(
-            const Rcpp::IntegerVector& id,
-            const Rcpp::NumericMatrix& theta_mean,
-            const Rcpp::NumericVector& b,
-            const Rcpp::NumericVector& c,
-            const Rcpp::NumericVector& d,
-            const Rcpp::IntegerVector& row_ptr,
-            const Rcpp::IntegerVector& load_idx,
-            const Rcpp::NumericVector& load_val,
-            const Rcpp::NumericVector& prior_precision,
-            const double jitter = 1e-8,
-            const int max_attempts = 8) {
+  if(length(b) != Nobs) stop("b must have length Nobs.")
+  if(is.null(c)) c <- rep(0, Nobs)
+  if(is.null(d)) d <- rep(1, Nobs)
+  if(length(c) != Nobs || length(d) != Nobs) stop("c and d must have length Nobs.")
 
-          const int Nobs = id.size();
-          const int Nsubs = theta_mean.nrow();
-          const int K = theta_mean.ncol();
-          Rcpp::IntegerVector prior_dim = prior_precision.attr("dim");
-          if (prior_dim.size() != 3 || prior_dim[0] != K || prior_dim[1] != K || prior_dim[2] != Nsubs) {
-            Rcpp::stop("prior_precision must have dimensions K x K x Nsubs.");
-          }
-
-          std::vector< MatrixXd > precision_store(Nsubs);
-          for (int s = 0; s < Nsubs; ++s) {
-            precision_store[s] = MatrixXd::Zero(K, K);
-            for (int r = 0; r < K; ++r) {
-              for (int cidx = 0; cidx < K; ++cidx) {
-                precision_store[s](r, cidx) = prior_precision[r + K * cidx + K * K * s];
-              }
-            }
-          }
-
-          for (int obs = 0; obs < Nobs; ++obs) {
-            const int subj = id[obs] - 1;
-            if (subj < 0 || subj >= Nsubs) {
-              Rcpp::stop("id must be coded from 1 to Nsubs.");
-            }
-
-            const int start = row_ptr[obs] - 1;
-            const int end = row_ptr[obs + 1] - 1;
-            std::vector<int> dims;
-            std::vector<double> vals;
-            dims.reserve(std::max(1, end - start));
-            vals.reserve(std::max(1, end - start));
-
-            double eta = -b[obs];
-            for (int ptr = start; ptr < end; ++ptr) {
-              const int k = load_idx[ptr] - 1;
-              const double aval = load_val[ptr];
-              dims.push_back(k);
-              vals.push_back(aval);
-              eta += aval * theta_mean(subj, k);
-            }
-
-            const double g = stable_inv_logit(eta);
-            const double p = c[obs] + (d[obs] - c[obs]) * g;
-            const double dp = (d[obs] - c[obs]) * g * (1.0 - g);
-            const double denom = std::max(p * (1.0 - p), 1e-12);
-            const double w = (dp * dp) / denom;
-
-            if (w <= 0.0 || !R_finite(w)) continue;
-
-            for (std::size_t ii = 0; ii < dims.size(); ++ii) {
-              const int ki = dims[ii];
-              const double avi = vals[ii];
-              for (std::size_t jj = 0; jj < dims.size(); ++jj) {
-                const int kj = dims[jj];
-                precision_store[subj](ki, kj) += w * avi * vals[jj];
-              }
-            }
-          }
-
-          Rcpp::NumericVector covariance(K * K * Nsubs);
-          covariance.attr("dim") = Rcpp::IntegerVector::create(K, K, Nsubs);
-          Rcpp::NumericVector precision(K * K * Nsubs);
-          precision.attr("dim") = Rcpp::IntegerVector::create(K, K, Nsubs);
-          Rcpp::NumericVector precision_chol(K * K * Nsubs);
-          precision_chol.attr("dim") = Rcpp::IntegerVector::create(K, K, Nsubs);
-          Rcpp::NumericVector chol_jitter_used(Nsubs);
-
-          const MatrixXd eye = MatrixXd::Identity(K, K);
-          for (int s = 0; s < Nsubs; ++s) {
-            MatrixXd Q = precision_store[s];
-            Eigen::LLT<MatrixXd> llt;
-            double chol_jitter = jitter;
-            bool success = false;
-
-            for (int attempt = 0; attempt < max_attempts; ++attempt) {
-              MatrixXd Q_try = Q;
-              Q_try.diagonal().array() += chol_jitter;
-              llt.compute(Q_try);
-              if (llt.info() == Eigen::Success) {
-                Q = Q_try;
-                success = true;
-                break;
-              }
-              chol_jitter *= 10.0;
-            }
-
-            if (!success) {
-              Rcpp::stop("Cholesky failed while building person covariance matrices.");
-            }
-
-            MatrixXd L = llt.matrixL();
-            MatrixXd Sigma = llt.solve(eye);
-            chol_jitter_used[s] = chol_jitter;
-
-            for (int r = 0; r < K; ++r) {
-              for (int cidx = 0; cidx < K; ++cidx) {
-                covariance[r + K * cidx + K * K * s] = Sigma(r, cidx);
-                precision[r + K * cidx + K * K * s] = Q(r, cidx);
-                precision_chol[r + K * cidx + K * K * s] = L(r, cidx);
-              }
-            }
-          }
-
-          return Rcpp::List::create(
-            Rcpp::Named("covariance") = covariance,
-            Rcpp::Named("precision") = precision,
-            Rcpp::Named("precision_chol") = precision_chol,
-            Rcpp::Named("chol_jitter_used") = chol_jitter_used
-          );
-        }
-      '
-    )
-
-    cpp_fun <<- person_covariance_cpp_impl
-    cpp_fun
+  if(is.integer(id) && length(id) == Nobs && all(id >= 1L) && max(id) == Nsubs){
+    id_index <- as.integer(id)
+    id_levels <- as.character(seq_len(Nsubs))
+  } else {
+    id_factor <- factor(id)
+    id_index <- as.integer(id_factor)
+    id_levels <- levels(id_factor)
+    if(length(id_levels) != Nsubs){
+      stop("theta_mean must have one row per unique person id.")
+    }
   }
-})
+
+  prior_precision_arr <- bigIRT_prior_precision_array(prior_precision, Nsubs = Nsubs, K = K)
+  if(is.matrix(loadings)){
+    if(nrow(loadings) != Nobs || ncol(loadings) != K){
+      stop("loadings matrix must have dimensions Nobs x K.")
+    }
+    out <- bigIRT_person_sigma_points_cpp_dense_impl(
+      id = id_index,
+      theta_mean = theta_mean,
+      b = as.numeric(b),
+      c = as.numeric(c),
+      d = as.numeric(d),
+      loadings = loadings,
+      prior_precision = prior_precision_arr,
+      jitter = jitter,
+      max_attempts = as.integer(max_attempts),
+      sigma_scale = sigma_scale
+    )
+  } else {
+    sparse <- bigIRT_normalise_sparse_loadings(loadings, Nobs = Nobs, K = K)
+    out <- bigIRT_person_sigma_points_cpp_impl(
+      id = id_index,
+      theta_mean = theta_mean,
+      b = as.numeric(b),
+      c = as.numeric(c),
+      d = as.numeric(d),
+      row_ptr = sparse$row_ptr,
+      load_idx = sparse$load_idx,
+      load_val = sparse$load_val,
+      prior_precision = prior_precision_arr,
+      jitter = jitter,
+      max_attempts = as.integer(max_attempts),
+      sigma_scale = sigma_scale
+    )
+  }
+
+  out$id_levels <- id_levels
+  out$backend <- "cpp_sigma"
+  out
+}
 
 #' Compute person covariance matrices with a pure R reference implementation
 #'
@@ -276,12 +217,13 @@ bigIRT_get_person_covariance_cpp <- local({
 #'
 #' @inheritParams personCovarianceMatrices
 #'
-#' @return A list with per-person posterior \code{covariance},
-#'   \code{precision}, and \code{precision_chol} arrays.
+#' @return A list with posterior \code{covariance}; and if
+#'   \code{return_precision=TRUE}, also \code{precision} and
+#'   \code{precision_chol} arrays.
 #'
 #' @export
 personCovarianceMatrices_R <- function(id, theta_mean, b, loadings, c = NULL, d = NULL,
-  prior_precision = NULL, jitter = 1e-8, max_attempts = 8){
+  prior_precision = NULL, jitter = 1e-8, max_attempts = 8, return_precision = TRUE){
 
   theta_mean <- as.matrix(theta_mean)
   if(!is.numeric(theta_mean)) stop("theta_mean must be numeric.")
@@ -294,10 +236,16 @@ personCovarianceMatrices_R <- function(id, theta_mean, b, loadings, c = NULL, d 
   if(is.null(d)) d <- rep(1, Nobs)
   if(length(c) != Nobs || length(d) != Nobs) stop("c and d must have length Nobs.")
 
-  id_factor <- factor(id)
-  id_index <- as.integer(id_factor)
-  if(length(levels(id_factor)) != Nsubs){
-    stop("theta_mean must have one row per unique person id.")
+  if(is.integer(id) && length(id) == Nobs && all(id >= 1L) && max(id) == Nsubs){
+    id_index <- as.integer(id)
+    id_levels <- as.character(seq_len(Nsubs))
+  } else {
+    id_factor <- factor(id)
+    id_index <- as.integer(id_factor)
+    id_levels <- levels(id_factor)
+    if(length(id_levels) != Nsubs){
+      stop("theta_mean must have one row per unique person id.")
+    }
   }
 
   sparse <- bigIRT_normalise_sparse_loadings(loadings, Nobs = Nobs, K = K)
@@ -329,7 +277,7 @@ personCovarianceMatrices_R <- function(id, theta_mean, b, loadings, c = NULL, d 
   }
 
   covariance <- array(0, dim = c(K, K, Nsubs))
-  precision_chol <- array(0, dim = c(K, K, Nsubs))
+  precision_chol <- if(isTRUE(return_precision)) array(0, dim = c(K, K, Nsubs)) else NULL
   chol_jitter_used <- numeric(Nsubs)
 
   for(subj in seq_len(Nsubs)){
@@ -343,7 +291,7 @@ personCovarianceMatrices_R <- function(id, theta_mean, b, loadings, c = NULL, d 
       if(!inherits(Rchol, "try-error")){
         Q <- Q_try
         covariance[,,subj] <- chol2inv(Rchol)
-        precision_chol[,,subj] <- t(Rchol)
+        if(isTRUE(return_precision)) precision_chol[,,subj] <- t(Rchol)
         chol_jitter_used[subj] <- chol_jitter
         precision[,,subj] <- Q
         chol_ok <- TRUE
@@ -356,13 +304,13 @@ personCovarianceMatrices_R <- function(id, theta_mean, b, loadings, c = NULL, d 
 
   out <- list(
     covariance = covariance,
-    precision = precision,
+    precision = if(isTRUE(return_precision)) precision else NULL,
     precision_chol = precision_chol,
     chol_jitter_used = chol_jitter_used,
-    id_levels = levels(id_factor),
+    id_levels = id_levels,
     backend = "R"
   )
-  bigIRT_attach_covariance_dimnames(out, theta_mean, levels(id_factor))
+  bigIRT_attach_covariance_dimnames(out, theta_mean, id_levels)
 }
 
 #' Compute person covariance matrices from row-level moderated IRT parameters
@@ -407,6 +355,9 @@ personCovarianceMatrices_R <- function(id, theta_mean, b, loadings, c = NULL, d 
 #'   array.
 #' @param jitter Initial diagonal jitter added before Cholesky factorisation.
 #' @param max_attempts Maximum number of jitter expansions before failing.
+#' @param return_precision Logical. If \code{TRUE}, also return posterior
+#'   precision and precision Cholesky arrays. If \code{FALSE}, compute and return
+#'   only covariance (plus jitter diagnostics).
 #'
 #' @return A list with:
 #' \describe{
@@ -469,7 +420,7 @@ personCovarianceMatrices_R <- function(id, theta_mean, b, loadings, c = NULL, d 
 #'
 #' @export
 personCovarianceMatrices <- function(id, theta_mean, b, loadings, c = NULL, d = NULL,
-  prior_precision = NULL, jitter = 1e-8, max_attempts = 8){
+  prior_precision = NULL, jitter = 1e-8, max_attempts = 8, return_precision = TRUE){
 
   theta_mean <- as.matrix(theta_mean)
   if(!is.numeric(theta_mean)) stop("theta_mean must be numeric.")
@@ -482,17 +433,22 @@ personCovarianceMatrices <- function(id, theta_mean, b, loadings, c = NULL, d = 
   if(is.null(d)) d <- rep(1, Nobs)
   if(length(c) != Nobs || length(d) != Nobs) stop("c and d must have length Nobs.")
 
-  id_factor <- factor(id)
-  id_index <- as.integer(id_factor)
-  if(length(levels(id_factor)) != Nsubs){
-    stop("theta_mean must have one row per unique person id.")
+  if(is.integer(id) && length(id) == Nobs && all(id >= 1L) && max(id) == Nsubs){
+    id_index <- as.integer(id)
+    id_levels <- as.character(seq_len(Nsubs))
+  } else {
+    id_factor <- factor(id)
+    id_index <- as.integer(id_factor)
+    id_levels <- levels(id_factor)
+    if(length(id_levels) != Nsubs){
+      stop("theta_mean must have one row per unique person id.")
+    }
   }
 
   sparse <- bigIRT_normalise_sparse_loadings(loadings, Nobs = Nobs, K = K)
   prior_precision_arr <- bigIRT_prior_precision_array(prior_precision, Nsubs = Nsubs, K = K)
 
-  cpp_fun <- bigIRT_get_person_covariance_cpp()
-  out <- cpp_fun(
+  out <- bigIRT_person_covariance_cpp_impl(
     id = id_index,
     theta_mean = theta_mean,
     b = as.numeric(b),
@@ -503,10 +459,11 @@ personCovarianceMatrices <- function(id, theta_mean, b, loadings, c = NULL, d = 
     load_val = sparse$load_val,
     prior_precision = prior_precision_arr,
     jitter = jitter,
-    max_attempts = as.integer(max_attempts)
+    max_attempts = as.integer(max_attempts),
+    return_precision = return_precision
   )
 
-  out$id_levels <- levels(id_factor)
+  out$id_levels <- id_levels
   out$backend <- "cpp"
-  bigIRT_attach_covariance_dimnames(out, theta_mean, levels(id_factor))
+  bigIRT_attach_covariance_dimnames(out, theta_mean, id_levels)
 }

@@ -23,7 +23,13 @@ simIRT(
   logitCitemPredEffects = NA,
   personPreds = NA,
   AbilityPredEffects = NA,
-  normalise = FALSE
+  normalise = FALSE,
+  mirt = FALSE,
+  loadingSparsity = 0.3,
+  primaryScale = NA,
+  loadings = NA,
+  crossLoadingSD = 0.15,
+  returnRowLoadings = TRUE
 )
 }
 \arguments{
@@ -74,14 +80,35 @@ person ability by scale.}
 
 \item{normalise}{Logical. If \code{TRUE}, simulated \code{A}, \code{B}, and \code{Ability} are
 normalized within scale using \code{\link[=normaliseIRT]{normaliseIRT()}}.}
+
+\item{mirt}{Logical. If \code{TRUE}, simulate a multidimensional response process
+where each item can load on multiple latent factors. In this mode, \code{Nitems}
+is the total number of items (not items-per-scale).}
+
+\item{loadingSparsity}{Numeric in \verb{[0,1]}. Probability that a non-primary
+loading is active when \code{mirt=TRUE} and \code{loadings} is not supplied.}
+
+\item{primaryScale}{Optional integer vector of length \code{Nitems} giving each
+item's primary scale index (\verb{1..Nscales}) when \code{mirt=TRUE}.}
+
+\item{loadings}{Optional numeric \verb{Nitems x Nscales} matrix of true item
+loadings used directly when \code{mirt=TRUE}. If omitted, loadings are sampled.}
+
+\item{crossLoadingSD}{Numeric. SD of sampled non-primary loading values when
+\code{mirt=TRUE} and \code{loadings} is not supplied.}
+
+\item{returnRowLoadings}{Logical. If \code{TRUE} and \code{mirt=TRUE}, include per-row
+loading columns (\code{A_1}, ..., \code{A_K}) in \code{dat}.}
 }
 \value{
 A list with:
 \describe{
 \item{Ability}{Matrix of true person abilities (\verb{Nsubs x Nscales}).}
 \item{A}{Matrix of true item discriminations (\verb{Nitems x Nscales}).}
-\item{B}{Matrix of true item difficulties (\verb{Nitems x Nscales}).}
-\item{C}{Matrix of true item guessing parameters (\verb{Nitems x Nscales}).}
+\item{B}{Matrix/vector of true item difficulties. Matrix in legacy mode,
+vector in \code{mirt=TRUE} mode.}
+\item{C}{Matrix/vector of true item guessing parameters. Matrix in legacy
+mode, vector in \code{mirt=TRUE} mode.}
 \item{dat}{Long-format response data as a \code{data.table}.}
 }
 }

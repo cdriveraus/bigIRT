@@ -14,6 +14,8 @@ fitIRT(
   personDat = NA,
   personPreds = character(),
   itemDat = NA,
+  loadings = NA,
+  loadingsFixed = NA,
   AitemPreds = character(),
   BitemPreds = character(),
   CitemPreds = character(),
@@ -48,7 +50,7 @@ fitIRT(
   integrateEachAbilityFixedSE = FALSE,
   NintegratePoints = 5,
   sampledAbilityStep = FALSE,
-  sampledAbilityOuterIter = 2,
+  sampledAbilityOuterIter = 50,
   sampledAbilityJitter = 1e-06,
   sampledAbilitySigmaScale = 0.5,
   sampledAbilityDiagnostics = FALSE,
@@ -84,6 +86,22 @@ fitIRT(
 \item{personPreds}{Character vector. Names of predictors for person parameters found in data. Default is an empty character vector.}
 
 \item{itemDat}{Data frame. Any fixed item data. Default is NA.}
+
+\item{loadings}{Optional numeric matrix (\verb{Nitems x Nscales}) defining
+item-by-scale discrimination structure. Each cell can be:
+\itemize{
+\item a numeric value (fixed loading),
+\item \code{NA} (free loading, estimated),
+\item or omitted by leaving the whole argument as \code{NA}, which uses the
+legacy one-hot bridge from \code{scale}.
+}
+Row names are matched to item ids and column names are matched to scale ids
+when provided.}
+
+\item{loadingsFixed}{Optional logical matrix (\verb{Nitems x Nscales}) that
+forces fixed/free status for each loading entry. \code{TRUE} means fixed,
+\code{FALSE} means free, \code{NA} defers to \code{loadings} values. If omitted, fixed/free
+status is inferred from whether \code{loadings} entries are \code{NA}.}
 
 \item{AitemPreds}{Character vector. Names of predictors for item discrimination parameters. Default is an empty character vector.}
 
@@ -215,4 +233,15 @@ fit <- fitIRT(dat$dat,cores=2,score = 'score',id = 'id',
 
   print(fit$personPars)
   print(fit$itemPars)
+
+#Explicit multidimensional loading specification (2D example)
+#Rows/cols are aligned by names to item ids and scale ids.
+item_ids <- as.character(unique(dat$dat$Item))
+scale_ids <- as.character(unique(dat$dat$Scale))
+L <- matrix(NA_real_, nrow = length(item_ids), ncol = length(scale_ids),
+  dimnames = list(item_ids, scale_ids))
+L[1, ] <- c(0.8, 0.2) #fixed cross-loading
+L[2, 2] <- 0          #fixed zero loading
+fit_mirt <- fitIRT(dat$dat, pl = 2, cores = 1, loadings = L)
+head(fit_mirt$itemPars[, grep("^A(_|$)", names(fit_mirt$itemPars)), drop = FALSE])
 }
