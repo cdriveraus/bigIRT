@@ -49,13 +49,27 @@ fitIRT(
   integrateEachAbility = FALSE,
   integrateEachAbilityFixedSE = FALSE,
   NintegratePoints = 5,
+  marginalApprox = c("none", "sigma_em", "laplace_em"),
+  laplaceOuterIter = 50,
+  laplaceTol = 0.001,
+  laplaceGradTol = 0.01,
+  laplaceStabilityIter = 5L,
+  laplacePersonTol = 1e-04,
+  laplaceKeepCovariance = FALSE,
+  laplaceDiagnostics = FALSE,
+  laplacePlot = FALSE,
+  laplacePlotEvery = 1L,
   sampledAbilityStep = FALSE,
   sampledAbilityOuterIter = 50,
   sampledAbilityJitter = 1e-06,
-  sampledAbilitySigmaScale = 0.5,
+  sampledAbilitySigmaScale = 0.25,
   sampledAbilityDiagnostics = FALSE,
   sampledAbilityPlot = FALSE,
   sampledAbilityPlotEvery = 1L,
+  sampledAbilityStepTol = 0.001,
+  sampledAbilitySpreadTol = 0.02,
+  sampledAbilityPatience = 3L,
+  sampledAbilityControl = NULL,
   noptimsteps = 10,
   noptimgradtol = 0.01,
   normalise = FALSE,
@@ -171,25 +185,76 @@ discrimination means fixed.}
 
 \item{NintegratePoints}{Integer. Number of integration points for numerical integration. Default is 5.}
 
-\item{sampledAbilityStep}{Logical. Whether to run sampled-ability outer updates after the base
-optimization step. Default is FALSE.}
+\item{marginalApprox}{Character. Marginal approximation backend. Use
+\code{"none"} for the legacy Stan/JML path, \code{"sigma_em"} for the
+legacy deterministic-support outer loop, and \code{"laplace_em"} for the
+pure-C++ Laplace marginal-likelihood outer loop. Default is \code{"none"}.}
 
-\item{sampledAbilityOuterIter}{Integer. Number of sampled-ability outer iterations. Default is 2.}
+\item{laplaceOuterIter}{Integer. Maximum number of outer iterations for
+\code{marginalApprox="laplace_em"}. This is a fallback limit rather than
+the primary convergence criterion. Default is 50.}
 
-\item{sampledAbilityJitter}{Numeric. Small jitter added to stabilize sampled-ability covariance
-calculations. Default is 1e-6.}
+\item{laplaceTol}{Numeric. General outer tolerance for
+\code{marginalApprox="laplace_em"}, used for relative objective
+improvement and RMS step-size checks. Default is 1e-3.}
 
-\item{sampledAbilitySigmaScale}{Numeric. Multiplier applied to sampled-ability covariance templates.
-Default is 0.5.}
+\item{laplaceGradTol}{Numeric. Gradient-norm tolerance for the item-step
+Laplace surrogate. Default is 1e-2.}
 
-\item{sampledAbilityDiagnostics}{Logical. Whether to store sampled-ability diagnostics in
+\item{laplaceStabilityIter}{Integer. Window size for stability-based
+convergence in \code{laplace_em}. If the last
+\code{laplaceStabilityIter} outer iterations show negligible objective
+change and no meaningful reduction in the item-step gradient norm, the fit
+stops even when the gradient norm is still above \code{laplaceGradTol}.
+Default is 5.}
+
+\item{laplacePersonTol}{Numeric. Newton tolerance for person-mode updates in
+\code{laplace_em}. Default is 1e-4.}
+
+\item{laplaceKeepCovariance}{Logical. Whether to keep full person covariance
+matrices on the Laplace path. Default is FALSE.}
+
+\item{laplaceDiagnostics}{Logical. Whether to store outer-loop diagnostics for
+\code{laplace_em}. Default is FALSE.}
+
+\item{laplacePlot}{Logical. Whether to draw the Laplace diagnostic plot during
+fitting when \code{marginalApprox="laplace_em"}. Default is FALSE.}
+
+\item{laplacePlotEvery}{Integer. Plot every N outer iterations when
+\code{laplacePlot=TRUE}. Default is 1.}
+
+\item{sampledAbilityStep}{Logical. Whether to run the Laplace-EM style outer
+updates after the base optimization step. Default is FALSE.}
+
+\item{sampledAbilityOuterIter}{Integer. Number of Laplace-EM outer iterations. Default is 2.}
+
+\item{sampledAbilityJitter}{Numeric. Small jitter added to stabilize Laplace
+covariance calculations. Default is 1e-6.}
+
+\item{sampledAbilitySigmaScale}{Numeric. Multiplier applied to the deterministic
+Laplace support used in the item-update step. Default is 0.25.}
+
+\item{sampledAbilityDiagnostics}{Logical. Whether to store Laplace-EM diagnostics in
 \code{fit$sampledAbilityDiagnostics}. Default is FALSE.}
 
-\item{sampledAbilityPlot}{Logical. Whether to plot sampled-ability diagnostics during outer
+\item{sampledAbilityPlot}{Logical. Whether to plot Laplace-EM diagnostics during outer
 iterations. Default is FALSE.}
 
-\item{sampledAbilityPlotEvery}{Integer. Plot sampled-ability diagnostics every N outer iterations
+\item{sampledAbilityPlotEvery}{Integer. Plot Laplace-EM diagnostics every N outer iterations
 when \code{sampledAbilityPlot=TRUE}. Default is 1.}
+
+\item{sampledAbilityStepTol}{Numeric. RMS movement tolerance used by the
+sampled-ability multi-criterion stopping rule. Default is 1e-3.}
+
+\item{sampledAbilitySpreadTol}{Numeric. Relative posterior-spread tolerance
+used by the sampled-ability stopping rule. Default is 0.02.}
+
+\item{sampledAbilityPatience}{Integer. Number of consecutive accepted outer
+iterations required for sampled-ability convergence. Default is 3.}
+
+\item{sampledAbilityControl}{Optional named list of advanced Laplace-EM
+control settings. Flat arguments supply the defaults and entries in
+this list override them.}
 
 \item{noptimsteps}{Integer. Number of optimizer iterations used inside each sampled-ability
 item/person sub-step. Default is 10.}

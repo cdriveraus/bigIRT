@@ -1,141 +1,127 @@
----
-output:
-  pdf_document: default
-  html_document: default
----
-# Sampled-Ability Algorithm (Conceptual Guide)
+# Laplace Marginal Likelihood in `fitIRT()`
 
-## Purpose
+## Overview
 
-The sampled-ability algorithm is an optimization strategy for IRT models that
-tries to reduce bias from treating person abilities as fixed point values while
-estimating item parameters.
+`bigIRT::fitIRT()` now has two uncertainty-aware outer-loop paths:
 
-Conceptually, it does this by alternating between:
+- `marginalApprox = "sigma_em"`: the legacy deterministic-support path
+- `marginalApprox = "laplace_em"`: the primary pure-C++ Laplace path
 
-- **item updates that integrate over person uncertainty**, and
-- **person updates that condition on the current item estimates**.
+The new `laplace_em` path no longer calibrates items by averaging over sigma
+points. Instead it approximates the person integral directly with a Laplace
+approximation and optimizes a frozen-mode Laplace objective between person
+refreshes.
 
-This sits between two extremes:
+## Target Approximation
 
-- fully deterministic joint optimization (fast, but can be brittle in sparse/noisy settings), and
-- full Bayesian posterior sampling (more complete uncertainty treatment, but heavier).
+For item/global parameters `xi` and person latent vectors `theta_j`, the
+Laplace objective used by `laplace_em` is
 
+\[
+\tilde \ell(\xi)
+=
+\sum_{j=1}^N
+\left[
+\log p(y_j,\hat\theta_j \mid \xi)
++ \frac{K}{2}\log(2\pi)
+- \frac{1}{2}\log |H_j(\xi)|
+\right]
+\]
 
-## High-Level Idea
+where:
 
-Let model parameters be split into:
+- `hat(theta_j)` is the current person posterior mode
+- `H_j` is the person posterior precision at that mode
 
-- `theta_person`: person-side parameters (abilities and person-side means/betas),
-- `theta_item`: item-side parameters (A/B/C/D and item-side means/betas).
+The current implementation is generalized EM rather than exact joint
+optimization:
 
-The sampled-ability loop approximates:
+1. refresh person modes and precisions,
+2. freeze those modes for the item update,
+3. optimize the approximate Laplace objective in pure C++,
+4. refresh again.
 
-1. **Item step:** maximize expected objective over uncertain abilities  
-   `E_{q(theta_person)}[log p(data, theta_item, theta_person)]`.
-2. **Person step:** maximize objective over person parameters with item values fixed.
+This removes the old sigma-point support from the active fitting path.
 
-Repeated alternation creates a block-coordinate procedure where the item block
-“sees” uncertainty in person parameters instead of a single hard plug-in value.
+## Outer Loop
 
+Each `laplace_em` outer iteration does:
 
-## Algorithm Structure
+1. **Initialization**
+   Start from the ordinary Stan/JML fit. This gives a stable parameter state and
+   keeps the old path available for comparison.
 
-## 1) Parameter Partition
+2. **Person Refresh**
+   For fixed item parameters, update person posterior modes with a damped Newton
+   step in C++.
 
-The unconstrained parameter vector is mapped into two disjoint coordinate sets:
+3. **Laplace Precision**
+   Recompute per-person posterior precision matrices and their Cholesky factors.
+   The expected-information form is used so the precision is positive definite
+   after small jitter if needed.
 
-- person block indices,
-- item block indices.
+4. **Item Update**
+   Optimize item-side raw parameters against the Laplace objective with person
+   modes frozen. The C++ backend returns:
+   - objective value
+   - rowwise gradients for effective loadings
+   - rowwise gradients for effective `b`, `c`, and `d`
+   - log-determinant terms from each person precision
 
-This mapping is deterministic from model structure and fixed/free parameter masks.
+5. **Rescaling Guard**
+   In the unmoderated case, the outer loop rescales the latent coordinates back
+   toward the initialized JML scale. This prevents the frozen-mode approximation
+   from drifting toward tiny discriminations and very large abilities.
 
-## 2) Initialization
+6. **Convergence Check**
+   The loop tracks:
+   - relative objective change
+   - item-step RMS movement
+   - person-step RMS movement
 
-A person-side optimization step is run first. This avoids early item updates
-being conditioned on uninformative default person values.
+   The current stopping rule declares convergence after repeated small changes
+   across outer iterations.
 
-## 3) Outer Loop (Alternating Updates)
+## Backend Structure
 
-Each outer iteration has two conceptual phases.
+The Laplace path is split into two C++ kernels:
 
-### 3a) Build a Local Person-Uncertainty Approximation
+- `bigIRT_laplace_person_step_cpp_impl()`
+  - updates person modes
+  - returns precision / Cholesky / log-determinant
 
-Using the current fit, build a per-person local Gaussian approximation for ability:
+- `bigIRT_laplace_item_objective_cpp_impl()`
+  - evaluates the frozen-mode Laplace objective
+  - returns rowwise gradients for effective row parameters
 
-- mean at the current ability estimate,
-- covariance from local curvature/standard-error information,
-- stabilized to remain numerically well-conditioned.
+R code is responsible for:
 
-This defines `q(theta_person)` for the current iteration.
+- mapping raw parameter vectors to row-effective `loadings`, `b`, `c`, and `d`
+- chaining rowwise gradients back to raw item parameters
+- adding priors on raw parameter scales
+- assembling final output objects
 
-### 3b) Item Update Under Sampled Ability Templates
+## Current Scope
 
-Convert each person Gaussian into a small deterministic support of ability samples
-(sigma-point style templates) with associated weights.
+`laplace_em` is intended as the future-facing uncertainty-aware backend.
 
-Then optimize **only item coordinates**, but evaluate the objective as a weighted
-average across these templates. In effect:
+Current practical notes:
 
-- person coordinates are treated as fixed per template,
-- item coordinates are free,
-- objective and gradient are averaged over templates.
+- the pure-C++ Laplace path is the only path being extended
+- the old sigma-point path is kept for comparison and backward compatibility
+- item moderation is supported through row-effective parameter reconstruction
+- person-predictor betas are currently kept fixed at their initialization values
+  during `laplace_em`
 
-This approximates integration over person uncertainty during the item step.
+## Output
 
-### 3c) Person Update
+When `marginalApprox = "laplace_em"`, the fit object stores:
 
-With item coordinates fixed at their latest values, optimize **only person coordinates**
-on the standard objective.
+- `fit$personPosterior$mode`
+- `fit$personPosterior$precision`
+- `fit$personPosterior$precision_chol`
+- `fit$personPosterior$logdet_precision`
+- `fit$laplaceStatus`
+- optionally `fit$laplaceDiagnostics`
 
-### 3d) Refresh Summaries
-
-After person update, recompute high-level person distribution summaries (mean/SD/correlation)
-and optional diagnostics for monitoring optimization behavior.
-
-
-## Stopping Logic (Conceptual)
-
-A scalar convergence signal is built from the two block gradient magnitudes:
-
-- item-block gradient norm,
-- person-block gradient norm,
-- combined into one joint measure.
-
-The outer loop stops when this combined signal indicates the alternating scheme
-is no longer making meaningful progress.
-
-The exact numerical threshold is a tuning choice, but conceptually the criterion
-is: **stop when both block updates are jointly small**.
-
-
-## Why This Helps
-
-Compared with pure point-estimate alternation:
-
-- **Item estimates become less overconfident** in sparse designs because person uncertainty is acknowledged.
-- **Optimization can be more stable** when person/item parameters are tightly coupled.
-- **Computation remains practical** because uncertainty integration is approximated with a small deterministic support, not full sampling each step.
-
-
-## Mental Model
-
-Think of sampled-ability as:
-
-1. “Given current item parameters, estimate where people probably are (with uncertainty).”
-2. “Given that uncertainty cloud of people, update items.”
-3. “Given updated items, re-estimate people.”
-4. Repeat until joint progress is small.
-
-It is an uncertainty-aware block optimizer, not a full posterior sampler.
-
-
-## Implementation Design Principles
-
-Good implementations of this algorithm should keep:
-
-- **Separation of concerns:** objective setup separate from per-step optimizer calls.
-- **Reusable setup:** expensive target construction reused across outer iterations.
-- **Clear block interfaces:** person/item free-index masks explicit and deterministic.
-- **Numerical robustness:** covariance stabilization and safe fallbacks for local approximations.
-- **Transparent diagnostics:** per-step summaries that explain failures or non-convergence.
+This path does not expose sigma-point support objects.

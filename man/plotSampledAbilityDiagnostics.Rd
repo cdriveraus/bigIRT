@@ -4,13 +4,16 @@
 \alias{plotSampledAbilityDiagnostics}
 \title{Plot sampled-ability diagnostics}
 \usage{
-plotSampledAbilityDiagnostics(fit, logGrad = TRUE)
+plotSampledAbilityDiagnostics(fit, logGrad = TRUE, showExtra = TRUE)
 }
 \arguments{
 \item{fit}{A fitted \code{bigIRT} model returned by \code{fitIRT()} with
 \code{sampledAbilityStep=TRUE}.}
 
 \item{logGrad}{Whether to plot gradient norms on the log10 scale.}
+
+\item{showExtra}{Whether to include acceptance, sigma-scale, spread-ratio,
+and transformed raw log-likelihood panels when those diagnostics are available.}
 }
 \value{
 Invisibly returns the diagnostic data frame used for plotting.
