@@ -89,7 +89,7 @@ fit_laplace_time <- system.time({
     priors = TRUE,
     ebayes = FALSE,
     loadings = loading_mask,#laplacePlot = T,
-    marginalApprox = "laplace_em",#noptimsteps = 20,
+    marginalApprox = "laplace_direct",#noptimsteps = 20,
     dropPerfectScores = FALSE,
     normalise = FALSE,
     verbose = 0,
@@ -105,7 +105,7 @@ wide <- dcast(sim$dat, id ~ Item, value.var = "score", fill = NA)
 setorder(wide, id)
 resp_mat <- as.matrix(wide[, -1])
 
-mirt_methods <- c("MHRM", "QMCEM", "EM")
+mirt_methods <- c("MHRM", "EM")
 fit_mirt <- list()
 mirt_fit_status <- rbindlist(lapply(mirt_methods, function(m){
   t0 <- proc.time()

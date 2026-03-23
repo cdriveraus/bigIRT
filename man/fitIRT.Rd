@@ -49,7 +49,7 @@ fitIRT(
   integrateEachAbility = FALSE,
   integrateEachAbilityFixedSE = FALSE,
   NintegratePoints = 5,
-  marginalApprox = c("none", "sigma_em", "laplace_em"),
+  marginalApprox = c("none", "sigma_em", "laplace_em", "laplace_direct"),
   laplaceOuterIter = 50,
   laplaceTol = 0.001,
   laplaceGradTol = 0.01,
@@ -187,8 +187,12 @@ discrimination means fixed.}
 
 \item{marginalApprox}{Character. Marginal approximation backend. Use
 \code{"none"} for the legacy Stan/JML path, \code{"sigma_em"} for the
-legacy deterministic-support outer loop, and \code{"laplace_em"} for the
-pure-C++ Laplace marginal-likelihood outer loop. Default is \code{"none"}.}
+legacy deterministic-support outer loop, \code{"laplace_em"} for the
+pure-C++ Laplace marginal-likelihood outer loop, and
+\code{"laplace_direct"} for a single-stage direct Laplace optimizer that
+recomputes person modes inside each objective evaluation and uses an
+approximate gradient that ignores derivatives through those inner solves.
+Default is \code{"none"}.}
 
 \item{laplaceOuterIter}{Integer. Maximum number of outer iterations for
 \code{marginalApprox="laplace_em"}. This is a fallback limit rather than

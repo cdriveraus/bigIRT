@@ -1,6 +1,6 @@
 bigIRT_laplace_person_step_cpp_impl <- function(id, score, theta_init, ability_offset,
   b, c, d, loadings, prior_mean, prior_precision, free_mask,
-  jitter, max_attempts, max_iter, tol, keep_covariance = FALSE){
+  jitter, max_attempts, max_iter, tol, keep_covariance = FALSE, grain_size = 64L){
   .Call(
     `_bigIRT_laplace_person_step_cpp_impl`,
     as.integer(id),
@@ -18,12 +18,13 @@ bigIRT_laplace_person_step_cpp_impl <- function(id, score, theta_init, ability_o
     as.integer(max_attempts),
     as.integer(max_iter),
     as.numeric(tol),
-    as.logical(keep_covariance)
+    as.logical(keep_covariance),
+    as.integer(grain_size)
   )
 }
 
 bigIRT_laplace_item_objective_cpp_impl <- function(id, score, row_ability,
-  b, c, d, loadings, prior_precision, jitter, max_attempts){
+  b, c, d, loadings, prior_precision, jitter, max_attempts, grain_size = 64L){
   .Call(
     `_bigIRT_laplace_item_objective_cpp_impl`,
     as.integer(id),
@@ -35,7 +36,51 @@ bigIRT_laplace_item_objective_cpp_impl <- function(id, score, row_ability,
     as.matrix(loadings),
     prior_precision,
     as.numeric(jitter),
-    as.integer(max_attempts)
+    as.integer(max_attempts),
+    as.integer(grain_size)
+  )
+}
+
+bigIRT_laplace_item_block_objective_cpp_impl <- function(id, score, row_ability,
+  A_ref, A_fixed_value, A_beta_row, A_pred,
+  B_ref, B_fixed_value, B_beta_row, B_pred,
+  C_ref, C_fixed_value, C_beta_row, C_pred,
+  D_ref, D_fixed_value, D_beta_row, D_pred,
+  invspApars, invspAbeta, Bpars, Bbeta, logitCpars, logitCbeta, logitDpars, logitDbeta,
+  prior_precision, jitter, max_attempts, grain_size = 64L){
+  .Call(
+    `_bigIRT_laplace_item_block_objective_cpp_impl`,
+    as.integer(id),
+    as.integer(score),
+    as.matrix(row_ability),
+    matrix(as.integer(A_ref), nrow = nrow(row_ability), ncol = ncol(row_ability)),
+    as.matrix(A_fixed_value),
+    matrix(as.integer(A_beta_row), nrow = nrow(row_ability), ncol = ncol(row_ability)),
+    as.matrix(A_pred),
+    as.integer(B_ref),
+    as.numeric(B_fixed_value),
+    as.integer(B_beta_row),
+    as.matrix(B_pred),
+    as.integer(C_ref),
+    as.numeric(C_fixed_value),
+    as.integer(C_beta_row),
+    as.matrix(C_pred),
+    as.integer(D_ref),
+    as.numeric(D_fixed_value),
+    as.integer(D_beta_row),
+    as.matrix(D_pred),
+    as.numeric(invspApars),
+    as.matrix(invspAbeta),
+    as.numeric(Bpars),
+    as.matrix(Bbeta),
+    as.numeric(logitCpars),
+    as.matrix(logitCbeta),
+    as.numeric(logitDpars),
+    as.matrix(logitDbeta),
+    prior_precision,
+    as.numeric(jitter),
+    as.integer(max_attempts),
+    as.integer(grain_size)
   )
 }
 
@@ -119,6 +164,12 @@ bigIRT_laplace_prior_precision_array <- function(sdat, jitter = 1e-8){
 
 bigIRT_laplace_clamp <- function(x, lo = 1e-6, hi = 1 - 1e-6){
   pmin(pmax(x, lo), hi)
+}
+
+bigIRT_laplace_subject_grain <- function(nsubs, cores){
+  cores <- max(1L, as.integer(cores)[1])
+  nsubs <- max(1L, as.integer(nsubs)[1])
+  max(1L, ceiling(nsubs / cores))
 }
 
 ## Build a direct, prior-anchored initial state for the Laplace path.
@@ -389,23 +440,60 @@ bigIRT_laplace_row_effective <- function(state, sdat, thetaBase = state$AbilityB
   out
 }
 
+bigIRT_laplace_fixed_row_ability <- function(state, sdat, thetaBase = state$AbilityBase,
+  rows = seq_len(sdat$Nobs), context = NULL){
+  context <- if(is.null(context)) bigIRT_laplace_row_context(sdat, rows = rows) else context
+  nrows <- length(context$rows)
+  K <- sdat$Nscales
+  ability_offset <- if(sdat$NpersonPreds > 0 && length(state$Abilitybeta)) {
+    context$person_pred %*% t(state$Abilitybeta)
+  } else {
+    matrix(0, nrow = nrows, ncol = K)
+  }
+  row_ability <- thetaBase[context$ids,, drop = FALSE] + ability_offset
+  row_ability[context$fixed_ability] <- context$fixed_ability_value[context$fixed_ability]
+  row_ability
+}
+
 bigIRT_laplace_person_step <- function(state, sdat, prior_precision, jitter = 1e-6,
-  max_attempts = 8L, max_iter = 50L, tol = 1e-4, keep_covariance = FALSE){
+  max_attempts = 8L, max_iter = 50L, tol = 1e-4, keep_covariance = FALSE,
+  cores = 1L){
   train_rows <- bigIRT_laplace_training_rows(sdat)
   row_context <- bigIRT_laplace_row_context(sdat, rows = train_rows)
-  rowEff <- bigIRT_laplace_row_effective(state, sdat, thetaBase = state$AbilityBase,
-    rows = train_rows, include_raw = FALSE, context = row_context)
   prior_mean <- matrix(rep(state$AbilityMean, each = sdat$Nsubs), nrow = sdat$Nsubs)
   free_mask <- 1L - sdat$fixedAbilityLogical
-  out <- bigIRT_laplace_person_step_cpp_impl(
+  out <- bigIRT_laplace_person_step_block_cpp_impl(
     id = sdat$id[train_rows],
     score = sdat$score[train_rows],
     theta_init = state$AbilityBase,
-    ability_offset = rowEff$ability_offset,
-    b = rowEff$b_row,
-    c = rowEff$c_row,
-    d = rowEff$d_row,
-    loadings = rowEff$loadings,
+    person_pred = row_context$person_pred,
+    fixed_ability = row_context$fixed_ability,
+    fixed_ability_value = row_context$fixed_ability_value,
+    A_ref = row_context$A_ref,
+    A_fixed_value = row_context$fixed_A_value,
+    A_beta_row = row_context$A_beta_row,
+    A_pred = row_context$A_pred,
+    B_ref = row_context$B_ref,
+    B_fixed_value = row_context$B_fixed_value,
+    B_beta_row = row_context$B_beta_row,
+    B_pred = row_context$B_pred,
+    C_ref = row_context$C_ref,
+    C_fixed_value = row_context$C_fixed_value,
+    C_beta_row = row_context$C_beta_row,
+    C_pred = row_context$C_pred,
+    D_ref = row_context$D_ref,
+    D_fixed_value = row_context$D_fixed_value,
+    D_beta_row = row_context$D_beta_row,
+    D_pred = row_context$D_pred,
+    Abilitybeta = state$Abilitybeta,
+    invspApars = state$invspApars,
+    invspAbeta = state$invspAbeta,
+    Bpars = state$Bpars,
+    Bbeta = state$Bbeta,
+    logitCpars = state$logitCpars,
+    logitCbeta = state$logitCbeta,
+    logitDpars = state$logitDpars,
+    logitDbeta = state$logitDbeta,
     prior_mean = prior_mean,
     prior_precision = prior_precision,
     free_mask = free_mask,
@@ -413,7 +501,8 @@ bigIRT_laplace_person_step <- function(state, sdat, prior_precision, jitter = 1e
     max_attempts = max_attempts,
     max_iter = max_iter,
     tol = tol,
-    keep_covariance = keep_covariance
+    keep_covariance = keep_covariance,
+    grain_size = bigIRT_laplace_subject_grain(sdat$Nsubs, cores)
   )
   state$AbilityBase <- out$theta_mode
   if(sdat$fixedAbilityMean == 0L){
@@ -462,6 +551,7 @@ bigIRT_laplace_item_context <- function(sdat, layout = bigIRT_laplace_item_layou
   list(
     layout = layout,
     train_rows = row_context$rows,
+    grain_size = 64L,
     items = row_context$items,
     A_ref = row_context$A_ref,
     A_beta_row = row_context$A_beta_row,
@@ -602,78 +692,69 @@ bigIRT_laplace_item_objective <- function(par, state, sdat, thetaBase, prior_pre
   if(is.null(context)) context <- bigIRT_laplace_item_context(sdat)
   layout <- context$layout
   curState <- bigIRT_laplace_unpack_item_state(par, state, sdat, layout = layout)
-  train_rows <- context$train_rows
+  if(is.null(context$row_ability)){
+    context$row_ability <- bigIRT_laplace_fixed_row_ability(
+      state = state,
+      sdat = sdat,
+      thetaBase = thetaBase,
+      rows = context$train_rows,
+      context = context$row_context
+    )
+  }
 
-  rowEff <- bigIRT_laplace_row_effective(curState, sdat, thetaBase = thetaBase, rows = train_rows, include_raw = TRUE, context = context$row_context)
-  cpp <- bigIRT_laplace_item_objective_cpp_impl(
-    id = sdat$id[train_rows],
-    score = sdat$score[train_rows],
-    row_ability = rowEff$row_ability,
-    b = rowEff$b_row,
-    c = rowEff$c_row,
-    d = rowEff$d_row,
-    loadings = rowEff$loadings,
+  cpp <- bigIRT_laplace_item_block_objective_cpp_impl(
+    id = sdat$id[context$train_rows],
+    score = sdat$score[context$train_rows],
+    row_ability = context$row_ability,
+    A_ref = context$A_ref,
+    A_fixed_value = context$row_context$fixed_A_value,
+    A_beta_row = context$A_beta_row,
+    A_pred = context$A_pred,
+    B_ref = context$B_ref,
+    B_fixed_value = context$row_context$B_fixed_value,
+    B_beta_row = context$B_beta_row,
+    B_pred = context$B_pred,
+    C_ref = context$C_ref,
+    C_fixed_value = context$row_context$C_fixed_value,
+    C_beta_row = context$C_beta_row,
+    C_pred = context$C_pred,
+    D_ref = context$D_ref,
+    D_fixed_value = context$row_context$D_fixed_value,
+    D_beta_row = context$D_beta_row,
+    D_pred = context$D_pred,
+    invspApars = curState$invspApars,
+    invspAbeta = curState$invspAbeta,
+    Bpars = curState$Bpars,
+    Bbeta = curState$Bbeta,
+    logitCpars = curState$logitCpars,
+    logitCbeta = curState$logitCbeta,
+    logitDpars = curState$logitDpars,
+    logitDbeta = curState$logitDbeta,
     prior_precision = prior_precision,
     jitter = jitter,
-    max_attempts = 8L
+    max_attempts = 8L,
+    grain_size = context$grain_size
   )
 
   grad <- numeric(length(par))
   if(length(layout$A)){
-    grawA <- cpp$grad_loadings * inv_logit(rowEff$a_linear)
-    grad[layout$A] <- grad[layout$A] + bigIRT_laplace_accum_index(as.numeric(grawA), as.integer(context$A_ref), length(layout$A))
-    if(sdat$NAitemPreds > 0 && length(layout$A_beta)){
-      grad[layout$A_beta] <- grad[layout$A_beta] + bigIRT_laplace_accum_beta(
-        values = as.numeric(grawA),
-        beta_row = as.integer(context$A_beta_row),
-        pred = context$A_pred,
-        nrow_beta = nrow(curState$invspAbeta),
-        layout_idx = layout$A_beta
-      )
-    }
+    grad[layout$A] <- grad[layout$A] + cpp$grad_A
+    if(sdat$NAitemPreds > 0 && length(layout$A_beta)) grad[layout$A_beta] <- grad[layout$A_beta] + as.numeric(cpp$grad_A_beta)
   }
 
   if(length(layout$B)){
-    grad[layout$B] <- grad[layout$B] + bigIRT_laplace_accum_index(cpp$grad_b, context$B_ref, length(layout$B))
-    if(sdat$NBitemPreds > 0 && length(layout$B_beta)){
-      grad[layout$B_beta] <- grad[layout$B_beta] + bigIRT_laplace_accum_beta(
-        values = cpp$grad_b,
-        beta_row = context$B_beta_row,
-        pred = context$B_pred,
-        nrow_beta = nrow(curState$Bbeta),
-        layout_idx = layout$B_beta
-      )
-    }
+    grad[layout$B] <- grad[layout$B] + cpp$grad_B
+    if(sdat$NBitemPreds > 0 && length(layout$B_beta)) grad[layout$B_beta] <- grad[layout$B_beta] + as.numeric(cpp$grad_B_beta)
   }
 
   if(length(layout$C)){
-    sigC <- inv_logit(rowEff$c_linear)
-    grawC <- cpp$grad_c * 0.5 * sigC * (1 - sigC)
-    grad[layout$C] <- grad[layout$C] + bigIRT_laplace_accum_index(grawC, context$C_ref, length(layout$C))
-    if(sdat$NCitemPreds > 0 && length(layout$C_beta)){
-      grad[layout$C_beta] <- grad[layout$C_beta] + bigIRT_laplace_accum_beta(
-        values = grawC,
-        beta_row = context$C_beta_row,
-        pred = context$C_pred,
-        nrow_beta = nrow(curState$logitCbeta),
-        layout_idx = layout$C_beta
-      )
-    }
+    grad[layout$C] <- grad[layout$C] + cpp$grad_C
+    if(sdat$NCitemPreds > 0 && length(layout$C_beta)) grad[layout$C_beta] <- grad[layout$C_beta] + as.numeric(cpp$grad_C_beta)
   }
 
   if(length(layout$D)){
-    sigD <- inv_logit(rowEff$d_linear)
-    grawD <- cpp$grad_d * 0.5 * sigD * (1 - sigD)
-    grad[layout$D] <- grad[layout$D] + bigIRT_laplace_accum_index(grawD, context$D_ref, length(layout$D))
-    if(sdat$NDitemPreds > 0 && length(layout$D_beta)){
-      grad[layout$D_beta] <- grad[layout$D_beta] + bigIRT_laplace_accum_beta(
-        values = grawD,
-        beta_row = context$D_beta_row,
-        pred = context$D_pred,
-        nrow_beta = nrow(curState$logitDbeta),
-        layout_idx = layout$D_beta
-      )
-    }
+    grad[layout$D] <- grad[layout$D] + cpp$grad_D
+    if(sdat$NDitemPreds > 0 && length(layout$D_beta)) grad[layout$D_beta] <- grad[layout$D_beta] + as.numeric(cpp$grad_D_beta)
   }
 
   prior <- bigIRT_laplace_item_prior(curState, sdat)
@@ -681,8 +762,62 @@ bigIRT_laplace_item_objective <- function(par, state, sdat, thetaBase, prior_pre
     value = cpp$objective + prior$value,
     grad = grad + prior$grad,
     state = curState,
-    rowEffective = rowEff,
+    rowEffective = NULL,
     cpp = cpp
+  )
+}
+
+bigIRT_laplace_person_step_block_cpp_impl <- function(id, score, theta_init,
+  person_pred, fixed_ability, fixed_ability_value,
+  A_ref, A_fixed_value, A_beta_row, A_pred,
+  B_ref, B_fixed_value, B_beta_row, B_pred,
+  C_ref, C_fixed_value, C_beta_row, C_pred,
+  D_ref, D_fixed_value, D_beta_row, D_pred,
+  Abilitybeta, invspApars, invspAbeta, Bpars, Bbeta, logitCpars, logitCbeta, logitDpars, logitDbeta,
+  prior_mean, prior_precision, free_mask,
+  jitter, max_attempts, max_iter, tol, keep_covariance = FALSE, grain_size = 64L){
+  .Call(
+    `_bigIRT_laplace_person_step_block_cpp_impl`,
+    as.integer(id),
+    as.integer(score),
+    as.matrix(theta_init),
+    as.matrix(person_pred),
+    matrix(as.integer(fixed_ability), nrow = nrow(person_pred), ncol = ncol(theta_init)),
+    as.matrix(fixed_ability_value),
+    matrix(as.integer(A_ref), nrow = nrow(person_pred), ncol = ncol(theta_init)),
+    as.matrix(A_fixed_value),
+    matrix(as.integer(A_beta_row), nrow = nrow(person_pred), ncol = ncol(theta_init)),
+    as.matrix(A_pred),
+    as.integer(B_ref),
+    as.numeric(B_fixed_value),
+    as.integer(B_beta_row),
+    as.matrix(B_pred),
+    as.integer(C_ref),
+    as.numeric(C_fixed_value),
+    as.integer(C_beta_row),
+    as.matrix(C_pred),
+    as.integer(D_ref),
+    as.numeric(D_fixed_value),
+    as.integer(D_beta_row),
+    as.matrix(D_pred),
+    as.matrix(Abilitybeta),
+    as.numeric(invspApars),
+    as.matrix(invspAbeta),
+    as.numeric(Bpars),
+    as.matrix(Bbeta),
+    as.numeric(logitCpars),
+    as.matrix(logitCbeta),
+    as.numeric(logitDpars),
+    as.matrix(logitDbeta),
+    as.matrix(prior_mean),
+    prior_precision,
+    matrix(as.integer(free_mask), nrow = nrow(theta_init), ncol = ncol(theta_init)),
+    as.numeric(jitter),
+    as.integer(max_attempts),
+    as.integer(max_iter),
+    as.numeric(tol),
+    as.logical(keep_covariance),
+    as.integer(grain_size)
   )
 }
 
@@ -694,20 +829,40 @@ bigIRT_laplace_direct_objective <- function(par, state, sdat, prior_precision,
   max_iter = 50L, tol = 1e-4, keep_covariance = FALSE, context = NULL){
   if(is.null(context)) context <- bigIRT_laplace_item_context(sdat)
   curState <- bigIRT_laplace_unpack_item_state(par, state, sdat, layout = context$layout)
-  rowEff <- bigIRT_laplace_row_effective(
-    curState, sdat, thetaBase = theta_init, rows = context$train_rows,
-    include_raw = FALSE, context = context$row_context
-  )
+  row_context <- context$row_context
   prior_mean <- matrix(rep(curState$AbilityMean, each = sdat$Nsubs), nrow = sdat$Nsubs)
-  posterior <- bigIRT_laplace_direct_objective_cpp_impl(
+  posterior <- bigIRT_laplace_person_step_block_cpp_impl(
     id = sdat$id[context$train_rows],
     score = sdat$score[context$train_rows],
     theta_init = theta_init,
-    ability_offset = rowEff$ability_offset,
-    b = rowEff$b_row,
-    c = rowEff$c_row,
-    d = rowEff$d_row,
-    loadings = rowEff$loadings,
+    person_pred = row_context$person_pred,
+    fixed_ability = row_context$fixed_ability,
+    fixed_ability_value = row_context$fixed_ability_value,
+    A_ref = row_context$A_ref,
+    A_fixed_value = row_context$fixed_A_value,
+    A_beta_row = row_context$A_beta_row,
+    A_pred = row_context$A_pred,
+    B_ref = row_context$B_ref,
+    B_fixed_value = row_context$B_fixed_value,
+    B_beta_row = row_context$B_beta_row,
+    B_pred = row_context$B_pred,
+    C_ref = row_context$C_ref,
+    C_fixed_value = row_context$C_fixed_value,
+    C_beta_row = row_context$C_beta_row,
+    C_pred = row_context$C_pred,
+    D_ref = row_context$D_ref,
+    D_fixed_value = row_context$D_fixed_value,
+    D_beta_row = row_context$D_beta_row,
+    D_pred = row_context$D_pred,
+    Abilitybeta = curState$Abilitybeta,
+    invspApars = curState$invspApars,
+    invspAbeta = curState$invspAbeta,
+    Bpars = curState$Bpars,
+    Bbeta = curState$Bbeta,
+    logitCpars = curState$logitCpars,
+    logitCbeta = curState$logitCbeta,
+    logitDpars = curState$logitDpars,
+    logitDbeta = curState$logitDbeta,
     prior_mean = prior_mean,
     prior_precision = prior_precision,
     free_mask = 1L - sdat$fixedAbilityLogical,
@@ -715,7 +870,13 @@ bigIRT_laplace_direct_objective <- function(par, state, sdat, prior_precision,
     max_attempts = max_attempts,
     max_iter = max_iter,
     tol = tol,
-    keep_covariance = keep_covariance
+    keep_covariance = keep_covariance,
+    grain_size = context$grain_size
+  )
+  laplace_value <- sum(
+    posterior$objective +
+      0.5 * sdat$Nscales * log(2 * pi) -
+      0.5 * posterior$logdet_precision
   )
   prior <- bigIRT_laplace_item_prior(curState, sdat)
   surrogate <- bigIRT_laplace_item_objective(
@@ -728,12 +889,12 @@ bigIRT_laplace_direct_objective <- function(par, state, sdat, prior_precision,
     context = context
   )
   list(
-    value = posterior$objective + prior$value,
+    value = laplace_value + prior$value,
     approx_grad = surrogate$grad,
     state = curState,
     posterior = posterior,
     prior = prior,
-    rowEffective = rowEff,
+    rowEffective = NULL,
     surrogate = surrogate
   )
 }
@@ -742,9 +903,17 @@ bigIRT_laplace_direct_objective <- function(par, state, sdat, prior_precision,
 ## evaluations so line-search queries do not rebuild the whole Laplace object
 ## repeatedly at identical parameter values.
 bigIRT_laplace_optimize_item <- function(state, sdat, thetaBase, prior_precision,
-  niter = 50L, tol = 1e-4, jitter = 1e-6){
+  niter = 50L, tol = 1e-4, jitter = 1e-6, cores = 1L){
   layout <- bigIRT_laplace_item_layout(sdat)
   context <- bigIRT_laplace_item_context(sdat, layout = layout)
+  context$grain_size <- bigIRT_laplace_subject_grain(sdat$Nsubs, cores)
+  context$row_ability <- bigIRT_laplace_fixed_row_ability(
+    state = state,
+    sdat = sdat,
+    thetaBase = thetaBase,
+    rows = context$train_rows,
+    context = context$row_context
+  )
   init <- bigIRT_laplace_pack_item_state(state, sdat, layout = layout)
   if(length(init) == 0) {
     eval0 <- bigIRT_laplace_item_objective(init, state, sdat, thetaBase, prior_precision, jitter = jitter, context = context)
@@ -787,9 +956,10 @@ bigIRT_laplace_optimize_item <- function(state, sdat, thetaBase, prior_precision
 ## gradient for efficient experimentation.
 bigIRT_laplace_optimize_direct <- function(state, sdat, prior_precision,
   niter = 50L, tol = 1e-4, jitter = 1e-6, person_tol = 1e-4,
-  keep_covariance = FALSE){
+  keep_covariance = FALSE, cores = 1L){
   layout <- bigIRT_laplace_item_layout(sdat)
   context <- bigIRT_laplace_item_context(sdat, layout = layout)
+  context$grain_size <- bigIRT_laplace_subject_grain(sdat$Nsubs, cores)
   init <- bigIRT_laplace_pack_item_state(state, sdat, layout = layout)
   if(length(init) == 0L){
     eval0 <- bigIRT_laplace_direct_objective(
@@ -797,7 +967,7 @@ bigIRT_laplace_optimize_direct <- function(state, sdat, prior_precision,
       theta_init = state$AbilityBase, jitter = jitter, max_iter = max(20L, as.integer(niter)),
       tol = person_tol, keep_covariance = keep_covariance, context = context
     )
-    return(list(state = eval0$state, optim = list(par = init, value = eval0$value, masked_grad_norm = 0, target_evals = 1L), eval = eval0))
+    return(list(state = eval0$state, optim = list(par = init, value = eval0$value, masked_grad_norm = 0, target_evals = 1L, iter = 0L, terminate = list(what = "no_free_item_parameters", val = NA_real_)), eval = eval0))
   }
 
   eval_count <- 0L
@@ -834,6 +1004,7 @@ bigIRT_laplace_optimize_direct <- function(state, sdat, prior_precision,
   target_gr <- function(par){
     -get_eval(par)$approx_grad
   }
+
   fit <- mize::mize(
     init,
     fg = list(fg = target_fg, fn = target_fn, gr = target_gr),
@@ -845,7 +1016,7 @@ bigIRT_laplace_optimize_direct <- function(state, sdat, prior_precision,
     c2 = 0.9,
     step0 = "schmidt",
     ls_max_fn = 1L,
-    abs_tol = tol,
+    abs_tol = 0,
     grad_tol = 0,
     rel_tol = 0,
     step_tol = 0,

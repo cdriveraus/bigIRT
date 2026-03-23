@@ -169,3 +169,33 @@ test_that("laplace_direct returns posterior outputs and avoids legacy JML", {
   expect_true(isTRUE(fit$laplaceStatus$direct_objective))
   expect_true(isTRUE(fit$laplaceStatus$approximate_gradient))
 })
+
+test_that("laplace_direct final person parameters use the resolved posterior modes", {
+  set.seed(20260329)
+  sim <- bigIRT::simIRT(
+    Nsubs = 80,
+    Nitems = 12,
+    Nscales = 2,
+    NitemsAnswered = c(4, 4),
+    mirt = TRUE,
+    loadingSparsity = 0.3
+  )
+
+  fit <- fitIRT(
+    sim$dat,
+    pl = 2,
+    cores = 1,
+    priors = TRUE,
+    ebayes = FALSE,
+    dropPerfectScores = FALSE,
+    normalise = FALSE,
+    marginalApprox = "laplace_direct",
+    laplaceOuterIter = 12,
+    laplaceGradTol = 1e-3,
+    verbose = 0,
+    plot = FALSE
+  )
+
+  expect_equal(unname(as.matrix(fit$pars$Ability)), unname(as.matrix(fit$personPosterior$mode)), tolerance = 1e-8)
+  expect_gt(sd(as.numeric(fit$pars$Ability)), 0)
+})

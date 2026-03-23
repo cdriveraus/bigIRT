@@ -1364,7 +1364,9 @@ plotLaplaceDiagnostics <- function(fit, logGrad = TRUE, showTiming = TRUE){
 #'   \code{"none"} for the legacy Stan/JML path, \code{"sigma_em"} for the
 #'   legacy deterministic-support outer loop, \code{"laplace_em"} for the
 #'   pure-C++ Laplace marginal-likelihood outer loop, and
-#'   \code{"laplace_direct"} for the experimental direct Laplace optimizer.
+#'   \code{"laplace_direct"} for a single-stage direct Laplace optimizer that
+#'   recomputes person modes inside each objective evaluation and uses an
+#'   approximate gradient that ignores derivatives through those inner solves.
 #'   Default is \code{"none"}.
 #' @param laplaceOuterIter Integer. Maximum number of outer iterations for
 #'   \code{marginalApprox="laplace_em"}. This is a fallback limit rather than
@@ -1936,6 +1938,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   if(identical(marginalApprox, "laplace_direct") && length(which(sdat$Abilityparsindex > 0)) > 0){
     optimdots <- list(...)
     laplaceVerbose <- if("verbose" %in% names(optimdots)) as.integer(optimdots$verbose) else 0L
+    if(requireNamespace("RcppParallel", quietly = TRUE)) RcppParallel::setThreadOptions(numThreads = max(1L, as.integer(cores)))
     laplace_trace <- function(level, ...){
       if(laplaceVerbose >= level) message(...)
     }
@@ -1960,11 +1963,13 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
       tol = laplaceTol,
       jitter = sampledAbilityJitter,
       person_tol = laplacePersonTol,
-      keep_covariance = TRUE
+      keep_covariance = TRUE,
+      cores = cores
     )
     directSec <- wall_time_sec() - t_direct
     state <- directFit$state
     finalPosterior <- directFit$eval$posterior
+    state$AbilityBase <- finalPosterior$theta_mode
 
     fit <- list(pars = list(), optim = list(), dat = sdat)
     fit$pars <- bigIRT_laplace_constrained_pars(state, sdat, posterior = finalPosterior)
@@ -1973,7 +1978,9 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
       logLik = directFit$eval$value,
       par = directFit$optim$par,
       target_evals = directFit$optim$target_evals,
-      masked_grad_norm = directFit$optim$masked_grad_norm
+      masked_grad_norm = directFit$optim$masked_grad_norm,
+      iter = if(!is.null(directFit$optim$iter)) directFit$optim$iter else NA_integer_,
+      terminate = directFit$optim$terminate
     )
     fit$dat <- sdat
     fit <- apply_fit_dimnames(fit)
@@ -1986,16 +1993,21 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
       niter = finalPosterior$niter,
       converged = finalPosterior$converged
     )
+    direct_terminate <- if(!is.null(directFit$optim$terminate$what)) as.character(directFit$optim$terminate$what) else "unknown"
+    direct_converged <- isTRUE(directFit$optim$masked_grad_norm < laplaceGradTol)
     fit$laplaceStatus <- list(
-      converged = isTRUE(directFit$optim$masked_grad_norm < laplaceGradTol),
-      reason = if(isTRUE(directFit$optim$masked_grad_norm < laplaceGradTol)) "approx_gradient" else "max_iter",
-      outer_iters = max(1L, as.integer(laplaceOuterIter)),
+      converged = isTRUE(direct_converged),
+      reason = if(isTRUE(direct_converged)) "approx_gradient" else "max_iter",
+      outer_iters = if(!is.null(directFit$optim$iter)) as.integer(directFit$optim$iter) else max(1L, as.integer(laplaceOuterIter)),
       beta_frozen = sdat$NpersonPreds > 0,
       initialized_from = "prior_anchored",
       direct_objective = TRUE,
       approximate_gradient = TRUE,
+      gradient_type = "frozen_mode_laplace_item_gradient",
       last_item_grad_norm = directFit$optim$masked_grad_norm,
-      last_outer_seconds = directSec
+      last_outer_seconds = directSec,
+      optimizer_terminate = direct_terminate,
+      optimizer_terminate_value = if(!is.null(directFit$optim$terminate$val)) directFit$optim$terminate$val else NA_real_
     )
     if(isTRUE(laplaceDiagnostics)){
       fit$laplaceDiagnostics <- data.table::data.table(
@@ -2015,6 +2027,9 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
         outerIterSec = directSec,
         itemTargetEvals = directFit$optim$target_evals,
         itemMaskedGradNorm = directFit$optim$masked_grad_norm,
+        optimizerIter = if(!is.null(directFit$optim$iter)) directFit$optim$iter else NA_integer_,
+        optimizerTerminate = direct_terminate,
+        optimizerTerminateValue = if(!is.null(directFit$optim$terminate$val)) directFit$optim$terminate$val else NA_real_,
         personMeanNiter = mean(finalPosterior$niter, na.rm = TRUE),
         personMaxNiter = max(finalPosterior$niter, na.rm = TRUE),
         strictCriterion = fit$laplaceStatus$converged,
@@ -2040,6 +2055,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   if(identical(marginalApprox, "laplace_em") && length(which(sdat$Abilityparsindex > 0)) > 0){
     optimdots <- list(...)
     laplaceVerbose <- if("verbose" %in% names(optimdots)) as.integer(optimdots$verbose) else 0L
+    if(requireNamespace("RcppParallel", quietly = TRUE)) RcppParallel::setThreadOptions(numThreads = max(1L, as.integer(cores)))
     laplace_trace <- function(level, ...){
       if(laplaceVerbose >= level) message(...)
     }
@@ -2096,7 +2112,8 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
         jitter = sampledAbilityJitter,
         max_iter = max(4, as.integer(noptimsteps * 2L)),
         tol = laplacePersonTol,
-        keep_covariance = isTRUE(laplaceKeepCovariance) || isTRUE(laplaceDiagnostics)
+        keep_covariance = isTRUE(laplaceKeepCovariance) || isTRUE(laplaceDiagnostics),
+        cores = cores
       )
       personStepSec <- wall_time_sec() - t_person1
       state <- personStep$state
@@ -2110,7 +2127,8 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
         prior_precision = priorPrecision,
         niter = max(2L, as.integer(noptimsteps)),
         tol = laplaceTol,
-        jitter = sampledAbilityJitter
+        jitter = sampledAbilityJitter,
+        cores = cores
       )
       itemStepSec <- wall_time_sec() - t_item
       state <- itemStep$state
@@ -2124,7 +2142,8 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
         jitter = sampledAbilityJitter,
         max_iter = max(20L, as.integer(noptimsteps * 2L)),
         tol = laplacePersonTol,
-        keep_covariance = TRUE
+        keep_covariance = TRUE,
+        cores = cores
       )
       refreshStepSec <- wall_time_sec() - t_refresh
       state <- refreshStep$state
@@ -2272,7 +2291,8 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
         jitter = sampledAbilityJitter,
         max_iter = max(20L, as.integer(noptimsteps * 2L)),
         tol = laplacePersonTol,
-        keep_covariance = TRUE
+        keep_covariance = TRUE,
+        cores = cores
       )
       state <- refreshStep$state
       finalPosterior <- refreshStep$posterior
