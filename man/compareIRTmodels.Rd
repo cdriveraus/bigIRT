@@ -1,0 +1,23 @@
+\name{compareIRTmodels}
+\alias{compareIRTmodels}
+\title{Compare IRT Model Parameterizations}
+\usage{
+compareIRTmodels(
+  models,
+  score_method = "EAP",
+  normaliseScale = 1,
+  normaliseMean = 0
+)
+}
+\arguments{
+  \item{models}{A named or unnamed list containing up to one \code{simIRT} object and any number of fitted \code{bigIRT} and/or \code{mirt} models.}
+  \item{score_method}{Character string passed to \code{mirt::fscores()} when extracting abilities from \code{mirt} fits.}
+  \item{normaliseScale}{Numeric scalar passed to \code{\link{normaliseMIRT}}.}
+  \item{normaliseMean}{Numeric scalar or vector passed to \code{\link{normaliseMIRT}}.}
+}
+\value{
+A list with elements \code{itempars}, \code{personpars}, \code{loading_matrix}, \code{ability_corr_matrix}, \code{raw}, \code{normalized}, and \code{reference_model}. Each table is in long format with a \code{source} column, a source-specific \code{value} column, and a \code{referenceVal} column holding the aligned value from the reference model. \code{itempars} contains one row per item parameter value, \code{personpars} one row per person-factor value, and the matrix components contain both model-based and empirical ability-correlation values in raw and normalized form.
+}
+\description{
+Coerces simulated truth, \code{bigIRT} fits, and \code{mirt} fits onto a common raw and normalized parameter representation for direct comparison.
+}

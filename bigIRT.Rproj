@@ -24,3 +24,5 @@ PackageBuildArgs: --with-keep.source
 PackageRoxygenize: rd,collate,namespace
 
 QuitChildProcessesOnExit: Yes
+
+ProjectName: bigIRT

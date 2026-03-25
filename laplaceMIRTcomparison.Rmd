@@ -1,0 +1,456 @@
+---
+title: "Laplace Direct MIRT Comparison"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+---
+
+```{r setup, message=FALSE, warning=FALSE}
+library(bigIRT)
+library(data.table)
+library(ggplot2)
+library(gridExtra)
+
+if(!requireNamespace("mirt", quietly = TRUE)){
+  stop("This notebook requires the 'mirt' package.")
+}
+
+set.seed(20260323)
+theme_set(theme_minimal(base_size = 12))
+```
+
+## Goal
+
+This notebook compares four estimators on sparse multidimensional 2PL data:
+
+- `bigIRT` JML
+- `bigIRT` `laplace_direct`
+- `mirt` EM
+- `mirt` MHRM
+
+The scenarios cover:
+
+1. 1-factor
+2. 3-factor
+3. 5-factor
+
+The notebook also:
+
+- simulates correlated ability factors when `K > 1`,
+- checks whether `bigIRT`'s multivariate normalization makes direct parameter comparison simple,
+- avoids truth-based ability alignment,
+- uses only loading-based sign/permutation alignment for evaluation,
+- reports recovery of latent correlations as well as item and ability parameters.
+
+## Helpers
+
+```{r helpers}
+make_ability_corr <- function(K){
+  if(K <= 1L) return(matrix(1, 1, 1))
+  M <- outer(seq_len(K), seq_len(K), function(i, j) 0.45^(abs(i - j)))
+  diag(M) <- 1
+  M
+}
+
+scenario_settings <- function(K){
+  list(
+    Nsubs = 700,
+    Nitems = 12L * K,
+    Nscales = K,
+    NitemsAnswered = rep(max(6L, ceiling(0.8 * K) + 6L), K),
+    AbilityCorr = make_ability_corr(K)
+  )
+}
+
+make_loading_mask <- function(A_true){
+  mask <- matrix(0, nrow = nrow(A_true), ncol = ncol(A_true))
+  mask[abs(A_true) > 1e-8] <- NA_real_
+  rownames(mask) <- as.character(seq_len(nrow(mask)))
+  colnames(mask) <- as.character(seq_len(ncol(mask)))
+  mask
+}
+
+make_mirt_model <- function(A_true){
+  item_names <- paste0("Item", seq_len(nrow(A_true)))
+  lines <- character(ncol(A_true))
+  for(k in seq_len(ncol(A_true))){
+    active <- which(abs(A_true[, k]) > 1e-8)
+    lines[k] <- paste0("F", k, " = ", paste(item_names[active], collapse = ","))
+  }
+  if(ncol(A_true) > 1L){
+    corr_lines <- character()
+    idx <- 1L
+    for(i in seq_len(ncol(A_true) - 1L)){
+      for(j in (i + 1L):ncol(A_true)){
+        corr_lines[idx] <- paste0("COV = F", i, "*F", j)
+        idx <- idx + 1L
+      }
+    }
+    lines <- c(lines, corr_lines)
+  }
+  paste(lines, collapse = "\n")
+}
+
+extract_bigirt_state <- function(fit){
+  list(
+    A = as.matrix(fit$pars$A),
+    B = as.numeric(fit$pars$B),
+    Ability = as.matrix(fit$pars$Ability),
+    corr = if(!is.null(fit$abilityPrior$corr)) as.matrix(fit$abilityPrior$corr) else cor(fit$pars$Ability)
+  )
+}
+
+extract_mirt_state <- function(fit_obj, sim){
+  coef_s <- mirt::coef(fit_obj, simplify = TRUE)
+  items <- as.data.frame(coef_s$items)
+  a_cols <- grep("^a[0-9]+$", names(items), value = TRUE)
+  d_col <- if("d" %in% names(items)) "d" else grep("^d", names(items), value = TRUE)[1]
+  A <- as.matrix(items[, a_cols, drop = FALSE])
+  B <- -as.numeric(items[[d_col]])
+  fs <- as.matrix(mirt::fscores(fit_obj, method = "EAP", full.scores = TRUE))
+  list(
+    A = A,
+    B = B,
+    Ability = fs,
+    corr = cov2cor(coef_s$cov)
+  )
+}
+
+signed_permutations <- function(K){
+  permute_idx <- function(x){
+    if(length(x) == 1L) return(matrix(x, nrow = 1L))
+    out <- list()
+    idx <- 1L
+    for(i in seq_along(x)){
+      rest <- x[-i]
+      tail_perm <- permute_idx(rest)
+      out[[idx]] <- cbind(x[i], tail_perm)
+      idx <- idx + 1L
+    }
+    do.call(rbind, out)
+  }
+  perms <- permute_idx(seq_len(K))
+  signs <- as.matrix(expand.grid(rep(list(c(-1, 1)), K)))
+  out <- vector("list", nrow(perms) * nrow(signs))
+  idx <- 1L
+  for(i in seq_len(nrow(perms))){
+    P <- diag(K)[, perms[i, ], drop = FALSE]
+    for(j in seq_len(nrow(signs))){
+      out[[idx]] <- P %*% diag(as.numeric(signs[j, ]), K)
+      idx <- idx + 1L
+    }
+  }
+  out
+}
+
+align_by_loadings <- function(A_est, Ability_est, corr_est, A_true){
+  K <- ncol(A_true)
+  if(K == 1L){
+    c1 <- suppressWarnings(cor(A_est[,1], A_true[,1], use = "pairwise.complete.obs"))
+    if(!is.finite(c1)) c1 <- sum(A_est[,1] * A_true[,1], na.rm = TRUE)
+    s <- if(is.finite(c1) && c1 < 0) -1 else 1
+    P <- matrix(s, 1, 1)
+    return(list(
+      A = A_est %*% P,
+      Ability = Ability_est %*% P,
+      corr = P %*% corr_est %*% P,
+      transform = P
+    ))
+  }
+  candidates <- signed_permutations(K)
+  score_alignment <- function(Acand, Atrue){
+    C <- suppressWarnings(cor(Acand, Atrue, use = "pairwise.complete.obs"))
+    if(all(!is.finite(C))){
+      C <- matrix(0, ncol(Acand), ncol(Atrue))
+      for(i in seq_len(ncol(Acand))){
+        xi <- Acand[, i]
+        sxi <- sqrt(sum(xi^2, na.rm = TRUE))
+        for(j in seq_len(ncol(Atrue))){
+          yj <- Atrue[, j]
+          syj <- sqrt(sum(yj^2, na.rm = TRUE))
+          if(is.finite(sxi) && is.finite(syj) && sxi > 0 && syj > 0){
+            C[i, j] <- sum(xi * yj, na.rm = TRUE) / (sxi * syj)
+          }
+        }
+      }
+    }
+    C[!is.finite(C)] <- 0
+    sum(abs(diag(C)))
+  }
+  scores <- vapply(candidates, function(P){
+    score_alignment(A_est %*% P, A_true)
+  }, numeric(1))
+  if(length(scores) == 0L || all(!is.finite(scores))){
+    P <- diag(K)
+  } else {
+    P <- candidates[[which.max(scores)]]
+  }
+  list(
+    A = A_est %*% P,
+    Ability = Ability_est %*% P,
+    corr = P %*% corr_est %*% P,
+    transform = P
+  )
+}
+
+loading_axis_diagnostic <- function(A_est, A_true){
+  C <- suppressWarnings(cor(A_est, A_true))
+  data.table(
+    est_factor = rep(seq_len(ncol(A_est)), times = ncol(A_true)),
+    true_factor = rep(seq_len(ncol(A_true)), each = ncol(A_est)),
+    corr = as.numeric(C)
+  )
+}
+
+rmse <- function(x, y) sqrt(mean((x - y)^2, na.rm = TRUE))
+
+run_bigirt_fit <- function(sim, loading_mask, method){
+  t0 <- proc.time()[3]
+  fit <- fitIRT(
+    sim$dat,
+    pl = 2,
+    cores = 1,
+    priors = TRUE,
+    ebayes = FALSE,
+    loadings = loading_mask,
+    marginalApprox = if(method == "JML") "none" else "laplace_direct",
+    estimateAbilityCorr = identical(method, "LaplaceDirect") && ncol(loading_mask) > 1L,
+    laplaceCorrParam = "stan_corsqrt",
+    dropPerfectScores = FALSE,
+    normalise = TRUE,
+    verbose = 0,
+    plot = FALSE
+  )
+  list(fit = fit, elapsed = proc.time()[3] - t0)
+}
+
+run_mirt_fit <- function(sim, model_syntax, method){
+  wide <- dcast(copy(sim$dat), id ~ Item, value.var = "score", fill = NA)
+  setorder(wide, id)
+  resp <- as.matrix(wide[, -1])
+  colnames(resp) <- paste0("Item", seq_len(ncol(resp)))
+  t0 <- proc.time()[3]
+  fit <- mirt::mirt(
+    data = resp,
+    model = mirt::mirt.model(model_syntax),
+    itemtype = "2PL",
+    method = method,
+    verbose = FALSE,
+    technical = list(NCYCLES = 500L)
+  )
+  list(fit = fit, elapsed = proc.time()[3] - t0)
+}
+
+evaluate_method <- function(method_name, state, truth){
+  aligned <- align_by_loadings(
+    A_est = state$A,
+    Ability_est = state$Ability,
+    corr_est = state$corr,
+    A_true = truth$A
+  )
+  list(
+    metrics = data.table(
+      method = method_name,
+      loading_rmse = rmse(aligned$A, truth$A),
+      B_rmse = rmse(state$B, truth$B),
+      ability_rmse = rmse(aligned$Ability, truth$Ability),
+      corr_rmse = rmse(aligned$corr, truth$corr)
+    ),
+    aligned = aligned,
+    axis_diag = loading_axis_diagnostic(state$A, truth$A)
+  )
+}
+
+make_loading_plot <- function(dt, title){
+  ggplot(dt, aes(true, est, color = factor)) +
+    geom_point(alpha = 0.55, size = 1.4) +
+    geom_abline(slope = 1, intercept = 0, linetype = 2) +
+    facet_wrap(~ factor, scales = "free") +
+    labs(title = title, x = "True loading", y = "Estimated loading", color = "Factor")
+}
+
+make_corr_heatmap <- function(corr_mat, title){
+  dt <- as.data.table(as.table(corr_mat))
+  setnames(dt, c("f1", "f2", "corr"))
+  ggplot(dt, aes(f1, f2, fill = corr)) +
+    geom_tile() +
+    geom_text(aes(label = sprintf("%.2f", corr)), size = 3) +
+    scale_fill_gradient2(limits = c(-1, 1)) +
+    coord_equal() +
+    labs(title = title, x = NULL, y = NULL)
+}
+
+make_axis_plot <- function(dt, title){
+  ggplot(dt, aes(factor(true_factor), factor(est_factor), fill = corr)) +
+    geom_tile() +
+    geom_text(aes(label = sprintf("%.2f", corr)), size = 3) +
+    scale_fill_gradient2(limits = c(-1, 1)) +
+    labs(title = title, x = "True factor", y = "Estimated factor")
+}
+```
+
+## Scenario Runner
+
+```{r runner}
+run_scenario <- function(K){
+  cfg <- scenario_settings(K)
+  sim <- do.call(simIRT, c(cfg, list(
+    mirt = K > 1L,
+    AMean = 1.0,
+    ASD = 0.20,
+    loadingSparsity = 0.25,
+    crossLoadingSD = 0.20,
+    BMean = 0,
+    BSD = 0.9,
+    logitCMean = -20,
+    logitCSD = 0,
+    normalise = FALSE
+  )))
+
+  truth <- list(
+    A = sim$A,
+    B = sim$B,
+    Ability = sim$Ability,
+    corr = cor(sim$Ability)
+  )
+  loading_mask <- make_loading_mask(truth$A)
+  mirt_model <- make_mirt_model(truth$A)
+
+  fit_jml <- run_bigirt_fit(sim, loading_mask, "JML")
+  fit_laplace <- run_bigirt_fit(sim, loading_mask, "LaplaceDirect")
+  fit_mirt_em <- run_mirt_fit(sim, mirt_model, "EM")
+  fit_mirt_mhrm <- run_mirt_fit(sim, mirt_model, "MHRM")
+
+  states <- list(
+    JML = extract_bigirt_state(fit_jml$fit),
+    LaplaceDirect = extract_bigirt_state(fit_laplace$fit),
+    mirt_EM = extract_mirt_state(fit_mirt_em$fit, sim),
+    mirt_MHRM = extract_mirt_state(fit_mirt_mhrm$fit, sim)
+  )
+
+  evals <- lapply(names(states), function(nm) evaluate_method(nm, states[[nm]], truth))
+  names(evals) <- names(states)
+
+  metrics <- rbindlist(Map(function(nm, ev, elapsed){
+    cbind(data.table(
+      scenario = paste0(K, " factor"),
+      elapsed_sec = elapsed
+    ), ev$metrics)
+  },
+  names(evals),
+  evals,
+  c(fit_jml$elapsed, fit_laplace$elapsed, fit_mirt_em$elapsed, fit_mirt_mhrm$elapsed)))
+
+  plots <- list(
+    loading = Map(function(nm, ev){
+      A_long <- data.table(
+        true = as.numeric(truth$A),
+        est = as.numeric(ev$aligned$A),
+        factor = rep(seq_len(K), each = nrow(truth$A))
+      )
+      make_loading_plot(A_long, paste0(paste0(K, "-factor "), nm, ": loadings"))
+    }, names(evals), evals),
+    corr = Map(function(nm, ev){
+      make_corr_heatmap(ev$aligned$corr, paste0(paste0(K, "-factor "), nm, ": recovered corr"))
+    }, names(evals), evals),
+    axis = Map(function(nm, ev){
+      make_axis_plot(ev$axis_diag, paste0(paste0(K, "-factor "), nm, ": axis match before alignment"))
+    }, names(evals), evals)
+  )
+
+  list(
+    sim = sim,
+    truth = truth,
+    metrics = metrics,
+    fits = list(JML = fit_jml$fit, LaplaceDirect = fit_laplace$fit,
+      mirt_EM = fit_mirt_em$fit, mirt_MHRM = fit_mirt_mhrm$fit),
+    states = states,
+    evals = evals,
+    plots = plots
+  )
+}
+```
+
+## Run 1-, 3-, and 5-factor scenarios
+
+```{r run-all, cache=TRUE}
+results <- lapply(c(1L, 3L, 5L), run_scenario)
+names(results) <- c("1 factor", "3 factor", "5 factor")
+
+all_metrics <- rbindlist(lapply(results, `[[`, "metrics"))
+all_metrics[]
+```
+
+## Summary Table
+
+```{r summary-table}
+summary_table <- copy(all_metrics)[order(scenario, method)]
+summary_table[]
+```
+
+## Timing Comparison
+
+```{r timing-plot, fig.height=4.5, fig.width=8}
+ggplot(all_metrics, aes(method, elapsed_sec, fill = method)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ scenario, scales = "free_y") +
+  labs(title = "Elapsed time", x = NULL, y = "Seconds") +
+  theme(axis.text.x = element_text(angle = 25, hjust = 1))
+```
+
+## Recovery Comparison
+
+```{r recovery-plot, fig.height=7, fig.width=10}
+metrics_long <- melt(
+  all_metrics,
+  id.vars = c("scenario", "method", "elapsed_sec"),
+  measure.vars = c("loading_rmse", "B_rmse", "ability_rmse", "corr_rmse"),
+  variable.name = "metric",
+  value.name = "value"
+)
+
+ggplot(metrics_long, aes(method, value, fill = method)) +
+  geom_col(show.legend = FALSE) +
+  facet_grid(metric ~ scenario, scales = "free_y") +
+  labs(title = "Recovery diagnostics", x = NULL, y = "RMSE") +
+  theme(axis.text.x = element_text(angle = 25, hjust = 1))
+```
+
+## Normalization / Axis-Matching Check
+
+These plots use the fitted normalized loadings before any sign/permutation alignment.  
+If multivariate normalization is behaving well, the diagonal tiles should dominate.
+
+```{r axis-check, fig.height=10, fig.width=10}
+for(res_name in names(results)){
+  cat("###", res_name, "\n")
+  gridExtra::grid.arrange(grobs = results[[res_name]]$plots$axis, ncol = 2)
+}
+```
+
+## Loading Recovery Plots
+
+```{r loading-plots, fig.height=12, fig.width=10}
+for(res_name in names(results)){
+  cat("###", res_name, "\n")
+  gridExtra::grid.arrange(grobs = results[[res_name]]$plots$loading, ncol = 2)
+}
+```
+
+## Correlation Recovery Plots
+
+```{r corr-plots, fig.height=12, fig.width=10}
+for(res_name in names(results)){
+  cat("###", res_name, "\n")
+  truth_plot <- make_corr_heatmap(results[[res_name]]$truth$corr, paste0(res_name, ": true corr"))
+  gridExtra::grid.arrange(grobs = c(list(truth_plot), results[[res_name]]$plots$corr), ncol = 2)
+}
+```
+
+## Notes
+
+- `bigIRT` fits are run with `normalise = TRUE`, so comparisons are on the fitted standardized metric rather than on an affine alignment to true abilities.
+- The evaluation still applies loading-based sign/permutation alignment, because factor sign is arbitrary even under confirmatory identification and `mirt` can still return a flipped orientation.
+- No truth-based ability alignment is used.
+- For `K > 1`, correlation recovery is evaluated after the same loading-based alignment used for factor signs/order.

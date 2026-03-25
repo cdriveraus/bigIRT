@@ -17,6 +17,7 @@ simIRT(
   logitCMean = -2,
   AbilitySD = 1,
   AbilityMean = 0,
+  AbilityCorr = diag(1, Nscales),
   itemPreds = NA,
   AitemPredEffects = NA,
   BitemPredEffects = NA,

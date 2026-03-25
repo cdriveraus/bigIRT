@@ -50,6 +50,8 @@ fitIRT(
   integrateEachAbilityFixedSE = FALSE,
   NintegratePoints = 5,
   marginalApprox = c("none", "sigma_em", "laplace_em", "laplace_direct"),
+  estimateAbilityCorr = FALSE,
+  laplaceCorrParam = c("normalized_chol", "stan_corsqrt"),
   laplaceOuterIter = 50,
   laplaceTol = 0.001,
   laplaceGradTol = 0.01,
@@ -193,6 +195,11 @@ pure-C++ Laplace marginal-likelihood outer loop, and
 recomputes person modes inside each objective evaluation and uses an
 approximate gradient that ignores derivatives through those inner solves.
 Default is \code{"none"}.}
+
+\item{estimateAbilityCorr}{Logical. If \code{TRUE}, estimate the latent
+ability correlation matrix directly inside \code{marginalApprox =
+  "laplace_direct"} while keeping \code{AbilitySD} fixed. Ignored for other
+backends and for unidimensional fits. Default is FALSE.}
 
 \item{laplaceOuterIter}{Integer. Maximum number of outer iterations for
 \code{marginalApprox="laplace_em"}. This is a fallback limit rather than

@@ -205,6 +205,477 @@ normaliseIRT <- function(B,Ability, A,normbase='Ability',normaliseScale=1,  norm
   return(list(A=A,B=B,Ability=Ability))
 }
 
+#' Normalize Multidimensional IRT Parameters
+#'
+#' Applies a curve-preserving affine transform to a multidimensional IRT
+#' solution so that the latent ability distribution is centered and whitened,
+#' with optional orthogonal alignment to a reference loading matrix.
+#'
+#' @param B Numeric vector of item intercept/difficulty parameters.
+#' @param Ability Numeric matrix of person abilities with rows corresponding to
+#'   persons and columns to latent factors.
+#' @param A Numeric item-by-factor loading matrix.
+#' @param AbilityCorr Optional latent correlation matrix. If omitted, the
+#'   correlation is estimated from `Ability`.
+#' @param normaliseScale Numeric scalar giving the target latent SD after
+#'   whitening. Defaults to 1.
+#' @param normaliseMean Numeric scalar or vector giving the target latent mean
+#'   after normalization. Defaults to 0.
+#' @param jitter Small positive constant added for numerical stability.
+#' @param referenceA Optional reference loading matrix used for orthogonal
+#'   Procrustes alignment.
+#' @param align Character string, either `"none"` or `"orthogonal"`.
+#'
+#' @return A list containing normalized `A`, `B`, `Ability`, and associated
+#'   affine transform pieces (`center`, `chol_cov`, `inv_chol`, `AbilityCorr`,
+#'   `sign`, and `rotation`).
+#' @export
+normaliseMIRT <- function(B, Ability, A, AbilityCorr = NULL,
+  normaliseScale = 1, normaliseMean = 0, jitter = 1e-8,
+  referenceA = NULL, align = c("none", "orthogonal")){
+
+  align <- match.arg(align)
+
+  B_names <- names(B)
+  ability_dimnames <- dimnames(as.matrix(Ability))
+  A_dimnames <- dimnames(as.matrix(A))
+  Ability <- as.matrix(Ability)
+  A <- as.matrix(A)
+  B <- as.numeric(B)
+  if(nrow(A) != length(B)) stop("A must have one row per item in B.")
+  if(ncol(A) != ncol(Ability)) stop("A and Ability must have the same number of dimensions.")
+  K <- ncol(A)
+  if(K <= 1L){
+    out <- normaliseIRT(B = B, Ability = as.numeric(Ability[,1]), A = as.numeric(A[,1]),
+      normbase = "B", normaliseScale = normaliseScale, normaliseMean = normaliseMean, robust = FALSE)
+    names(out$B) <- B_names
+    return(c(out, list(
+      center = mean(Ability[,1], na.rm = TRUE),
+      chol_cov = matrix(stats::sd(Ability[,1], na.rm = TRUE), 1, 1),
+      inv_chol = matrix(1 / pmax(stats::sd(Ability[,1], na.rm = TRUE), jitter), 1, 1),
+      global_scale = stats::sd(B, na.rm = TRUE) / normaliseScale,
+      latent_shift = 0,
+      AbilityCorr = matrix(1, 1, 1),
+      sign = 1,
+      rotation = matrix(1, 1, 1)
+    )))
+  }
+
+  mu <- colMeans(Ability, na.rm = TRUE)
+  ability_sd <- apply(Ability, 2, stats::sd, na.rm = TRUE)
+  ability_sd[!is.finite(ability_sd) | ability_sd < jitter] <- 1
+
+  corr <- if(is.null(AbilityCorr)) {
+    stats::cor(Ability, use = "pairwise.complete.obs")
+  } else {
+    as.matrix(AbilityCorr)
+  }
+  corr[!is.finite(corr)] <- 0
+  corr <- (corr + t(corr)) / 2
+  diag(corr) <- 1
+
+  cov_mat <- diag(ability_sd, K) %*% corr %*% diag(ability_sd, K)
+  cov_mat <- cov_mat + diag(jitter, K)
+  chol_cov_raw <- chol(cov_mat)
+  chol_cov <- chol_cov_raw / normaliseScale
+  inv_chol <- solve(chol_cov)
+
+  Ability0 <- sweep(Ability, 2, mu, "-") %*% inv_chol
+  B0 <- as.numeric(B - A %*% mu)
+  A0 <- A %*% t(chol_cov)
+  latent_shift <- rep_len(as.numeric(normaliseMean), K)
+  Ability2 <- sweep(Ability0, 2, latent_shift, "+")
+  A1 <- A0
+  B2 <- as.numeric(B0 + A1 %*% latent_shift)
+  primary_factor <- max.col(abs(A1), ties.method = "first")
+  sign_vec <- rep(1, K)
+  for(k in seq_len(K)){
+    idx <- which(primary_factor == k & abs(A1[,k]) > jitter)
+    if(length(idx)){
+      mean_loading <- mean(A1[idx, k], na.rm = TRUE)
+      if(is.finite(mean_loading) && mean_loading < 0) sign_vec[k] <- -1
+    }
+  }
+  sign_mat <- diag(sign_vec, K)
+  Ability2 <- Ability2 %*% sign_mat
+  A1 <- A1 %*% sign_mat
+  AbilityCorr2 <- stats::cor(Ability2, use = "pairwise.complete.obs")
+
+  rotation <- diag(1, K)
+  if(!is.null(referenceA) && identical(align, "orthogonal")){
+    referenceA <- as.matrix(referenceA)
+    if(!all(dim(referenceA) == dim(A1))) stop("referenceA must have the same dimensions as A.")
+    M <- crossprod(A1, referenceA)
+    s <- svd(M)
+    rotation <- s$u %*% t(s$v)
+    A1 <- A1 %*% rotation
+    Ability2 <- Ability2 %*% rotation
+    AbilityCorr2 <- t(rotation) %*% AbilityCorr2 %*% rotation
+  }
+  dimnames(Ability2) <- ability_dimnames
+  dimnames(A1) <- A_dimnames
+  names(B2) <- B_names
+
+  list(
+    A = A1,
+    B = B2,
+    Ability = Ability2,
+    center = mu,
+    chol_cov = chol_cov,
+    inv_chol = inv_chol,
+    global_scale = 1,
+    latent_shift = latent_shift,
+    AbilityCorr = AbilityCorr2,
+    sign = sign_vec,
+    rotation = rotation
+  )
+}
+
+#' Extract Comparable MIRT Parameters
+#'
+#' Extracts a common set of multidimensional IRT parameters from either a
+#' `bigIRT` fit or a [`mirt`](https://cran.r-project.org/package=mirt) fit.
+#'
+#' @param object A fitted `bigIRT` object or a `mirt` `SingleGroupClass`
+#'   object.
+#' @param score_method Character string passed to `mirt::fscores()` when
+#'   extracting abilities from a `mirt` fit.
+#'
+#' @return A list with components `source`, `A`, `B`, `C`, `D`, `Ability`, and
+#'   `corr`.
+#' @export
+extractMIRTpars <- function(object, score_method = "EAP"){
+  if(inherits(object, "bigIRT_simIRT")){
+    ability <- as.matrix(object$Ability)
+    if(is.null(dim(ability))) ability <- matrix(as.numeric(ability), ncol = 1)
+    K <- ncol(ability)
+    factor_names <- colnames(ability)
+    if(is.null(factor_names)) factor_names <- paste0("F", seq_len(K))
+    colnames(ability) <- factor_names
+
+    if(!is.null(object$primaryScale)){
+      A <- as.matrix(object$A)
+      B <- as.numeric(object$B)
+      C <- as.numeric(object$C)
+      D <- rep(1, length(B))
+      rownames(A) <- if(!is.null(rownames(A))) rownames(A) else as.character(seq_len(nrow(A)))
+      colnames(A) <- factor_names
+    } else {
+      A_in <- as.matrix(object$A)
+      B_in <- as.matrix(object$B)
+      C_in <- as.matrix(object$C)
+      nitems_per_scale <- nrow(A_in)
+      total_items <- nitems_per_scale * K
+      A <- matrix(0, nrow = total_items, ncol = K)
+      B <- numeric(total_items)
+      C <- numeric(total_items)
+      D <- rep(1, total_items)
+      item_names <- character(total_items)
+      idx <- 1L
+      for(k in seq_len(K)){
+        rows <- idx:(idx + nitems_per_scale - 1L)
+        A[rows, k] <- A_in[, k]
+        B[rows] <- B_in[, k]
+        C[rows] <- C_in[, k]
+        item_names[rows] <- paste0("S", factor_names[k], "_I", seq_len(nitems_per_scale))
+        idx <- idx + nitems_per_scale
+      }
+      rownames(A) <- item_names
+      colnames(A) <- factor_names
+    }
+    return(list(
+      source = "simIRT",
+      A = A,
+      B = B,
+      C = C,
+      D = D,
+      Ability = ability,
+      corr = if(ncol(ability) > 1) stats::cor(ability, use = "pairwise.complete.obs") else matrix(1, 1, 1)
+    ))
+  }
+  if(is.list(object) && !is.null(object$pars) && !is.null(object$pars$A)){
+    A <- as.matrix(object$pars$A)
+    if(is.null(dim(A))) A <- matrix(as.numeric(A), ncol = 1)
+    ability <- as.matrix(object$pars$Ability)
+    if(is.null(dim(ability))) ability <- matrix(as.numeric(ability), ncol = 1)
+    return(list(
+      source = "bigIRT",
+      A = A,
+      B = as.numeric(object$pars$B),
+      C = if(!is.null(object$pars$C)) as.numeric(object$pars$C) else rep(0, length(object$pars$B)),
+      D = if(!is.null(object$pars$D)) as.numeric(object$pars$D) else rep(1, length(object$pars$B)),
+      Ability = ability,
+      corr = if(!is.null(object$abilityPrior$corr)) as.matrix(object$abilityPrior$corr) else if(ncol(ability) > 1) stats::cor(ability) else matrix(1, 1, 1)
+    ))
+  }
+  if(requireNamespace("mirt", quietly = TRUE) && inherits(object, "SingleGroupClass")){
+    coef_s <- mirt::coef(object, simplify = TRUE)
+    items <- as.data.frame(coef_s$items)
+    a_cols <- grep("^a[0-9]+$", names(items), value = TRUE)
+    d_col <- if("d" %in% names(items)) "d" else grep("^d", names(items), value = TRUE)[1]
+    if(length(a_cols) == 0L || is.na(d_col)) stop("Could not extract mirt item parameters.")
+    return(list(
+      source = "mirt",
+      A = as.matrix(items[, a_cols, drop = FALSE]),
+      B = -as.numeric(items[[d_col]]),
+      C = if("g" %in% names(items)) as.numeric(items$g) else rep(0, nrow(items)),
+      D = if("u" %in% names(items)) as.numeric(items$u) else rep(1, nrow(items)),
+      Ability = as.matrix(mirt::fscores(object, method = score_method, full.scores = TRUE)),
+      corr = cov2cor(coef_s$cov)
+    ))
+  }
+  stop("Unsupported object type for extractMIRTpars().")
+}
+
+bigIRT_comparison_state_normalised <- function(state, referenceA = NULL,
+  normaliseScale = 1, normaliseMean = 0){
+  norm <- normaliseMIRT(
+    B = state$B,
+    Ability = state$Ability,
+    A = state$A,
+    AbilityCorr = state$corr,
+    normaliseScale = normaliseScale,
+    normaliseMean = normaliseMean,
+    referenceA = referenceA,
+    align = if(is.null(referenceA)) "none" else "orthogonal"
+  )
+  utils::modifyList(state, list(
+    A = norm$A,
+    B = norm$B,
+    Ability = norm$Ability,
+    corr = norm$AbilityCorr,
+    transform = norm
+  ))
+}
+
+bigIRT_comparison_standardize_names <- function(state, item_names, factor_names, person_names){
+  state$A <- as.matrix(state$A)
+  state$Ability <- as.matrix(state$Ability)
+  rownames(state$A) <- item_names
+  colnames(state$A) <- factor_names
+  rownames(state$Ability) <- person_names
+  colnames(state$Ability) <- factor_names
+  state$corr <- as.matrix(state$corr)
+  rownames(state$corr) <- factor_names
+  colnames(state$corr) <- factor_names
+  state
+}
+
+bigIRT_comparison_itempars_dt <- function(state, source, form){
+  A <- as.matrix(state$A)
+  item_names <- rownames(A)
+  if(is.null(item_names)) item_names <- as.character(seq_len(nrow(A)))
+  factor_names <- colnames(A)
+  if(is.null(factor_names)) factor_names <- paste0("F", seq_len(ncol(A)))
+  colnames(A) <- factor_names
+  rownames(A) <- item_names
+
+  dt_A <- data.table::as.data.table(as.table(A))
+  data.table::setnames(dt_A, c("item", "factor", "value"))
+  dt_A[, parameter := "A"]
+
+  dt_B <- data.table::data.table(
+    item = item_names,
+    factor = NA_character_,
+    parameter = "B",
+    value = as.numeric(state$B)
+  )
+  dt_C <- data.table::data.table(
+    item = item_names,
+    factor = NA_character_,
+    parameter = "C",
+    value = as.numeric(state$C)
+  )
+  dt_D <- data.table::data.table(
+    item = item_names,
+    factor = NA_character_,
+    parameter = "D",
+    value = as.numeric(state$D)
+  )
+
+  out <- data.table::rbindlist(list(dt_A, dt_B, dt_C, dt_D), fill = TRUE, use.names = TRUE)
+  out[, `:=`(source = source, form = form)]
+  data.table::setcolorder(out, c("source", "form", "parameter", "item", "factor", "value"))
+  out[]
+}
+
+bigIRT_comparison_personpars_dt <- function(state, source, form){
+  Ability <- as.matrix(state$Ability)
+  factor_names <- colnames(Ability)
+  if(is.null(factor_names)) factor_names <- paste0("F", seq_len(ncol(Ability)))
+  person_names <- rownames(Ability)
+  if(is.null(person_names)) person_names <- as.character(seq_len(nrow(Ability)))
+  colnames(Ability) <- factor_names
+  rownames(Ability) <- person_names
+
+  out <- data.table::as.data.table(as.table(Ability))
+  data.table::setnames(out, c("person", "factor", "value"))
+  out[, `:=`(source = source, form = form)]
+  data.table::setcolorder(out, c("source", "form", "person", "factor", "value"))
+  out[]
+}
+
+bigIRT_comparison_matrix_dt <- function(mat, source, form, value_name = "value"){
+  mat <- as.matrix(mat)
+  out <- data.table::as.data.table(as.table(mat))
+  data.table::setnames(out, c("row", "col", value_name))
+  out[, `:=`(source = source, form = form)]
+  data.table::setcolorder(out, c("source", "form", "row", "col", value_name))
+  out[]
+}
+
+bigIRT_comparison_attach_reference <- function(dt, id_cols, ref_name){
+  ref <- dt[source == ref_name, c(id_cols, "value"), with = FALSE]
+  data.table::setnames(ref, "value", "referenceVal")
+  out <- merge(dt, ref, by = id_cols, all.x = TRUE, sort = FALSE)
+  out[]
+}
+
+#' Compare IRT Model Parameterizations
+#'
+#' Coerces simulated truth, `bigIRT` fits, and `mirt` fits onto a common raw
+#' and normalized parameter representation for direct comparison.
+#'
+#' @param models A named or unnamed list containing up to one `simIRT` object
+#'   and any number of fitted `bigIRT` and/or `mirt` models.
+#' @param score_method Character string passed to `mirt::fscores()` when
+#'   extracting abilities from `mirt` fits.
+#' @param normaliseScale Numeric scalar passed to [normaliseMIRT()].
+#' @param normaliseMean Numeric scalar or vector passed to [normaliseMIRT()].
+#'
+#' @return A list with elements `itempars`, `personpars`, `loading_matrix`,
+#'   `ability_corr_matrix`, `raw`, `normalized`, and `reference_model`.
+#'   Each table is in long format with a `source` column, a source-specific
+#'   `value` column, and a `referenceVal` column holding the aligned value from
+#'   the reference model.
+#' @export
+compareIRTmodels <- function(models, score_method = "EAP", normaliseScale = 1,
+  normaliseMean = 0){
+  if(!is.list(models) || length(models) == 0L) stop("models must be a non-empty list.")
+  if(is.null(names(models))) names(models) <- rep("", length(models))
+  empty_names <- names(models) == ""
+  names(models)[empty_names] <- paste0("model", which(empty_names))
+
+  sim_idx <- which(vapply(models, inherits, logical(1), what = "bigIRT_simIRT"))
+  if(length(sim_idx) > 1L) stop("Provide at most one simIRT object in models.")
+
+  raw_states <- lapply(models, extractMIRTpars, score_method = score_method)
+  names(raw_states) <- names(models)
+  ref_idx <- if(length(sim_idx) == 1L) sim_idx[1L] else 1L
+
+  ref_state <- raw_states[[ref_idx]]
+  ref_A <- as.matrix(ref_state$A)
+  ref_Ability <- as.matrix(ref_state$Ability)
+  item_names <- rownames(ref_A)
+  if(is.null(item_names)) item_names <- as.character(seq_len(nrow(ref_A)))
+  factor_names <- colnames(ref_A)
+  if(is.null(factor_names)) factor_names <- paste0("F", seq_len(ncol(ref_A)))
+  person_names <- rownames(ref_Ability)
+  if(is.null(person_names)) person_names <- as.character(seq_len(nrow(ref_Ability)))
+
+  raw_states <- lapply(raw_states, bigIRT_comparison_standardize_names,
+    item_names = item_names, factor_names = factor_names, person_names = person_names)
+
+  normalized_states <- vector("list", length(raw_states))
+  names(normalized_states) <- names(raw_states)
+  normalized_states[[ref_idx]] <- bigIRT_comparison_state_normalised(
+    raw_states[[ref_idx]],
+    referenceA = NULL,
+    normaliseScale = normaliseScale,
+    normaliseMean = normaliseMean
+  )
+  ref_A <- normalized_states[[ref_idx]]$A
+  for(i in seq_along(raw_states)){
+    if(i == ref_idx) next
+    normalized_states[[i]] <- bigIRT_comparison_state_normalised(
+      raw_states[[i]],
+      referenceA = ref_A,
+      normaliseScale = normaliseScale,
+      normaliseMean = normaliseMean
+    )
+  }
+
+  itempars <- data.table::rbindlist(c(
+    Map(bigIRT_comparison_itempars_dt, raw_states, names(raw_states), MoreArgs = list(form = "raw")),
+    Map(bigIRT_comparison_itempars_dt, normalized_states, names(normalized_states), MoreArgs = list(form = "normalized"))
+  ), use.names = TRUE, fill = TRUE)
+  itempars <- bigIRT_comparison_attach_reference(
+    itempars,
+    c("form", "parameter", "item", "factor"),
+    ref_name = names(models)[ref_idx]
+  )
+  data.table::setcolorder(itempars, c("source", "form", "parameter", "item", "factor", "value", "referenceVal"))
+
+  personpars <- data.table::rbindlist(c(
+    Map(bigIRT_comparison_personpars_dt, raw_states, names(raw_states), MoreArgs = list(form = "raw")),
+    Map(bigIRT_comparison_personpars_dt, normalized_states, names(normalized_states), MoreArgs = list(form = "normalized"))
+  ), use.names = TRUE, fill = TRUE)
+  personpars <- bigIRT_comparison_attach_reference(
+    personpars,
+    c("form", "person", "factor"),
+    ref_name = names(models)[ref_idx]
+  )
+  data.table::setcolorder(personpars, c("source", "form", "person", "factor", "value", "referenceVal"))
+
+  loading_matrix <- data.table::rbindlist(c(
+    Map(function(state, model, form){
+      bigIRT_comparison_matrix_dt(state$A, source = model, form = form, value_name = "value")
+    }, raw_states, names(raw_states), MoreArgs = list(form = "raw")),
+    Map(function(state, model, form){
+      bigIRT_comparison_matrix_dt(state$A, source = model, form = form, value_name = "value")
+    }, normalized_states, names(normalized_states), MoreArgs = list(form = "normalized"))
+  ), use.names = TRUE, fill = TRUE)
+  loading_matrix <- bigIRT_comparison_attach_reference(
+    loading_matrix,
+    c("form", "row", "col"),
+    ref_name = names(models)[ref_idx]
+  )
+  data.table::setcolorder(loading_matrix, c("source", "form", "row", "col", "value", "referenceVal"))
+
+  ability_corr_matrix <- data.table::rbindlist(c(
+    Map(function(state, model, form){
+      est <- bigIRT_comparison_matrix_dt(state$corr, source = model, form = form, value_name = "value")
+      est[, corr_type := "estimated"]
+      emp_corr <- if(ncol(as.matrix(state$Ability)) > 1) {
+        stats::cor(as.matrix(state$Ability), use = "pairwise.complete.obs")
+      } else {
+        matrix(1, 1, 1)
+      }
+      emp <- bigIRT_comparison_matrix_dt(emp_corr, source = model, form = form, value_name = "value")
+      emp[, corr_type := "empirical"]
+      data.table::rbindlist(list(est, emp), use.names = TRUE, fill = TRUE)
+    }, raw_states, names(raw_states), MoreArgs = list(form = "raw")),
+    Map(function(state, model, form){
+      est <- bigIRT_comparison_matrix_dt(state$corr, source = model, form = form, value_name = "value")
+      est[, corr_type := "estimated"]
+      emp_corr <- if(ncol(as.matrix(state$Ability)) > 1) {
+        stats::cor(as.matrix(state$Ability), use = "pairwise.complete.obs")
+      } else {
+        matrix(1, 1, 1)
+      }
+      emp <- bigIRT_comparison_matrix_dt(emp_corr, source = model, form = form, value_name = "value")
+      emp[, corr_type := "empirical"]
+      data.table::rbindlist(list(est, emp), use.names = TRUE, fill = TRUE)
+    }, normalized_states, names(normalized_states), MoreArgs = list(form = "normalized"))
+  ), use.names = TRUE, fill = TRUE)
+  ability_corr_matrix <- bigIRT_comparison_attach_reference(
+    ability_corr_matrix,
+    c("form", "corr_type", "row", "col"),
+    ref_name = names(models)[ref_idx]
+  )
+  data.table::setcolorder(ability_corr_matrix, c("source", "form", "corr_type", "row", "col", "value", "referenceVal"))
+
+  list(
+    itempars = itempars,
+    personpars = personpars,
+    loading_matrix = loading_matrix,
+    ability_corr_matrix = ability_corr_matrix,
+    # raw = raw_states,
+    # normalized = normalized_states,
+    reference_model = names(models)[ref_idx]
+  )
+}
+
 
 
 #' Drop subjects and items with all perfect scores
@@ -1368,6 +1839,10 @@ plotLaplaceDiagnostics <- function(fit, logGrad = TRUE, showTiming = TRUE){
 #'   recomputes person modes inside each objective evaluation and uses an
 #'   approximate gradient that ignores derivatives through those inner solves.
 #'   Default is \code{"none"}.
+#' @param estimateAbilityCorr Logical. If \code{TRUE}, estimate the latent
+#'   ability correlation matrix directly inside \code{marginalApprox =
+#'   "laplace_direct"} while keeping \code{AbilitySD} fixed. Ignored for other
+#'   backends and for unidimensional fits. Default is FALSE.
 #' @param laplaceOuterIter Integer. Maximum number of outer iterations for
 #'   \code{marginalApprox="laplace_em"}. This is a fallback limit rather than
 #'   the primary convergence criterion. Default is 50.
@@ -1476,6 +1951,8 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   integrateEachAbility=FALSE, integrateEachAbilityFixedSE=FALSE,
   NintegratePoints=5,
   marginalApprox=c("none","sigma_em","laplace_em","laplace_direct"),
+  estimateAbilityCorr=FALSE,
+  laplaceCorrParam=c("normalized_chol","stan_corsqrt"),
   laplaceOuterIter=50,laplaceTol=1e-3,laplaceGradTol=1e-2,laplaceStabilityIter=5L,laplacePersonTol=1e-4,
   laplaceKeepCovariance=FALSE,laplaceDiagnostics=FALSE,laplacePlot=FALSE,laplacePlotEvery=1L,
   sampledAbilityStep=FALSE,sampledAbilityOuterIter=50,sampledAbilityJitter=1e-6,
@@ -1491,10 +1968,14 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   sdat <-list() #initialize standata object
   basetol=tol
   marginalApprox <- match.arg(marginalApprox)
+  laplaceCorrParam <- match.arg(laplaceCorrParam)
   if(isTRUE(sampledAbilityStep) && identical(marginalApprox, "none")){
     marginalApprox <- "sigma_em"
   }
   sampledAbilityStep <- identical(marginalApprox, "sigma_em")
+  if(isTRUE(estimateAbilityCorr) && !identical(marginalApprox, "laplace_direct")){
+    warning("estimateAbilityCorr is currently only active for marginalApprox = 'laplace_direct'.")
+  }
 
   itemPreds <- unique(c(AitemPreds,BitemPreds,CitemPreds,DitemPreds))
 
@@ -1943,13 +2424,23 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
       if(laplaceVerbose >= level) message(...)
     }
     wall_time_sec <- function() as.numeric(proc.time()[["elapsed"]])
+    estimateAbilityCorrRequested <- isTRUE(estimateAbilityCorr)
+    estimateAbilityCorr <- estimateAbilityCorrRequested && sdat$Nscales > 1L
+    if(isTRUE(estimateAbilityCorr) && !isTRUE(laplaceKeepCovariance)){
+      laplaceKeepCovariance <- TRUE
+    }
+    if(isTRUE(estimateAbilityCorrRequested) && sdat$Nscales <= 1L){
+      warning("estimateAbilityCorr ignored for unidimensional fits.")
+      estimateAbilityCorr <- FALSE
+    }
 
     if(sdat$NpersonPreds > 0){
       warning("laplace_direct currently keeps Abilitybeta fixed during direct Laplace optimization when person predictors are present.")
     }
 
-    state <- bigIRT_laplace_initial_state(sdat, eps = sampledAbilityJitter)
-    priorPrecision <- bigIRT_laplace_prior_precision_array(sdat, jitter = sampledAbilityJitter)
+    state <- bigIRT_laplace_initial_state(sdat, eps = sampledAbilityJitter, corr_paramization = laplaceCorrParam)
+    priorInfo <- bigIRT_laplace_prior_mats(sdat, jitter = sampledAbilityJitter)
+    priorPrecision <- priorInfo$precision_array
     laplace_trace(1, sprintf(
       "Direct Laplace: starting prior-anchored fit with %d persons, %d items, %d dimensions, max_iter=%d.",
       sdat$Nsubs, sdat$Nitems, sdat$Nscales, laplaceOuterIter
@@ -1964,10 +2455,13 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
       jitter = sampledAbilityJitter,
       person_tol = laplacePersonTol,
       keep_covariance = TRUE,
-      cores = cores
+      cores = cores,
+      estimateAbilityCorr = estimateAbilityCorr,
+      corr_paramization = laplaceCorrParam
     )
     directSec <- wall_time_sec() - t_direct
     state <- directFit$state
+    sdat$AbilityCorr <- if(!is.null(state$AbilityCorr)) state$AbilityCorr else sdat$AbilityCorr
     finalPosterior <- directFit$eval$posterior
     state$AbilityBase <- finalPosterior$theta_mode
 
@@ -2004,10 +2498,17 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
       direct_objective = TRUE,
       approximate_gradient = TRUE,
       gradient_type = "frozen_mode_laplace_item_gradient",
+      estimated_corr = estimateAbilityCorr,
       last_item_grad_norm = directFit$optim$masked_grad_norm,
       last_outer_seconds = directSec,
       optimizer_terminate = direct_terminate,
       optimizer_terminate_value = if(!is.null(directFit$optim$terminate$val)) directFit$optim$terminate$val else NA_real_
+    )
+    fit$abilityPrior <- list(
+      sd = as.numeric(sdat$AbilitySD),
+      corr = as.matrix(if(!is.null(state$AbilityCorr)) state$AbilityCorr else sdat$AbilityCorr),
+      precision = as.matrix(directFit$eval$prior_mats$precision),
+      estimated_corr = estimateAbilityCorr
     )
     if(isTRUE(laplaceDiagnostics)){
       fit$laplaceDiagnostics <- data.table::data.table(
@@ -2645,25 +3146,82 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   }
 
   if(normalise){   #normalise pars
-    for(i in 1:ncol(fit$pars$Ability)){
-      selector <- rownames(fit$pars$B) %in% itemSetup$original[itemSetup$scale %in% i]
-      a_for_scale <- if(!is.null(dim(fit$pars$A)) && length(dim(fit$pars$A)) == 2){
-        fit$pars$A[selector,i]
-      } else {
-        fit$pars$A[selector]
+    if(!is.null(dim(fit$pars$A)) && length(dim(fit$pars$A)) == 2 && ncol(fit$pars$A) > 1){
+      abilityCorrNorm <- NULL
+      if(!is.null(fit$abilityPrior$corr)) abilityCorrNorm <- fit$abilityPrior$corr
+      normpars <- normaliseMIRT(
+        B = fit$pars$B,
+        Ability = fit$pars$Ability,
+        A = fit$pars$A,
+        AbilityCorr = abilityCorrNorm,
+        normaliseScale = normaliseScale,
+        normaliseMean = normaliseMean
+      )
+      fit$pars$Ability <- normpars$Ability
+      fit$pars$B <- normpars$B
+      fit$pars$A <- normpars$A
+
+      if(!is.null(fit$personPosterior$mode)){
+        fit$personPosterior$mode <- sweep(fit$personPosterior$mode, 2, normpars$center, "-") %*%
+          normpars$inv_chol / normpars$global_scale
+        fit$personPosterior$mode <- sweep(fit$personPosterior$mode, 2, normpars$latent_shift, "-")
       }
+      if(!is.null(fit$personPosterior$covariance)){
+        K <- ncol(fit$pars$Ability)
+        U <- normpars$chol_cov
+        Uinv <- normpars$inv_chol
+        scale2 <- normpars$global_scale^2
+        for(ii in seq_len(dim(fit$personPosterior$covariance)[3])){
+          cov_old <- fit$personPosterior$covariance[,,ii]
+          fit$personPosterior$covariance[,,ii] <- t(Uinv) %*% cov_old %*% Uinv / scale2
+        }
+      }
+      if(!is.null(fit$personPosterior$precision)){
+        U <- normpars$chol_cov
+        scale2 <- normpars$global_scale^2
+        for(ii in seq_len(dim(fit$personPosterior$precision)[3])){
+          prec_old <- fit$personPosterior$precision[,,ii]
+          fit$personPosterior$precision[,,ii] <- scale2 * U %*% prec_old %*% t(U)
+        }
+      }
+      if(!is.null(fit$personPosterior$precision_chol) && !is.null(fit$personPosterior$precision)){
+        for(ii in seq_len(dim(fit$personPosterior$precision)[3])){
+          llt <- chol(fit$personPosterior$precision[,,ii])
+          fit$personPosterior$precision_chol[,,ii] <- t(llt)
+          fit$personPosterior$logdet_precision[ii] <- 2 * sum(log(diag(llt)))
+        }
+      }
+      if(!is.null(fit$abilityPrior)){
+        fit$abilityPrior$sd <- apply(fit$pars$Ability, 2, stats::sd, na.rm = TRUE)
+        fit$abilityPrior$corr <- stats::cor(fit$pars$Ability, use = "pairwise.complete.obs")
+        fit$abilityPrior$precision <- solve(
+          diag(fit$abilityPrior$sd, ncol(fit$pars$Ability)) %*%
+            fit$abilityPrior$corr %*%
+            diag(fit$abilityPrior$sd, ncol(fit$pars$Ability)) +
+            diag(1e-8, ncol(fit$pars$Ability))
+        )
+      }
+    } else {
+      for(i in 1:ncol(fit$pars$Ability)){
+        selector <- rownames(fit$pars$B) %in% itemSetup$original[itemSetup$scale %in% i]
+        a_for_scale <- if(!is.null(dim(fit$pars$A)) && length(dim(fit$pars$A)) == 2){
+          fit$pars$A[selector,i]
+        } else {
+          fit$pars$A[selector]
+        }
 
-      normpars <- normaliseIRT(B = fit$pars$B[selector],
-        Ability = fit$pars$Ability[,i],
-        A=a_for_scale,normaliseScale = normaliseScale, normaliseMean = normaliseMean)
+        normpars <- normaliseIRT(B = fit$pars$B[selector],
+          Ability = fit$pars$Ability[,i],
+          A=a_for_scale,normaliseScale = normaliseScale, normaliseMean = normaliseMean)
 
-      fit$pars$Ability[,i] <- normpars$Ability
+        fit$pars$Ability[,i] <- normpars$Ability
 
-      fit$pars$B[selector]  <- normpars$B
-      if(!is.null(dim(fit$pars$A)) && length(dim(fit$pars$A)) == 2){
-        fit$pars$A[selector,i] <-  normpars$A
-      } else {
-        fit$pars$A[selector] <-  normpars$A
+        fit$pars$B[selector]  <- normpars$B
+        if(!is.null(dim(fit$pars$A)) && length(dim(fit$pars$A)) == 2){
+          fit$pars$A[selector,i] <-  normpars$A
+        } else {
+          fit$pars$A[selector] <-  normpars$A
+        }
       }
     }
   }
@@ -2673,7 +3231,17 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   } else {
     fit$pars$A
   }
-  fit$itemPars <- data.frame(item=rownames(fit$pars$B),A=itemA,B=fit$pars$B,C=fit$pars$C,D=fit$pars$D)
+  item_labels <- rownames(fit$pars$B)
+  if(is.null(item_labels) || length(item_labels) == 0L){
+    item_labels <- rownames(fit$pars$A)
+  }
+  if(is.null(item_labels) || length(item_labels) == 0L){
+    item_labels <- names(fit$pars$B)
+  }
+  if(is.null(item_labels) || length(item_labels) == 0L){
+    item_labels <- as.character(unique(itemSetup$original))
+  }
+  fit$itemPars <- data.frame(item=item_labels,A=itemA,B=fit$pars$B,C=fit$pars$C,D=fit$pars$D)
   colnames(fit$itemPars)[1] <- item
   if(!is.null(dim(fit$pars$A)) && length(dim(fit$pars$A)) == 2 && ncol(fit$pars$A) > 1){
     loadingCols <- as.data.frame(fit$pars$A)

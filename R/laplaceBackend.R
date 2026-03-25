@@ -162,8 +162,121 @@ bigIRT_laplace_prior_precision_array <- function(sdat, jitter = 1e-8){
   bigIRT_prior_precision_array(priorPrec, Nsubs = sdat$Nsubs, K = sdat$Nscales)
 }
 
+## Build a dense prior covariance/precision pair from fixed marginal SDs and a
+## candidate correlation matrix. Inputs: standata plus optional corr override.
+## Returns the subject-replicated precision array and the shared KxK matrices;
+## mutates nothing.
+bigIRT_laplace_prior_mats <- function(sdat, AbilityCorr = sdat$AbilityCorr, jitter = 1e-8){
+  priorSD <- pmax(as.numeric(sdat$AbilitySD), jitter)
+  scaleMat <- diag(priorSD, length(priorSD))
+  corr <- as.matrix(AbilityCorr)
+  cov <- scaleMat %*% corr %*% scaleMat
+  prec <- solve(cov + diag(jitter, nrow(cov)))
+  list(
+    corr = corr,
+    covariance = cov,
+    precision = prec,
+    precision_array = bigIRT_prior_precision_array(prec, Nsubs = sdat$Nsubs, K = sdat$Nscales)
+  )
+}
+
+bigIRT_laplace_corr_grad_cpp_impl <- function(theta_mode, covariance, precision,
+  prior_mean, ability_sd, corr_par, corr_paramization = 0L, jitter = 1e-8){
+  .Call(
+    `_bigIRT_laplace_corr_grad_cpp_impl`,
+    as.matrix(theta_mode),
+    covariance,
+    precision,
+    as.numeric(prior_mean),
+    as.numeric(ability_sd),
+    as.numeric(corr_par),
+    as.integer(corr_paramization),
+    as.numeric(jitter)
+  )
+}
+
 bigIRT_laplace_clamp <- function(x, lo = 1e-6, hi = 1 - 1e-6){
   pmin(pmax(x, lo), hi)
+}
+
+bigIRT_laplace_corr_param_code <- function(paramization = c("normalized_chol", "stan_corsqrt")){
+  switch(match.arg(paramization), normalized_chol = 0L, stan_corsqrt = 1L)
+}
+
+## Convert an unconstrained packed lower-triangle vector into a valid SPD
+## correlation matrix using a normalized Cholesky factor with unit diagonal.
+## Inputs: packed free parameters and target dimension K. Returns a KxK
+## correlation matrix; mutates nothing.
+bigIRT_laplace_corr_from_packed <- function(par, K,
+  paramization = c("normalized_chol", "stan_corsqrt")){
+  paramization <- match.arg(paramization)
+  if(K <= 1L) return(diag(1, K))
+  if(identical(paramization, "stan_corsqrt")){
+    raw <- tanh(as.numeric(par))
+    L <- diag(0, K)
+    L[1, 1] <- 1
+    idx <- 1L
+    for(i in 2:K){
+      row_raw <- raw[idx:(idx + i - 2L)]
+      prod_term <- 1
+      for(j in 1:(i - 1L)){
+        if(j > 1L) prod_term <- prod_term * sqrt(pmax(1 - row_raw[j - 1L]^2, 1e-12))
+        L[i, j] <- row_raw[j] * prod_term
+      }
+      L[i, i] <- prod(sqrt(pmax(1 - row_raw^2, 1e-12)))
+      idx <- idx + i - 1L
+    }
+    return(tcrossprod(L))
+  }
+  L <- diag(1, K)
+  idx <- 1L
+  for(i in 2:K){
+    for(j in 1:(i - 1L)){
+      L[i, j] <- par[idx]
+      idx <- idx + 1L
+    }
+  }
+  S <- tcrossprod(L)
+  s <- sqrt(pmax(diag(S), 1e-12))
+  sweep(sweep(S, 1, s, "/"), 2, s, "/")
+}
+
+## Pack the free lower-triangle of a correlation-generating Cholesky factor.
+## Inputs: a KxK correlation matrix. Returns the unconstrained vector used by
+## `bigIRT_laplace_corr_from_packed()`.
+bigIRT_laplace_pack_corr <- function(corr,
+  paramization = c("normalized_chol", "stan_corsqrt")){
+  paramization <- match.arg(paramization)
+  K <- nrow(corr)
+  if(K <= 1L) return(numeric())
+  L <- t(chol(corr))
+  if(identical(paramization, "stan_corsqrt")){
+    out <- numeric(K * (K - 1L) / 2L)
+    idx <- 1L
+    for(i in 2:K){
+      prefix_prod <- 1
+      for(j in 1:(i - 1L)){
+        raw_ij <- L[i, j] / pmax(prefix_prod, 1e-12)
+        raw_ij <- bigIRT_laplace_clamp(raw_ij, lo = -0.999999, hi = 0.999999)
+        out[idx] <- atanh(raw_ij)
+        prefix_prod <- prefix_prod * sqrt(pmax(1 - raw_ij^2, 1e-12))
+        idx <- idx + 1L
+      }
+    }
+    return(out)
+  }
+  for(i in seq_len(K)){
+    L[i,] <- L[i,] / pmax(L[i, i], 1e-12)
+  }
+  out <- numeric(K * (K - 1L) / 2L)
+  idx <- 1L
+  for(i in 2:K){
+    for(j in 1:(i - 1L)){
+      out[idx] <- L[i, j]
+      idx <- idx + 1L
+    }
+  }
+  out
 }
 
 bigIRT_laplace_subject_grain <- function(nsubs, cores){
@@ -176,7 +289,9 @@ bigIRT_laplace_subject_grain <- function(nsubs, cores){
 ## Inputs: standata only; no JML fit required.
 ## Returns: a complete state list matching the Laplace backend contract;
 ## mutates nothing.
-bigIRT_laplace_initial_state <- function(sdat, eps = 1e-6){
+bigIRT_laplace_initial_state <- function(sdat, eps = 1e-6,
+  corr_paramization = c("normalized_chol", "stan_corsqrt")){
+  corr_paramization <- match.arg(corr_paramization)
   abilityBase <- matrix(as.numeric(sdat$Abilitydata), nrow = sdat$Nsubs, ncol = sdat$Nscales)
   abilityMean <- as.numeric(sdat$AbilityMeandat)
   if(length(abilityMean) == 0) abilityMean <- rep(0, sdat$Nscales)
@@ -214,6 +329,9 @@ bigIRT_laplace_initial_state <- function(sdat, eps = 1e-6){
   state <- list(
     AbilityBase = abilityBase,
     AbilityMean = abilityMean,
+    AbilityCorr = as.matrix(sdat$AbilityCorr),
+    laplaceCorrParam = corr_paramization,
+    AbilityCorrPars = if(sdat$Nscales > 1L) bigIRT_laplace_pack_corr(as.matrix(sdat$AbilityCorr), paramization = corr_paramization) else numeric(),
     Abilitybeta = matrix(0, nrow = sdat$Nscales, ncol = sdat$NpersonPreds),
     Bpars = rep(0, freeB),
     BMean = if(sdat$fixedBMean == 0L) as.numeric(sdat$BMeandat)[1] else as.numeric(sdat$BMeandat)[1],
@@ -634,6 +752,77 @@ bigIRT_laplace_unpack_item_state <- function(par, state, sdat, layout = bigIRT_l
   out
 }
 
+## Extend the packed item/global layout with optional AbilityCorr parameters
+## for the direct Laplace backend. Inputs: standata and a boolean toggle.
+## Returns item-layout indices plus `corr` when enabled; mutates nothing.
+bigIRT_laplace_direct_layout <- function(sdat, estimateAbilityCorr = FALSE){
+  item_layout <- bigIRT_laplace_item_layout(sdat)
+  cursor <- max(unlist(item_layout), 0L) + 1L
+  take <- function(n){
+    if(n <= 0L) return(integer())
+    idx <- seq.int(cursor, length.out = n)
+    cursor <<- cursor + n
+    idx
+  }
+  n_corr <- if(isTRUE(estimateAbilityCorr) && sdat$Nscales > 1L) sdat$Nscales * (sdat$Nscales - 1L) / 2L else 0L
+  item_layout$corr <- take(n_corr)
+  item_layout
+}
+
+## Pack the direct Laplace parameter vector, optionally including the latent
+## correlation parameters. Inputs: current state, standata, and a direct layout.
+bigIRT_laplace_pack_direct_state <- function(state, sdat,
+  layout = bigIRT_laplace_direct_layout(sdat, estimateAbilityCorr = FALSE)){
+  out <- numeric(max(unlist(layout), 0L))
+  item_slots <- layout[setdiff(names(layout), "corr")]
+  if(length(unlist(item_slots))){
+    out[seq_len(max(unlist(item_slots), 0L))] <- bigIRT_laplace_pack_item_state(state, sdat, layout = item_slots)
+  }
+  if(length(layout$corr)){
+    out[layout$corr] <- as.numeric(state$AbilityCorrPars)
+  }
+  out
+}
+
+## Unpack the direct Laplace parameter vector, including latent correlation
+## parameters when present. Returns an updated state list; mutates nothing.
+bigIRT_laplace_unpack_direct_state <- function(par, state, sdat,
+  layout = bigIRT_laplace_direct_layout(sdat, estimateAbilityCorr = FALSE),
+  corr_paramization = c("normalized_chol", "stan_corsqrt")){
+  corr_paramization <- match.arg(corr_paramization)
+  out <- state
+  item_slots <- layout[setdiff(names(layout), "corr")]
+  out <- bigIRT_laplace_unpack_item_state(par, out, sdat, layout = item_slots)
+  if(length(layout$corr)){
+    out$AbilityCorrPars <- as.numeric(par[layout$corr])
+    out$AbilityCorr <- bigIRT_laplace_corr_from_packed(out$AbilityCorrPars, sdat$Nscales, paramization = corr_paramization)
+  } else if(is.null(out$AbilityCorr)) {
+    out$AbilityCorr <- as.matrix(sdat$AbilityCorr)
+  }
+  out
+}
+
+## Approximate the direct Laplace gradient with respect to the packed
+## correlation parameters while holding the resolved person summaries fixed.
+## Inputs: current state, standata, direct-layout, and resolved posterior.
+## Returns the gradient contribution for `layout$corr`; mutates nothing.
+bigIRT_laplace_corr_grad <- function(state, sdat, layout, posterior, prior_precision_matrix, jitter = 1e-8){
+  out <- numeric(length(layout$corr))
+  if(length(layout$corr) == 0L) return(out)
+  if(is.null(posterior$covariance)) stop("laplace_direct correlation gradients require posterior covariances.")
+  corr_paramization <- if(!is.null(state$laplaceCorrParam)) state$laplaceCorrParam else "normalized_chol"
+  as.numeric(bigIRT_laplace_corr_grad_cpp_impl(
+    theta_mode = posterior$theta_mode,
+    covariance = posterior$covariance,
+    precision = posterior$precision,
+    prior_mean = state$AbilityMean,
+    ability_sd = sdat$AbilitySD,
+    corr_par = state$AbilityCorrPars,
+    corr_paramization = bigIRT_laplace_corr_param_code(corr_paramization),
+    jitter = jitter
+  ))
+}
+
 bigIRT_laplace_item_prior <- function(state, sdat){
   if(!isTRUE(as.logical(sdat$dopriors))) return(list(value = 0, grad = bigIRT_laplace_pack_item_state(state, sdat) * 0))
   layout <- bigIRT_laplace_item_layout(sdat)
@@ -827,10 +1016,31 @@ bigIRT_laplace_person_step_block_cpp_impl <- function(id, score, theta_init,
 bigIRT_laplace_direct_objective <- function(par, state, sdat, prior_precision,
   theta_init = state$AbilityBase, jitter = 1e-6, max_attempts = 8L,
   max_iter = 50L, tol = 1e-4, keep_covariance = FALSE, context = NULL){
-  if(is.null(context)) context <- bigIRT_laplace_item_context(sdat)
-  curState <- bigIRT_laplace_unpack_item_state(par, state, sdat, layout = context$layout)
+  estimateAbilityCorr <- isTRUE(context$estimateAbilityCorr)
+  if(is.null(context)) {
+    direct_layout <- bigIRT_laplace_direct_layout(sdat, estimateAbilityCorr = estimateAbilityCorr)
+    item_layout <- direct_layout[setdiff(names(direct_layout), "corr")]
+    context <- bigIRT_laplace_item_context(sdat, layout = item_layout)
+    context$direct_layout <- direct_layout
+    context$estimateAbilityCorr <- estimateAbilityCorr
+    context$corr_paramization <- if(!is.null(state$laplaceCorrParam)) state$laplaceCorrParam else "normalized_chol"
+  }
+  curState <- bigIRT_laplace_unpack_direct_state(
+    par, state, sdat,
+    layout = context$direct_layout,
+    corr_paramization = context$corr_paramization
+  )
   row_context <- context$row_context
   prior_mean <- matrix(rep(curState$AbilityMean, each = sdat$Nsubs), nrow = sdat$Nsubs)
+  prior_mats <- if(isTRUE(context$estimateAbilityCorr)) {
+    bigIRT_laplace_prior_mats(sdat, AbilityCorr = curState$AbilityCorr, jitter = jitter)
+  } else {
+    list(
+      corr = as.matrix(sdat$AbilityCorr),
+      precision = if(length(dim(prior_precision)) == 3L) prior_precision[,,1] else prior_precision,
+      precision_array = prior_precision
+    )
+  }
   posterior <- bigIRT_laplace_person_step_block_cpp_impl(
     id = sdat$id[context$train_rows],
     score = sdat$score[context$train_rows],
@@ -864,7 +1074,7 @@ bigIRT_laplace_direct_objective <- function(par, state, sdat, prior_precision,
     logitDpars = curState$logitDpars,
     logitDbeta = curState$logitDbeta,
     prior_mean = prior_mean,
-    prior_precision = prior_precision,
+    prior_precision = prior_mats$precision_array,
     free_mask = 1L - sdat$fixedAbilityLogical,
     jitter = jitter,
     max_attempts = max_attempts,
@@ -878,20 +1088,36 @@ bigIRT_laplace_direct_objective <- function(par, state, sdat, prior_precision,
       0.5 * sdat$Nscales * log(2 * pi) -
       0.5 * posterior$logdet_precision
   )
+  prior_norm_value <- if(isTRUE(context$estimateAbilityCorr)) {
+    0.5 * sdat$Nsubs * as.numeric(determinant(prior_mats$precision, logarithm = TRUE)$modulus)
+  } else 0
   prior <- bigIRT_laplace_item_prior(curState, sdat)
   surrogate <- bigIRT_laplace_item_objective(
-    par = par,
+    par = par[seq_len(max(unlist(context$layout), 0L))],
     state = state,
     sdat = sdat,
     thetaBase = posterior$theta_mode,
-    prior_precision = prior_precision,
+    prior_precision = prior_mats$precision_array,
     jitter = jitter,
     context = context
   )
+  approx_grad <- numeric(length(par))
+  if(length(surrogate$grad)) approx_grad[seq_along(surrogate$grad)] <- surrogate$grad
+  if(isTRUE(context$estimateAbilityCorr) && length(context$direct_layout$corr)){
+    approx_grad[context$direct_layout$corr] <- bigIRT_laplace_corr_grad(
+      state = curState,
+      sdat = sdat,
+      layout = context$direct_layout,
+      posterior = posterior,
+      prior_precision_matrix = prior_mats$precision,
+      jitter = jitter
+    )
+  }
   list(
-    value = laplace_value + prior$value,
-    approx_grad = surrogate$grad,
+    value = laplace_value + prior_norm_value + prior$value,
+    approx_grad = approx_grad,
     state = curState,
+    prior_mats = prior_mats,
     posterior = posterior,
     prior = prior,
     rowEffective = NULL,
@@ -956,11 +1182,18 @@ bigIRT_laplace_optimize_item <- function(state, sdat, thetaBase, prior_precision
 ## gradient for efficient experimentation.
 bigIRT_laplace_optimize_direct <- function(state, sdat, prior_precision,
   niter = 50L, tol = 1e-4, jitter = 1e-6, person_tol = 1e-4,
-  keep_covariance = FALSE, cores = 1L){
-  layout <- bigIRT_laplace_item_layout(sdat)
-  context <- bigIRT_laplace_item_context(sdat, layout = layout)
+  keep_covariance = FALSE, cores = 1L, estimateAbilityCorr = FALSE,
+  corr_paramization = c("normalized_chol", "stan_corsqrt")){
+  corr_paramization <- match.arg(corr_paramization)
+  direct_layout <- bigIRT_laplace_direct_layout(sdat, estimateAbilityCorr = estimateAbilityCorr)
+  item_layout <- direct_layout[setdiff(names(direct_layout), "corr")]
+  context <- bigIRT_laplace_item_context(sdat, layout = item_layout)
   context$grain_size <- bigIRT_laplace_subject_grain(sdat$Nsubs, cores)
-  init <- bigIRT_laplace_pack_item_state(state, sdat, layout = layout)
+  context$direct_layout <- direct_layout
+  context$estimateAbilityCorr <- isTRUE(estimateAbilityCorr)
+  context$corr_paramization <- corr_paramization
+  state$laplaceCorrParam <- corr_paramization
+  init <- bigIRT_laplace_pack_direct_state(state, sdat, layout = direct_layout)
   if(length(init) == 0L){
     eval0 <- bigIRT_laplace_direct_objective(
       par = init, state = state, sdat = sdat, prior_precision = prior_precision,

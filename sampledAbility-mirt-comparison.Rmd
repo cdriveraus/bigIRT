@@ -1,5 +1,5 @@
 ---
-title: "3-Factor MIRT: bigIRT Laplace-EM (MML approx) vs JML vs mirt"
+title: "3-Factor MIRT: bigIRT Laplace-Direct vs JML vs mirt"
 output:
   html_document:
     toc: true
@@ -11,17 +11,19 @@ library(bigIRT)
 library(data.table)
 library(ggplot2)
 
-set.seed(20260320)
+# set.seed(20260320)
 ```
 
 ## Goal
 
-This notebook now focuses on the `laplace_em` marginal-likelihood approximation in `bigIRT`:
+This notebook compares a sparse 3-factor MIRT fit across:
 
-1. fit the same sparse 3-factor model with `bigIRT` JML, `bigIRT` Laplace-EM, and multiple `mirt` estimators,
-2. report timing and fit quality for each approach tested,
-3. compare recovery quality with stronger diagnostics and plots,
-4. explicitly test two latent-space normalization/alignment strategies because the earlier one can be unfavorable to `mirt`.
+1. `bigIRT` JML,
+2. `bigIRT` direct Laplace (`marginalApprox = "laplace_direct"`),
+3. `mirt` with EM and MHRM.
+
+All parameter extraction and normalization now go through `compareIRTmodels()`, so
+truth and fitted models are compared on one package-level normalized metric.
 
 ## 1) Simulate sparse 3-factor MIRT data
 
@@ -63,7 +65,7 @@ colnames(loading_mask) <- as.character(seq_len(ncol(loading_mask)))
 summary(as.vector(is.na(loading_mask)))
 ```
 
-## 3) Fit JML, Laplace-EM, and three mirt estimators
+## 3) Fit JML, Laplace-Direct, and two mirt estimators
 
 ```{r fit-models}
 fit_jml_time <- system.time({
@@ -88,8 +90,8 @@ fit_laplace_time <- system.time({
     cores = 1,
     priors = TRUE,
     ebayes = FALSE,
-    loadings = loading_mask,#laplacePlot = T,
-    marginalApprox = "laplace_direct",#noptimsteps = 20,
+    loadings = loading_mask,
+    marginalApprox = "laplace_direct",
     dropPerfectScores = FALSE,
     normalise = FALSE,
     verbose = 0,
@@ -107,12 +109,20 @@ resp_mat <- as.matrix(wide[, -1])
 
 mirt_methods <- c("MHRM", "EM")
 fit_mirt <- list()
+build_mirt_model_from_loadings <- function(A_true){
+  lines <- vapply(seq_len(ncol(A_true)), function(k){
+    active <- which(abs(A_true[, k]) > 1e-8)
+    paste0("F", k, " = ", paste(active, collapse = ","))
+  }, character(1))
+  mirt::mirt.model(paste(lines, collapse = "\n"))
+}
+mirt_model <- build_mirt_model_from_loadings(A_true)
 mirt_fit_status <- rbindlist(lapply(mirt_methods, function(m){
   t0 <- proc.time()
   fit_try <- tryCatch(
     mirt::mirt(
       data = resp_mat,
-      model = Nscales,
+      model = mirt_model,
       itemtype = "2PL",
       method = m,
       verbose = FALSE,
@@ -138,71 +148,9 @@ fit_laplace_time
 mirt_fit_status
 ```
 
-## 4) Alignment / normalization strategies
+## 4) Build a common comparison object
 
-The previous notebook used a z-score + orthogonal rotation alignment only.  
-That can understate `mirt` when the recovered factor metric includes non-orthogonal mixing.
-
-We compare:
-
-- `zrot`: z-score each factor then orthogonal Procrustes rotation
-- `affine`: full linear map from estimated abilities to true abilities (least squares), then induced inverse map on loadings
-
-```{r alignment-functions}
-extract_ordered_A <- function(fit, Nitems, Nscales){
-  A <- as.matrix(fit$pars$A)
-  idx <- as.integer(rownames(A))
-  if(any(is.na(idx))) idx <- seq_len(nrow(A))
-  A[idx, seq_len(Nscales), drop = FALSE]
-}
-
-extract_ordered_theta <- function(fit, Nsubs, Nscales){
-  th <- as.matrix(fit$pars$Ability)
-  idx <- as.integer(rownames(th))
-  if(any(is.na(idx))) idx <- seq_len(nrow(th))
-  th[idx, seq_len(Nscales), drop = FALSE]
-}
-
-align_zrot <- function(theta_est, A_est, theta_true, eps = 1e-8){
-  mu_est <- colMeans(theta_est)
-  mu_true <- colMeans(theta_true)
-  th_est_c <- sweep(theta_est, 2, mu_est, "-")
-  th_true_c <- sweep(theta_true, 2, mu_true, "-")
-
-  sd_est <- pmax(apply(th_est_c, 2, sd), eps)
-  sd_true <- pmax(apply(th_true_c, 2, sd), eps)
-
-  z_est <- th_est_c %*% diag(1 / sd_est, ncol(theta_est))
-  z_true <- th_true_c %*% diag(1 / sd_true, ncol(theta_true))
-
-  M <- t(z_est) %*% z_true
-  s <- svd(M)
-  Q <- s$u %*% t(s$v)
-
-  Tmat <- diag(1 / sd_est, ncol(theta_est)) %*% Q %*% diag(sd_true, ncol(theta_true))
-  theta_aligned <- th_est_c %*% Tmat + matrix(rep(mu_true, each = nrow(theta_est)), nrow(theta_est))
-  A_aligned <- A_est %*% solve(Tmat)
-
-  list(theta = theta_aligned, A = A_aligned, transform = Tmat)
-}
-
-align_affine <- function(theta_est, A_est, theta_true, eps = 1e-8){
-  mu_est <- colMeans(theta_est)
-  mu_true <- colMeans(theta_true)
-  X <- sweep(theta_est, 2, mu_est, "-")
-  Y <- sweep(theta_true, 2, mu_true, "-")
-
-  XtX <- crossprod(X) + diag(eps, ncol(X))
-  Xty <- crossprod(X, Y)
-  Tmat <- solve(XtX, Xty)
-  invT <- tryCatch(solve(Tmat), error = function(e) qr.solve(Tmat, diag(ncol(Tmat))))
-
-  theta_aligned <- X %*% Tmat + matrix(rep(mu_true, each = nrow(theta_est)), nrow(theta_est))
-  A_aligned <- A_est %*% invT
-
-  list(theta = theta_aligned, A = A_aligned, transform = Tmat)
-}
-
+```{r comparison-helpers}
 rmse <- function(x, y) sqrt(mean((x - y)^2))
 
 calc_observed_nll <- function(fit){
@@ -223,87 +171,82 @@ compress_scatter <- function(dt, x_col, y_col, p = 0.95){
   dt[, `:=`(clip_x = bx, clip_y = by)]
   dt
 }
-```
-
-## 5) Extract model objects and align
-
-```{r extract-and-align}
-A_jml <- extract_ordered_A(fit_jml, Nitems, Nscales)
-A_laplace <- extract_ordered_A(fit_laplace, Nitems, Nscales)
-th_jml <- extract_ordered_theta(fit_jml, Nsubs, Nscales)
-th_laplace <- extract_ordered_theta(fit_laplace, Nsubs, Nscales)
-
-extract_mirt_state <- function(fit_obj, method_name){
-  coef_items <- as.data.frame(mirt::coef(fit_obj, simplify = TRUE)$items)
-  a_cols <- grep("^a[0-9]+$", colnames(coef_items), value = TRUE)
-  A_raw <- as.matrix(coef_items[, a_cols, drop = FALSE])
-  item_order <- as.integer(rownames(A_raw))
-  if(any(is.na(item_order))) item_order <- seq_len(nrow(A_raw))
-  ord <- order(item_order)
-  A <- A_raw[ord, , drop = FALSE]
-  th <- as.matrix(mirt::fscores(fit_obj, method = "EAP", full.scores = TRUE))
-  d <- coef_items[ord, "d"]
-  eta <- th %*% t(A) + matrix(d, nrow = nrow(th), ncol = nrow(A), byrow = TRUE)
-  p_full <- pmin(pmax(plogis(eta), 1e-10), 1 - 1e-10)
-  p_obs <- p_full[cbind(sim$dat$id, sim$dat$Item)]
-  list(
-    method = paste0("mirt_", method_name),
-    theta = th,
-    A = A,
-    p_obs = p_obs,
-    observed_nll = -mean(log(ifelse(sim$dat$score == 1, p_obs, 1 - p_obs)))
-  )
-}
-
-model_states <- list(
-  JML = list(
-    method = "JML",
-    theta = th_jml,
-    A = A_jml,
-    p_obs = pmin(pmax(bigIRT:::checkP(fit_jml), 1e-10), 1 - 1e-10),
-    observed_nll = calc_observed_nll(fit_jml)
-  ),
-  LaplaceEM = list(
-    method = "LaplaceEM",
-    theta = th_laplace,
-    A = A_laplace,
-    p_obs = pmin(pmax(bigIRT:::checkP(fit_laplace), 1e-10), 1 - 1e-10),
-    observed_nll = calc_observed_nll(fit_laplace)
-  )
-)
 
 ok_mirt <- mirt_fit_status[status == "ok", method]
-for(m in ok_mirt){
-  st <- extract_mirt_state(fit_mirt[[m]], m)
-  model_states[[st$method]] <- st
-}
-
-alignments <- list(
-  zrot = lapply(model_states, function(st) align_zrot(st$theta, st$A, sim$Ability)),
-  affine = lapply(model_states, function(st) align_affine(st$theta, st$A, sim$Ability))
+comparison_inputs <- c(
+  list(truth = sim, JML = fit_jml, LaplaceDirect = fit_laplace),
+  setNames(fit_mirt[ok_mirt], paste0("mirt_", ok_mirt))
 )
 
-free_idx <- which(is.na(loading_mask), arr.ind = TRUE)
+comparison <- compareIRTmodels(comparison_inputs)
+
+model_states <- c(
+  list(
+    JML = list(
+      p_obs = pmin(pmax(bigIRT:::checkP(fit_jml), 1e-10), 1 - 1e-10),
+      observed_nll = calc_observed_nll(fit_jml)
+    ),
+    LaplaceDirect = list(
+      p_obs = pmin(pmax(bigIRT:::checkP(fit_laplace), 1e-10), 1 - 1e-10),
+      observed_nll = calc_observed_nll(fit_laplace)
+    )
+  ),
+  setNames(lapply(ok_mirt, function(m){
+    coef_items <- as.data.frame(mirt::coef(fit_mirt[[m]], simplify = TRUE)$items)
+    a_cols <- grep("^a[0-9]+$", colnames(coef_items), value = TRUE)
+    A_raw <- as.matrix(coef_items[, a_cols, drop = FALSE])
+    item_order <- as.integer(rownames(A_raw))
+    if(any(is.na(item_order))) item_order <- seq_len(nrow(A_raw))
+    ord <- order(item_order)
+    A <- A_raw[ord, , drop = FALSE]
+    th <- as.matrix(mirt::fscores(fit_mirt[[m]], method = "EAP", full.scores = TRUE))
+    d <- coef_items[ord, "d"]
+    eta <- th %*% t(A) + matrix(d, nrow = nrow(th), ncol = nrow(A), byrow = TRUE)
+    p_full <- pmin(pmax(plogis(eta), 1e-10), 1 - 1e-10)
+    p_obs <- p_full[cbind(sim$dat$id, sim$dat$Item)]
+    list(
+      p_obs = p_obs,
+      observed_nll = -mean(log(ifelse(sim$dat$score == 1, p_obs, 1 - p_obs)))
+    )
+  }), paste0("mirt_", ok_mirt))
+)
+
+item_norm <- comparison$itempars[form == "normalized"]
+person_norm <- comparison$personpars[form == "normalized"]
+loading_norm <- comparison$loading_matrix[form == "normalized"]
+corr_norm <- comparison$ability_corr_matrix[form == "normalized" & corr_type == "estimated"]
+
+free_items <- data.table(
+  item = rownames(loading_mask)[row(loading_mask)[is.na(loading_mask)]],
+  factor = paste0("F", col(loading_mask)[is.na(loading_mask)])
+)
+
+loading_free <- merge(
+  item_norm[parameter == "A" & source != "truth"],
+  free_items,
+  by = c("item", "factor")
+)
 ```
 
-## 6) Metric table: normalization sensitivity + core comparison
+## 5) Metric table: recovery on the normalized scale
 
 ```{r performance}
-metric_rows <- rbindlist(lapply(names(alignments), function(aln_name){
-  aln <- alignments[[aln_name]]
-  rbindlist(lapply(names(aln), function(method_name){
-    data.table(
-      alignment = aln_name,
-      method = method_name,
-      ability_rmse = rmse(aln[[method_name]]$theta, sim$Ability),
-      loading_rmse_free = rmse(aln[[method_name]]$A[free_idx], A_true[free_idx]),
-      loading_rmse_full = rmse(aln[[method_name]]$A, A_true)
-    )
-  }))
+metric_rows <- rbindlist(lapply(setdiff(unique(item_norm$source), "truth"), function(method_name){
+  ability_dt <- person_norm[source == method_name]
+  loading_full_dt <- item_norm[source == method_name & parameter == "A"]
+  loading_free_dt <- loading_free[source == method_name]
+  corr_dt <- corr_norm[source == method_name]
+  data.table(
+    method = method_name,
+    ability_rmse = rmse(ability_dt$value, ability_dt$referenceVal),
+    loading_rmse_free = rmse(loading_free_dt$value, loading_free_dt$referenceVal),
+    loading_rmse_full = rmse(loading_full_dt$value, loading_full_dt$referenceVal),
+    corr_rmse = rmse(corr_dt$value, corr_dt$referenceVal)
+  )
 }))
 
 elapsed <- data.table(
-  method = c("JML", "LaplaceEM", paste0("mirt_", ok_mirt)),
+  method = c("JML", "LaplaceDirect", paste0("mirt_", ok_mirt)),
   elapsed_sec = c(
     unname(fit_jml_time["elapsed"]),
     unname(fit_laplace_time["elapsed"]),
@@ -311,14 +254,14 @@ elapsed <- data.table(
   ),
   observed_nll = c(
     model_states$JML$observed_nll,
-    model_states$LaplaceEM$observed_nll,
+    model_states$LaplaceDirect$observed_nll,
     sapply(ok_mirt, function(m) model_states[[paste0("mirt_", m)]]$observed_nll)
   )
 )
 
-perf <- merge(metric_rows, elapsed, by = "method")
-setcolorder(perf, c("alignment", "method", "elapsed_sec", "observed_nll", "ability_rmse", "loading_rmse_free", "loading_rmse_full"))
-perf[order(alignment, method)]
+perf <- merge(metric_rows, elapsed, by = "method", all.x = TRUE)
+setcolorder(perf, c("method", "elapsed_sec", "observed_nll", "ability_rmse", "loading_rmse_free", "loading_rmse_full", "corr_rmse"))
+perf[order(method)]
 ```
 
 ```{r mirt-method-timings}
@@ -328,35 +271,27 @@ mirt_fit_status[order(status, elapsed_sec)]
 ```{r all-approach-timings}
 timing_all <- rbindlist(list(
   data.table(method = "JML", status = "ok", elapsed_sec = unname(fit_jml_time["elapsed"]), error_message = NA_character_),
-  data.table(method = "LaplaceEM", status = "ok", elapsed_sec = unname(fit_laplace_time["elapsed"]), error_message = NA_character_),
+  data.table(method = "LaplaceDirect", status = "ok", elapsed_sec = unname(fit_laplace_time["elapsed"]), error_message = NA_character_),
   mirt_fit_status[, .(method = paste0("mirt_", method), status, elapsed_sec, error_message)]
 ), use.names = TRUE, fill = TRUE)
 
 timing_all[order(status, elapsed_sec)]
 ```
 
-Use `alignment == "affine"` as the primary comparison below, since it generally treats `mirt` more fairly when latent metrics are mixed.
-
-```{r primary-alignment-select}
-primary <- alignments$affine
-```
-
-## 7) Recovery plots (JML, Laplace-EM, and tested mirt estimators)
+## 6) Recovery plots
 
 ### Ability recovery by factor
 
 ```{r ability-by-factor}
-ability_dt <- rbindlist(lapply(names(primary), function(m){
-  data.table(
-    id = rep(seq_len(Nsubs), times = Nscales),
-    factor = rep(paste0("F", seq_len(Nscales)), each = Nsubs),
-    method = m,
-    true = as.vector(sim$Ability),
-    est = as.vector(primary[[m]]$theta)
-  )
-}))
+ability_dt <- person_norm[source != "truth", .(
+  id = person,
+  factor,
+  method = source,
+  true = referenceVal,
+  est = value
+)]
 
-ability_dt <- compress_scatter(ability_dt, "true", "est", p = 0.95)
+ability_dt <- compress_scatter(ability_dt, "true", "est", p = 0.98)
 
 ggplot(ability_dt, aes(x = x_plot, y = y_plot)) +
   geom_point(aes(shape = outlier_flag, color = outlier_flag), alpha = 0.30, size = 1.0) +
@@ -366,9 +301,9 @@ ggplot(ability_dt, aes(x = x_plot, y = y_plot)) +
   scale_color_manual(values = c(in_range = "grey35", clipped_outlier = "darkorange3")) +
   theme_bw() +
   labs(
-    title = "Ability recovery by factor (affine, 95% clipping)",
-    x = "True ability (clipped at 95% |value|)",
-    y = "Estimated ability (clipped at 95% |value|)",
+    title = "Ability recovery by factor (normalized scale, 98% clipping)",
+    x = "Truth (clipped at 95% |value|)",
+    y = "Estimate (clipped at 95% |value|)",
     shape = NULL,
     color = NULL
   )
@@ -377,18 +312,15 @@ ggplot(ability_dt, aes(x = x_plot, y = y_plot)) +
 ### Loading recovery by factor (free entries)
 
 ```{r loading-by-factor}
-loading_dt <- rbindlist(lapply(names(primary), function(m){
-  idx <- free_idx
-  data.table(
-    method = m,
-    factor = paste0("F", idx[, 2]),
-    true = A_true[idx],
-    est = primary[[m]]$A[idx],
-    abs_err = abs(primary[[m]]$A[idx] - A_true[idx])
-  )
-}))
+loading_dt <- loading_free[, .(
+  method = source,
+  factor,
+  true = referenceVal,
+  est = value,
+  abs_err = abs(value - referenceVal)
+)]
 
-loading_dt <- compress_scatter(loading_dt, "true", "est", p = 0.95)
+loading_dt <- compress_scatter(loading_dt, "true", "est", p = 0.98)
 
 ggplot(loading_dt, aes(x = x_plot, y = y_plot)) +
   geom_point(aes(shape = outlier_flag, color = outlier_flag), alpha = 0.35, size = 1.1) +
@@ -398,9 +330,9 @@ ggplot(loading_dt, aes(x = x_plot, y = y_plot)) +
   scale_color_manual(values = c(in_range = "grey35", clipped_outlier = "darkorange3")) +
   theme_bw() +
   labs(
-    title = "Loading recovery on free entries (affine, 95% clipping)",
-    x = "True loading (clipped at 95% |value|)",
-    y = "Estimated loading (clipped at 95% |value|)",
+    title = "Loading recovery on free entries (normalized scale, 98% clipping)",
+    x = "Truth (clipped at 95% |value|)",
+    y = "Estimate (clipped at 95% |value|)",
     shape = NULL,
     color = NULL
   )
@@ -409,11 +341,11 @@ ggplot(loading_dt, aes(x = x_plot, y = y_plot)) +
 ### Per-factor ability correlation
 
 ```{r factor-correlation}
-corr_dt <- ability_dt[, .(corr = cor(true, est)), by = .(method, factor)]
+ability_corr_dt <- ability_dt[, .(corr = abs(cor(true, est))), by = .(method, factor)]
 
-ggplot(corr_dt, aes(x = factor, y = corr, fill = method)) +
+ggplot(ability_corr_dt, aes(x = factor, y = corr, fill = method)) +
   geom_col(position = position_dodge(width = 0.7), width = 0.65) +
-  coord_cartesian(ylim = c(0, 1)) +
+  coord_cartesian(ylim = c(NA, 1)) +
   theme_bw() +
   labs(
     title = "Per-factor ability correlation with truth",
@@ -421,13 +353,53 @@ ggplot(corr_dt, aes(x = factor, y = corr, fill = method)) +
     y = "Correlation"
   )
 
-corr_dt[order(factor, -corr)]
+ability_corr_dt[order(factor, -corr)]
+```
+
+### Per-factor loading correlation
+
+```{r loading-correlation}
+loading_corr_dt <- loading_dt[, .(corr = abs(cor(true, est))), by = .(method, factor)]
+
+ggplot(loading_corr_dt, aes(x = factor, y = corr, fill = method)) +
+  geom_col(position = position_dodge(width = 0.7), width = 0.65) +
+  coord_cartesian(ylim = c(0, 1)) +
+  theme_bw() +
+  labs(
+    title = "Per-factor loading correlation with truth (free entries)",
+    x = "Factor",
+    y = "Correlation"
+  )
+```
+
+### Ability-correlation recovery
+
+```{r ability-corr-recovery}
+corr_plot_dt <- corr_norm[source != "truth" & row < col, .(
+  method = source,
+  row,
+  col,
+  true = referenceVal,
+  est = value
+)]
+
+ggplot(corr_plot_dt, aes(x = true, y = est)) +
+  geom_point(alpha = 0.7, size = 2) +
+  geom_abline(intercept = 0, slope = 1, linetype = 2, color = "red") +
+  facet_wrap(~ method) +
+  coord_equal() +
+  theme_bw() +
+  labs(
+    title = "Estimated latent correlations vs truth",
+    x = "True correlation",
+    y = "Estimated correlation"
+  )
 ```
 
 ### Loading absolute-error distribution
 
 ```{r loading-error-distribution}
-err_cap <- as.numeric(quantile(loading_dt$abs_err, probs = 0.95, na.rm = TRUE))
+err_cap <- as.numeric(quantile(loading_dt$abs_err, probs = 0.98, na.rm = TRUE))
 if(!is.finite(err_cap) || err_cap <= 0) err_cap <- max(loading_dt$abs_err, na.rm = TRUE)
 loading_dt[, abs_err_plot := pmin(abs_err, err_cap)]
 loading_dt[, err_outlier := fifelse(abs_err > err_cap, "clipped_outlier", "in_range")]
@@ -447,7 +419,7 @@ ggplot(loading_dt, aes(x = method, y = abs_err_plot, fill = method)) +
   scale_color_manual(values = c(in_range = "grey35", clipped_outlier = "darkorange3")) +
   theme_bw() +
   labs(
-    title = "Distribution of |loading error| on free entries (95% clipping)",
+    title = "Distribution of |loading error| on free entries (98% clipping)",
     x = NULL,
     y = "Absolute error (clipped at 95% quantile)",
     color = NULL,
@@ -488,26 +460,15 @@ calib[, .(
 ), by = method][order(logloss)]
 ```
 
-## 8) Loading heatmaps
+## 7) Loading heatmaps
 
 ```{r loading-heatmaps}
-to_heatmap_dt <- function(M, method){
-  M <- as.matrix(M)
-  data.table(
-    item = rep(seq_len(nrow(M)), times = ncol(M)),
-    factor = rep(seq_len(ncol(M)), each = nrow(M)),
-    loading = as.numeric(M),
-    method = method
-  )
-}
-
-hm_dt <- rbindlist(list(
-  to_heatmap_dt(A_true, "True")
-))
-hm_dt <- rbind(
-  hm_dt,
-  rbindlist(lapply(names(primary), function(m) to_heatmap_dt(primary[[m]]$A, m)))
-)
+hm_dt <- loading_norm[, .(
+  item = as.integer(row),
+  factor = as.integer(sub("^F", "", col)),
+  loading = value,
+  method = fifelse(source == "truth", "True (normalized)", source)
+)]
 
 lim <- quantile(abs(hm_dt$loading), probs = 0.95, na.rm = TRUE)
 ggplot(hm_dt, aes(x = factor, y = item, fill = loading)) +
@@ -523,16 +484,15 @@ ggplot(hm_dt, aes(x = factor, y = item, fill = loading)) +
   scale_x_continuous(breaks = seq_len(Nscales)) +
   theme_bw() +
   labs(
-    title = "Loading matrices (affine-aligned estimates)",
+    title = "Loading matrices (normalized comparison scale)",
     x = "Latent factor",
     y = "Item"
   )
 ```
 
-## 9) Notes
+## 8) Notes
 
-- This version centers the comparison on `marginalApprox = "laplace_em"` as the MML approximation path.
-- It tests three relevant `mirt` MIRT estimators (`MHRM`, `QMCEM`, `MCEM`) and records timing/status for each.
-- Sampled-ability-specific timing/diagnostic sections were removed.
-- For cross-package MIRT comparisons, alignment choice matters: check both `zrot` and `affine`, and report both when methods look unexpectedly different.
+- This version centers the comparison on `marginalApprox = "laplace_direct"`.
+- It tests `mirt` with the methods listed in `mirt_methods` and records timing/status for each.
+- Recovery tables and plots now use `compareIRTmodels()` as the package-level extraction/normalization helper, so truth, `bigIRT`, and `mirt` all flow through one comparison pipeline.
 - Scatter recovery plots apply 95% absolute-value clipping and mark clipped points with a separate color/shape.

@@ -219,15 +219,83 @@ simItems <- function(NperScale, scaleNames, invspAmu, invspASD, Bmu, BSD, logitC
   return(do.call(rbind,items))
 }
 
-IRTcurve <- function(a,b,c,theta=seq(-3,3,.01),plot=TRUE,rescale=FALSE,add=FALSE,...){
-  theta <- sort(theta)
-  x <- c + (1-c)/(1+exp(-a*(theta-b)))
-  if(rescale) theta=scale(theta)
-  if(plot){
-    if(!add) plot(theta, x,ylim=c(0,1),main=paste0('a = ',round(a,3),', b = ',round(b,3),', c = ',round(c,3)),type='l',...)
-    if(add) points(theta, x,ylim=c(0,1),main=paste0('a = ',round(a,3),', b = ',round(b,3),', c = ',round(c,3)),type='l',...)
+#' Evaluate IRT Item Response Curves
+#'
+#' Evaluates 1D or multidimensional 4PL response curves under the `bigIRT`
+#' parameterization
+#' \deqn{\eta = \theta A^\top - B.}
+#'
+#' @param A Numeric item-by-factor loading matrix, or a numeric vector for a
+#'   single-factor model.
+#' @param B Numeric vector of item intercept/difficulty parameters.
+#' @param C Numeric vector of lower asymptotes. Defaults to 0.
+#' @param D Numeric vector of upper asymptotes. Defaults to 1.
+#' @param theta Numeric matrix of latent trait values (rows are evaluation
+#'   points, columns are factors), or a numeric vector for a single-factor
+#'   model.
+#' @param plot Logical; if `TRUE`, produce a 1D plot.
+#' @param rescale Logical; if `TRUE`, standardize `theta` before evaluation.
+#' @param add Logical; when plotting 1D curves, add to an existing plot.
+#' @param item Optional item index/indices to evaluate.
+#' @param ... Additional graphical arguments passed to plotting functions.
+#'
+#' @return A numeric vector for a single item or a numeric matrix with rows
+#'   corresponding to `theta` points and columns to items.
+#' @export
+IRTcurve <- function(A, B, C = 0, D = 1, theta = seq(-3, 3, .01),
+  plot = TRUE, rescale = FALSE, add = FALSE, item = NULL, ...){
+
+  theta_in <- theta
+  theta <- as.matrix(theta)
+  if(is.null(dim(theta_in))) theta <- matrix(as.numeric(theta_in), ncol = 1)
+
+  A <- as.matrix(A)
+  if(is.null(dim(A))) A <- matrix(as.numeric(A), nrow = 1)
+  storage.mode(A) <- "double"
+  B <- as.numeric(B)
+  C <- rep_len(as.numeric(C), length(B))
+  D <- rep_len(as.numeric(D), length(B))
+
+  if(!is.null(item)){
+    A <- A[item, , drop = FALSE]
+    B <- B[item]
+    C <- C[item]
+    D <- D[item]
   }
-  if(!plot) return(x)
+
+  if(ncol(theta) != ncol(A)){
+    stop("theta and A must have the same number of dimensions.")
+  }
+  if(length(B) != nrow(A)) stop("B must have one entry per item/row in A.")
+
+  if(rescale){
+    theta <- scale(theta)
+  }
+
+  eta <- theta %*% t(A)
+  eta <- sweep(eta, 2, B, "-")
+  p <- sweep(matrix(inv_logit(eta), nrow = nrow(theta)), 2, D - C, "*")
+  p <- sweep(p, 2, C, "+")
+
+  if(ncol(p) == 1L){
+    p <- as.numeric(p[, 1L])
+  }
+
+  if(plot){
+    if(ncol(as.matrix(theta)) != 1L) stop("plot=TRUE currently requires one-dimensional theta.")
+    theta_plot <- as.numeric(theta[, 1L])
+    if(is.matrix(p) && ncol(p) > 1L){
+      matplot(theta_plot, p, type = "l", ylim = c(0, 1), add = add, ...)
+    } else {
+      if(!add) {
+        plot(theta_plot, p, ylim = c(0, 1), type = "l", ...)
+      } else {
+        points(theta_plot, p, type = "l", ...)
+      }
+    }
+  }
+
+  if(!plot) return(p)
 }
 
 
@@ -239,8 +307,7 @@ IRTcurve <- function(a,b,c,theta=seq(-3,3,.01),plot=TRUE,rescale=FALSE,add=FALSE
 #' @param NitemsAnswered Integer (or length-`Nscales` integer vector). Number
 #'   of items answered per person per scale. Values below `Nitems` generate
 #'   sparse-response datasets.
-#' @param ASD Numeric. SD of simulated item discrimination values (`A`) before
-#'   optional normalization.
+#' @param ASD Numeric. SD of simulated item discrimination values (`A`)
 #' @param AMean Numeric. Mean of simulated item discrimination values (`A`).
 #' @param BSD Numeric. SD of simulated item difficulty values (`B`).
 #' @param BMean Numeric. Mean of simulated item difficulty values (`B`).
@@ -260,8 +327,6 @@ IRTcurve <- function(a,b,c,theta=seq(-3,3,.01),plot=TRUE,rescale=FALSE,add=FALSE
 #'   Rows should align with subjects.
 #' @param AbilityPredEffects Optional matrix of effects of `personPreds` on
 #'   person ability by scale.
-#' @param normalise Logical. If `TRUE`, simulated `A`, `B`, and `Ability` are
-#'   normalized within scale using [normaliseIRT()].
 #' @param mirt Logical. If `TRUE`, simulate a multidimensional response process
 #'   where each item can load on multiple latent factors. In this mode, `Nitems`
 #'   is the total number of items (not items-per-scale).
@@ -293,8 +358,9 @@ IRTcurve <- function(a,b,c,theta=seq(-3,3,.01),plot=TRUE,rescale=FALSE,add=FALSE
 #' head(sim$dat)
 simIRT <- function(Nsubs=100,Nitems=200,Nscales=1, NitemsAnswered=Nitems,
   ASD=0,AMean=1,BSD=1,BMean=0,logitCSD=1,logitCMean=-2,AbilitySD=1,AbilityMean=0,
+  AbilityCorr=diag(1, Nscales),
   itemPreds=NA, AitemPredEffects=NA,BitemPredEffects=NA,logitCitemPredEffects=NA,
-  personPreds=NA, AbilityPredEffects=NA, normalise=FALSE,
+  personPreds=NA, AbilityPredEffects=NA,
   mirt=FALSE, loadingSparsity=0.3, primaryScale=NA, loadings=NA,
   crossLoadingSD=0.15, returnRowLoadings=TRUE){
 
@@ -309,7 +375,20 @@ simIRT <- function(Nsubs=100,Nitems=200,Nscales=1, NitemsAnswered=Nitems,
     stop("NitemsAnswered must be integer values between 1 and Nitems.")
   }
 
-  Ability <- matrix(rnorm(Nsubs*Nscales,AbilityMean,AbilitySD),Nsubs)
+  AbilitySD <- rep_len(as.numeric(AbilitySD), Nscales)
+  AbilityMean <- rep_len(as.numeric(AbilityMean), Nscales)
+  AbilityCorr <- as.matrix(AbilityCorr)
+  if(!all(dim(AbilityCorr) == c(Nscales, Nscales))){
+    stop("AbilityCorr must be an Nscales x Nscales matrix.")
+  }
+  if(any(!is.finite(AbilityCorr))) stop("AbilityCorr must contain finite values.")
+  AbilityCorr <- 0.5 * (AbilityCorr + t(AbilityCorr))
+  if(any(abs(diag(AbilityCorr) - 1) > 1e-8)) stop("AbilityCorr must have unit diagonal.")
+  chol_corr <- try(chol(AbilityCorr), silent = TRUE)
+  if(inherits(chol_corr, "try-error")) stop("AbilityCorr must be positive definite.")
+  Ability <- matrix(rnorm(Nsubs * Nscales), Nsubs, Nscales) %*% chol_corr
+  Ability <- sweep(Ability, 2, AbilitySD, "*")
+  Ability <- sweep(Ability, 2, AbilityMean, "+")
 
   if(isTRUE(mirt)){
     if(Nscales < 2) stop("mirt=TRUE requires Nscales >= 2.")
@@ -375,15 +454,6 @@ simIRT <- function(Nsubs=100,Nitems=200,Nscales=1, NitemsAnswered=Nitems,
       }
     }
 
-    if(normalise){
-      for(i in 1:ncol(Ability)){
-        normpars <- normaliseIRT(B = B[primaryScale == i], Ability = Ability[,i], A = A[primaryScale == i, i])
-        B[primaryScale == i] <- normpars$B
-        Ability[,i] <- normpars$Ability
-        A[primaryScale == i, i] <- normpars$A
-      }
-    }
-
     C <- inv_logit(logitC)
     dat <- data.table(expand.grid(id = seq_len(Nsubs), Item = seq_len(Nitems)))
     dat[, Scale := primaryScale[Item]]
@@ -427,14 +497,16 @@ simIRT <- function(Nsubs=100,Nitems=200,Nscales=1, NitemsAnswered=Nitems,
       personPredDt[, id := seq_len(.N)]
       dat <- merge.data.table(dat, personPredDt, by = "id")
     }
-    return(list(
+    out <- list(
       Ability = Ability,
       A = A,
       B = B,
       C = C,
       primaryScale = primaryScale,
       dat = as.data.table(dat)
-    ))
+    )
+    class(out) <- c("bigIRT_simIRT", "list")
+    return(out)
   }
 
   A <- matrix(rnorm(Nitems*Nscales,AMean,ASD),Nitems)
@@ -456,16 +528,6 @@ simIRT <- function(Nsubs=100,Nitems=200,Nscales=1, NitemsAnswered=Nitems,
   }
 
 
-
-  if(normalise){
-    for(i in 1:ncol(Ability)){
-      normpars <- normaliseIRT(B=B[,i],
-        Ability=Ability[,i], A=A[,i])
-      B[,i] = normpars$B
-      Ability[,i] = normpars$Ability
-      A[,i] = normpars$A
-    }
-  }
 
 
   C <- inv_logit(logitC)
@@ -509,5 +571,7 @@ simIRT <- function(Nsubs=100,Nitems=200,Nscales=1, NitemsAnswered=Nitems,
   if(!all(is.na(itemPreds))) dat <- merge.data.table((dat),data.table(Item=1:Nitems,itemPreds),by=c('Item'))
   if(!all(is.na(personPreds))) dat <- merge.data.table((dat),data.table(id=1:Nsubs,personPreds),by=c('id'))
 
-  return(list(Ability=Ability,A=A,B=B, C=C,dat=dat))
+  out <- list(Ability=Ability,A=A,B=B, C=C,dat=dat)
+  class(out) <- c("bigIRT_simIRT", "list")
+  return(out)
 }
