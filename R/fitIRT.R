@@ -1826,14 +1826,10 @@ plotLaplaceDiagnostics <- function(fit, logGrad = TRUE, showTiming = TRUE){
 #' @param estMeans Character vector. Which means to estimate from 'ability', 'A', 'B', 'C', 'D'. Default is c('ability', 'B', 'C', 'D'), with
 #' discrimination means fixed.
 #' @param priors Logical. Whether to use prior distributions. Default is TRUE.
-#' @param integrateEachAbility Logical. Whether to integrate across each ability. Default is FALSE.
-#' @param integrateEachAbilityFixedSE Logical. Whether to integrate each ability with fixed standard error. Default is FALSE.
-#' @param NintegratePoints Integer. Number of integration points for numerical integration. Default is 5.
 #' @param sampledAbilityStep Logical. Whether to run the Laplace-EM style outer
 #'   updates after the base optimization step. Default is FALSE.
 #' @param marginalApprox Character. Marginal approximation backend. Use
-#'   \code{"none"} for the legacy Stan/JML path, \code{"sigma_em"} for the
-#'   legacy deterministic-support outer loop, \code{"laplace_em"} for the
+#'   \code{"none"} for the legacy Stan/JML path, \code{"laplace_em"} for the
 #'   pure-C++ Laplace marginal-likelihood outer loop, and
 #'   \code{"laplace_direct"} for a single-stage direct Laplace optimizer that
 #'   recomputes person modes inside each objective evaluation and uses an
@@ -1948,9 +1944,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   iter=2000,cores=6,carefulfit=FALSE,
   ebayes=TRUE,ebayesmultiplier=2,ebayesFromFixed=FALSE,
   estMeans=c('ability','B','C','D'),priors=TRUE,
-  integrateEachAbility=FALSE, integrateEachAbilityFixedSE=FALSE,
-  NintegratePoints=5,
-  marginalApprox=c("none","sigma_em","laplace_em","laplace_direct"),
+  marginalApprox=c("none","laplace_em","laplace_direct"),
   estimateAbilityCorr=FALSE,
   laplaceCorrParam=c("normalized_chol","stan_corsqrt"),
   laplaceOuterIter=50,laplaceTol=1e-3,laplaceGradTol=1e-2,laplaceStabilityIter=5L,laplacePersonTol=1e-4,
@@ -1969,10 +1963,6 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   basetol=tol
   marginalApprox <- match.arg(marginalApprox)
   laplaceCorrParam <- match.arg(laplaceCorrParam)
-  if(isTRUE(sampledAbilityStep) && identical(marginalApprox, "none")){
-    marginalApprox <- "sigma_em"
-  }
-  sampledAbilityStep <- identical(marginalApprox, "sigma_em")
   if(isTRUE(estimateAbilityCorr) && !identical(marginalApprox, "laplace_direct")){
     warning("estimateAbilityCorr is currently only active for marginalApprox = 'laplace_direct'.")
   }
@@ -2286,12 +2276,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     rowIndexPar=0L,
     originalRow=dat$`.originalRow`,
     doGenQuant=0L,
-    doRowEff=as.integer(isTRUE(sampledAbilityStep) || identical(marginalApprox, "laplace_em")),
-    integrateAbility=as.integer(integrateEachAbility),
-    integrateAbilityFixedSE=as.integer(integrateEachAbilityFixedSE),
-    NintegratePoints=as.integer(NintegratePoints),
-    integrateWeights=array(statmod::gauss.quad.prob(n=NintegratePoints,dist='normal')$weights),
-    integratePoints=array(statmod::gauss.quad.prob(n=NintegratePoints,dist='normal')$nodes)
+    doRowEff=as.integer(isTRUE(sampledAbilityStep) || identical(marginalApprox, "laplace_em"))
   ))
 
   sdat$freeAref=array(as.integer(cumsum(1-as.numeric(sdat$fixedAlog))))
@@ -2551,6 +2536,23 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
       if(all(finalPosterior$converged)) "yes" else "no",
       directSec
     ))
+  }
+
+  # If laplace_direct is requested but there are no free ability parameters,
+  # skip the Laplace optimization and fall back to the legacy JML
+  # parameterization so output construction does not crash.
+  if(all(is.na(fit)) && identical(marginalApprox, "laplace_direct")){
+    warning("laplace_direct requested but no free ability parameters were found; falling back to marginalApprox='none' (JML).")
+    marginalApprox <- "none"
+    for(i in 1:length(JMLseq)){
+      if(i < length(JMLseq)) tol= basetol*ifelse(JMLseq[[i]]$narrowPriors,100,10) else tol = basetol
+      fit <- JMLfit(est = JMLseq[[i]]$est, sdat = sdat, ebayes = JMLseq[[i]]$ebayes,
+        fit = fit,
+        narrowPriors = JMLseq[[i]]$narrowPriors,
+        tol = tol, ...)
+      sdat <- fit$sdat
+      fit <- fit$fit
+    }
   }
 
   if(identical(marginalApprox, "laplace_em") && length(which(sdat$Abilityparsindex > 0)) > 0){

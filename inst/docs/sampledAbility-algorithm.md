@@ -4,7 +4,6 @@
 
 `bigIRT::fitIRT()` now has two uncertainty-aware outer-loop paths:
 
-- `marginalApprox = "sigma_em"`: the legacy deterministic-support path
 - `marginalApprox = "laplace_em"`: the primary pure-C++ Laplace path
 
 The new `laplace_em` path no longer calibrates items by averaging over sigma
@@ -108,7 +107,6 @@ R code is responsible for:
 Current practical notes:
 
 - the pure-C++ Laplace path is the only path being extended
-- the old sigma-point path is kept for comparison and backward compatibility
 - item moderation is supported through row-effective parameter reconstruction
 - person-predictor betas are currently kept fixed at their initialization values
   during `laplace_em`

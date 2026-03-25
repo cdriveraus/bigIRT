@@ -24,7 +24,6 @@ simIRT(
   logitCitemPredEffects = NA,
   personPreds = NA,
   AbilityPredEffects = NA,
-  normalise = FALSE,
   mirt = FALSE,
   loadingSparsity = 0.3,
   primaryScale = NA,
@@ -44,8 +43,7 @@ simIRT(
 of items answered per person per scale. Values below \code{Nitems} generate
 sparse-response datasets.}
 
-\item{ASD}{Numeric. SD of simulated item discrimination values (\code{A}) before
-optional normalization.}
+\item{ASD}{Numeric. SD of simulated item discrimination values (\code{A})}
 
 \item{AMean}{Numeric. Mean of simulated item discrimination values (\code{A}).}
 
@@ -78,9 +76,6 @@ Rows should align with subjects.}
 
 \item{AbilityPredEffects}{Optional matrix of effects of \code{personPreds} on
 person ability by scale.}
-
-\item{normalise}{Logical. If \code{TRUE}, simulated \code{A}, \code{B}, and \code{Ability} are
-normalized within scale using \code{\link[=normaliseIRT]{normaliseIRT()}}.}
 
 \item{mirt}{Logical. If \code{TRUE}, simulate a multidimensional response process
 where each item can load on multiple latent factors. In this mode, \code{Nitems}

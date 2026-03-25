@@ -52,11 +52,6 @@ int DitemPreds[NDitemPreds];
 int itemSpecificBetas;
 int doGenQuant;
 int doRowEff;
-int integrateAbility;
-int integrateAbilityFixedSE;
-int NintegratePoints;
-vector[NintegratePoints] integratePoints;
-vector[NintegratePoints] integrateWeights;
 
 row_vector[NitemPreds] itemPreds[Nobs]; //Values of item predictors
 row_vector[NpersonPreds] personPreds[Nobs]; //Values of person predictors
@@ -168,7 +163,7 @@ vector[(Nitems-NfixedD) ? size(CitemPreds) : 0] logitDbeta[itemSpecificBetas ? (
 transformed parameters{ //this section combines any user input fixed values and free parameters
 
 vector[Nobs] p=rep_vector(0,Nobs); //probability of observed response for responses in current parallel set
-matrix[Nsubs,Nscales] sAbilitySD=rep_matrix(integrateAbilityFixedSE ? .1 : 0,Nsubs,Nscales); //abilitySD matrix (potentially mix of free parameters and fixed values)
+matrix[Nsubs,Nscales] sAbilitySD=rep_matrix(0,Nsubs,Nscales); //abilitySD matrix (computed from curvature when requested)
 //vector[Nobs] AbilityNobs; //relevant ability for each response in current parallel set
 real ll;
 
@@ -199,7 +194,6 @@ vector[Nobs] e11;
 int scoreCoef[Nobs];
 
 //probability computation
-for(doIntegrate in 0:integrateAbility){ //would be more efficient to re-write to avoid this loop and the recomputations
 for(i in 1:Nobs){
   vector[Nscales] sArow;
   vector[Nscales] sAbilityRow;
@@ -231,40 +225,24 @@ for(i in 1:Nobs){
    e6[i] = e4[i] * inv_logit(e1[i]) + sC[i];
    scoreCoef[i] =  (score[i] *2 -1);
 
-  if(!integrateAbility && !doIntegrate) p[i]= (1-score[i])+ scoreCoef[i] * e6[i] ;
+  p[i]= (1-score[i])+ scoreCoef[i] * e6[i] ;
 
-  if((!integrateAbility && doGenQuant) || (integrateAbility && !doIntegrate)){ //if in the JML phase, prepare ability SDs
+  if(doGenQuant){ //if requested, compute per-subject/scale curvature for sAbilitySD
     e3[i] = exp(-e1[i]);
     e7[i] = 1 + e3[i];
     e9[i] = e6[i] * scoreCoef[i] + 1 - score[i];
     e11[i] = e9[i] * e7[i]^2;
     sAbilitySD[id[i],scale[i]] += -(sAactive[i]^2 * ((scoreCoef[i] * e4[i] - 2 * (e9[i] * e7[i])) * e3[i]/e11[i]^2 + inv(e11[i])) * scoreCoef[i] * e4[i] * e3[i]); //incremental addition to 2nd deriv
   }
-
-
-  if(integrateAbility && doIntegrate){ //if finished the JML phase, use ability SD's for approx integral over ability
-      for(ii in 1:NintegratePoints){ //but skip 0!
-        vector[Nscales] sAbilityInt = sAbilityRow;
-        real etaInt;
-        sAbilityInt[scale[i]] += integratePoints[ii] * sAbilitySD[id[i],scale[i]];
-        etaInt = dot_product(sArow,sAbilityInt) - sB[i];
-        p[i] +=  integrateWeights[ii] * ( //if mean, multiply by .5 else .25
-        (1-score[i]) + scoreCoef[i] * (
-          sC[i] + e4[i] * inv_logit(etaInt)));
-      }
-    }
-
 } //end loop over rows
 
-if( (!integrateAbility && doGenQuant) || (integrateAbility && !doIntegrate)){ //compute subject sd's
-    for(rowi in 1:Nsubs){
+if(doGenQuant){ //compute subject sd's from accumulated curvature
+  for(rowi in 1:Nsubs){
     for(coli in 1:Nscales){
       if(!fixedAbilityLogical[rowi,coli]) sAbilitySD[rowi,coli] = sqrt(inv(fabs(sAbilitySD[rowi,coli])));
     }
   }
 }
-
-} // end integration yes / no loop
 
 
 } //end local block

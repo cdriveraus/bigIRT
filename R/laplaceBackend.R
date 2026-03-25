@@ -1010,6 +1010,54 @@ bigIRT_laplace_person_step_block_cpp_impl <- function(id, score, theta_init,
   )
 }
 
+bigIRT_laplace_materialize_block_cpp_impl <- function(item, id, score, theta_base,
+  person_pred, item_pred, fixed_ability, fixed_ability_value,
+  A_ref, A_fixed_value, A_beta_row, A_pred,
+  B_ref, B_fixed_value, B_beta_row, B_pred,
+  C_ref, C_fixed_value, C_beta_row, C_pred,
+  D_ref, D_fixed_value, D_beta_row, D_pred,
+  Abilitybeta, invspApars, invspAbeta, Bpars, Bbeta,
+  logitCpars, logitCbeta, logitDpars, logitDbeta) {
+  Nobs <- length(item)
+  K <- ncol(theta_base)
+  .Call(
+    `_bigIRT_laplace_materialize_block_cpp_impl`,
+    as.integer(item),
+    as.integer(id),
+    as.integer(score),
+    as.matrix(theta_base),
+    as.matrix(person_pred),
+    as.matrix(item_pred),
+    matrix(as.integer(fixed_ability), nrow = Nobs, ncol = K),
+    as.matrix(fixed_ability_value),
+    matrix(as.integer(A_ref), nrow = Nobs, ncol = K),
+    as.matrix(A_fixed_value),
+    matrix(as.integer(A_beta_row), nrow = Nobs, ncol = K),
+    as.matrix(A_pred),
+    as.integer(B_ref),
+    as.numeric(B_fixed_value),
+    as.integer(B_beta_row),
+    as.matrix(B_pred),
+    as.integer(C_ref),
+    as.numeric(C_fixed_value),
+    as.integer(C_beta_row),
+    as.matrix(C_pred),
+    as.integer(D_ref),
+    as.numeric(D_fixed_value),
+    as.integer(D_beta_row),
+    as.matrix(D_pred),
+    as.matrix(Abilitybeta),
+    as.numeric(invspApars),
+    as.matrix(invspAbeta),
+    as.numeric(Bpars),
+    as.matrix(Bbeta),
+    as.numeric(logitCpars),
+    as.matrix(logitCbeta),
+    as.numeric(logitDpars),
+    as.matrix(logitDbeta)
+  )
+}
+
 ## Evaluate the direct Laplace objective by solving all person modes inside the
 ## objective call. This is the experimental single-stage backend used by
 ## `marginalApprox = "laplace_direct"`.
@@ -1031,6 +1079,17 @@ bigIRT_laplace_direct_objective <- function(par, state, sdat, prior_precision,
     corr_paramization = context$corr_paramization
   )
   row_context <- context$row_context
+
+  # Some C++ kernels have brittle handling for 0-column Eigen matrices.
+  # When there are no person predictors, replace 0-column predictor inputs
+  # with 1-column all-zero matrices (math unchanged).
+  person_pred <- row_context$person_pred
+  ability_beta <- curState$Abilitybeta
+  if(ncol(person_pred) == 0L){
+    person_pred <- matrix(0, nrow = nrow(person_pred), ncol = 1L)
+    ability_beta <- matrix(0, nrow = nrow(ability_beta), ncol = 1L)
+  }
+
   prior_mean <- matrix(rep(curState$AbilityMean, each = sdat$Nsubs), nrow = sdat$Nsubs)
   prior_mats <- if(isTRUE(context$estimateAbilityCorr)) {
     bigIRT_laplace_prior_mats(sdat, AbilityCorr = curState$AbilityCorr, jitter = jitter)
@@ -1045,7 +1104,7 @@ bigIRT_laplace_direct_objective <- function(par, state, sdat, prior_precision,
     id = sdat$id[context$train_rows],
     score = sdat$score[context$train_rows],
     theta_init = theta_init,
-    person_pred = row_context$person_pred,
+    person_pred = person_pred,
     fixed_ability = row_context$fixed_ability,
     fixed_ability_value = row_context$fixed_ability_value,
     A_ref = row_context$A_ref,
@@ -1064,7 +1123,7 @@ bigIRT_laplace_direct_objective <- function(par, state, sdat, prior_precision,
     D_fixed_value = row_context$D_fixed_value,
     D_beta_row = row_context$D_beta_row,
     D_pred = row_context$D_pred,
-    Abilitybeta = curState$Abilitybeta,
+    Abilitybeta = ability_beta,
     invspApars = curState$invspApars,
     invspAbeta = curState$invspAbeta,
     Bpars = curState$Bpars,
@@ -1263,93 +1322,50 @@ bigIRT_laplace_optimize_direct <- function(state, sdat, prior_precision,
 }
 
 bigIRT_laplace_constrained_pars <- function(state, sdat, posterior = NULL){
-  itemPredsMean <- bigIRT_laplace_item_means(sdat)
-  personPredsMean <- bigIRT_laplace_person_means_by_id(sdat)
-  A <- matrix(0, nrow = sdat$Nitems, ncol = sdat$Nscales)
-  B <- numeric(sdat$Nitems)
-  C <- numeric(sdat$Nitems)
-  D <- numeric(sdat$Nitems)
-  Ability <- state$AbilityBase
-
-  for(i in seq_len(sdat$Nitems)){
-    for(si in seq_len(sdat$Nscales)){
-      aidx <- (i - 1L) * sdat$Nscales + si
-      if(sdat$fixedAlog[aidx] == 1L){
-        A[i, si] <- sdat$Adata[aidx]
-      } else {
-        ref <- sdat$freeAref[aidx]
-        raw <- state$invspApars[ref]
-        if(sdat$NAitemPreds > 0){
-          beta_row <- if(sdat$itemSpecificBetas == 1L) ref else 1L
-          raw <- raw + sum(itemPredsMean[i, sdat$AitemPreds, drop = TRUE] * state$invspAbeta[beta_row,])
-        }
-        A[i, si] <- afunc(raw)
-      }
-    }
-
-    if(sdat$fixedB[i] == 1L){
-      B[i] <- sdat$Bdata[i]
-    } else {
-      ref <- sdat$freeBref[i]
-      raw <- state$Bpars[ref]
-      if(sdat$NBitemPreds > 0){
-        beta_row <- if(sdat$itemSpecificBetas == 1L) ref else 1L
-        raw <- raw + sum(itemPredsMean[i, sdat$BitemPreds, drop = TRUE] * state$Bbeta[beta_row,])
-      }
-      B[i] <- raw
-    }
-
-    if(sdat$fixedClogit[i] == 1L){
-      C[i] <- sdat$Cdata[i]
-    } else {
-      ref <- sdat$freeCref[i]
-      raw <- state$logitCpars[ref]
-      if(sdat$NCitemPreds > 0){
-        beta_row <- if(sdat$itemSpecificBetas == 1L) ref else 1L
-        raw <- raw + sum(itemPredsMean[i, sdat$CitemPreds, drop = TRUE] * state$logitCbeta[beta_row,])
-      }
-      C[i] <- cfunc(raw)
-    }
-
-    if(sdat$fixedDlogit[i] == 1L){
-      D[i] <- sdat$Ddata[i]
-    } else {
-      ref <- sdat$freeDref[i]
-      raw <- state$logitDpars[ref]
-      if(sdat$NDitemPreds > 0){
-        beta_row <- if(sdat$itemSpecificBetas == 1L) ref else 1L
-        raw <- raw + sum(itemPredsMean[i, sdat$DitemPreds, drop = TRUE] * state$logitDbeta[beta_row,])
-      }
-      D[i] <- dfunc(raw)
-    }
-  }
-
-  if(sdat$NpersonPreds > 0){
-    for(i in seq_len(sdat$Nsubs)){
-      for(si in seq_len(sdat$Nscales)){
-        if(sdat$fixedAbilityLogical[i, si] == 0L){
-          Ability[i, si] <- Ability[i, si] + sum(personPredsMean[i,] * state$Abilitybeta[si,])
-        } else {
-          Ability[i, si] <- sdat$Abilitydata[i, si]
-        }
-      }
-    }
-  } else {
-    Ability[sdat$fixedAbilityLogical == 1L] <- sdat$Abilitydata[sdat$fixedAbilityLogical == 1L]
-  }
-
-  rowEff <- bigIRT_laplace_row_effective(state, sdat, thetaBase = state$AbilityBase,
-    rows = seq_len(sdat$Nobs), include_raw = FALSE)
-  pcorrect <- c_row <- d_row <- NULL
-  pcorrect <- inv_logit(rowEff$eta_row)
-  pcorrect <- rowEff$c_row + (rowEff$d_row - rowEff$c_row) * pcorrect
+  rows <- seq_len(sdat$Nobs)
+  row_context <- bigIRT_laplace_row_context(sdat, rows = rows)
+  materialized <- bigIRT_laplace_materialize_block_cpp_impl(
+    item = sdat$item[rows],
+    id = sdat$id[rows],
+    score = sdat$score[rows],
+    theta_base = state$AbilityBase,
+    person_pred = if(sdat$NpersonPreds > 0) as.matrix(sdat$personPreds[rows,, drop = FALSE]) else matrix(0, nrow = length(rows), ncol = 0),
+    item_pred = if(sdat$NitemPreds > 0) as.matrix(sdat$itemPreds[rows,, drop = FALSE]) else matrix(0, nrow = length(rows), ncol = 0),
+    fixed_ability = row_context$fixed_ability,
+    fixed_ability_value = row_context$fixed_ability_value,
+    A_ref = row_context$A_ref,
+    A_fixed_value = row_context$fixed_A_value,
+    A_beta_row = row_context$A_beta_row,
+    A_pred = row_context$A_pred,
+    B_ref = row_context$B_ref,
+    B_fixed_value = row_context$B_fixed_value,
+    B_beta_row = row_context$B_beta_row,
+    B_pred = row_context$B_pred,
+    C_ref = row_context$C_ref,
+    C_fixed_value = row_context$C_fixed_value,
+    C_beta_row = row_context$C_beta_row,
+    C_pred = row_context$C_pred,
+    D_ref = row_context$D_ref,
+    D_fixed_value = row_context$D_fixed_value,
+    D_beta_row = row_context$D_beta_row,
+    D_pred = row_context$D_pred,
+    Abilitybeta = state$Abilitybeta,
+    invspApars = state$invspApars,
+    invspAbeta = state$invspAbeta,
+    Bpars = state$Bpars,
+    Bbeta = state$Bbeta,
+    logitCpars = state$logitCpars,
+    logitCbeta = state$logitCbeta,
+    logitDpars = state$logitDpars,
+    logitDbeta = state$logitDbeta
+  )
 
   out <- list(
-    A = A,
-    B = matrix(B, ncol = 1),
-    C = matrix(C, ncol = 1),
-    D = matrix(D, ncol = 1),
-    Ability = Ability,
+    A = materialized$A,
+    B = matrix(materialized$B, ncol = 1),
+    C = matrix(materialized$C, ncol = 1),
+    D = matrix(materialized$D, ncol = 1),
+    Ability = materialized$Ability,
     Abilitypars = as.numeric(state$AbilityBase[sdat$Abilityparsindex > 0]),
     AbilityMeanpar = if(sdat$fixedAbilityMean == 0L) as.numeric(state$AbilityMean) else numeric(),
     Abilitybeta = state$Abilitybeta,
@@ -1365,15 +1381,16 @@ bigIRT_laplace_constrained_pars <- function(state, sdat, posterior = NULL){
     logitDpars = as.numeric(state$logitDpars),
     logitDMeanpar = if(sdat$fixedDMean == 0L) state$logitDMean else numeric(),
     logitDbeta = state$logitDbeta,
-    itemPredsMean = itemPredsMean,
-    personPredsMean = personPredsMean,
-    b_row = rowEff$b_row,
-    c_row = rowEff$c_row,
-    d_row = rowEff$d_row,
-    eta_row = rowEff$eta_row,
-    row_loadings = rowEff$loadings,
-    row_ability = rowEff$row_ability,
-    pcorrect = pcorrect
+    itemPredsMean = materialized$itemPredsMean,
+    personPredsMean = materialized$personPredsMean,
+    b_row = materialized$b_row,
+    c_row = materialized$c_row,
+    d_row = materialized$d_row,
+    eta_row = materialized$eta_row,
+    row_loadings = materialized$row_loadings,
+    row_ability = materialized$row_ability,
+    p = materialized$p,
+    pcorrect = materialized$pcorrect
   )
   if(!is.null(posterior) && !is.null(posterior$covariance)){
     sAbilitySD <- matrix(0, nrow = sdat$Nsubs, ncol = sdat$Nscales)

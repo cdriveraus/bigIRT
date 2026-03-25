@@ -158,7 +158,7 @@ calc_observed_nll <- function(fit){
   -mean(log(p_obs))
 }
 
-compress_scatter <- function(dt, x_col, y_col, p = 0.95){
+compress_scatter <- function(dt, x_col, y_col, p = 0.98){
   x <- dt[[x_col]]
   y <- dt[[y_col]]
   bx <- as.numeric(quantile(abs(x), probs = p, na.rm = TRUE))
@@ -183,11 +183,11 @@ comparison <- compareIRTmodels(comparison_inputs)
 model_states <- c(
   list(
     JML = list(
-      p_obs = pmin(pmax(bigIRT:::checkP(fit_jml), 1e-10), 1 - 1e-10),
+      p_obs = fit_jml$pars$pcorrect,
       observed_nll = calc_observed_nll(fit_jml)
     ),
     LaplaceDirect = list(
-      p_obs = pmin(pmax(bigIRT:::checkP(fit_laplace), 1e-10), 1 - 1e-10),
+      p_obs = fit_laplace$pars$pcorrect,#sim$dat$score * fit_laplace$pars$pcorrect + (1 - sim$dat$score) * (1 - fit_laplace$pars$pcorrect),
       observed_nll = calc_observed_nll(fit_laplace)
     )
   ),
@@ -302,8 +302,8 @@ ggplot(ability_dt, aes(x = x_plot, y = y_plot)) +
   theme_bw() +
   labs(
     title = "Ability recovery by factor (normalized scale, 98% clipping)",
-    x = "Truth (clipped at 95% |value|)",
-    y = "Estimate (clipped at 95% |value|)",
+    x = "Truth (clipped at 98% |value|)",
+    y = "Estimate (clipped at 98% |value|)",
     shape = NULL,
     color = NULL
   )
@@ -331,8 +331,8 @@ ggplot(loading_dt, aes(x = x_plot, y = y_plot)) +
   theme_bw() +
   labs(
     title = "Loading recovery on free entries (normalized scale, 98% clipping)",
-    x = "Truth (clipped at 95% |value|)",
-    y = "Estimate (clipped at 95% |value|)",
+    x = "Truth (clipped at 98% |value|)",
+    y = "Estimate (clipped at 98% |value|)",
     shape = NULL,
     color = NULL
   )
@@ -421,7 +421,7 @@ ggplot(loading_dt, aes(x = method, y = abs_err_plot, fill = method)) +
   labs(
     title = "Distribution of |loading error| on free entries (98% clipping)",
     x = NULL,
-    y = "Absolute error (clipped at 95% quantile)",
+    y = "Absolute error (clipped at 98% quantile)",
     color = NULL,
     shape = NULL
   )
@@ -470,7 +470,11 @@ hm_dt <- loading_norm[, .(
   method = fifelse(source == "truth", "True (normalized)", source)
 )]
 
-lim <- quantile(abs(hm_dt$loading), probs = 0.95, na.rm = TRUE)
+q <- quantile(hm_dt$loading, probs = c(0.025, 0.975), na.rm = TRUE)
+true_rng <- range(hm_dt[method == "True (normalized)", loading], na.rm = TRUE)
+lim_lo <- min(q[[1]], true_rng[[1]])
+lim_hi <- max(q[[2]], true_rng[[2]])
+lim <- max(abs(c(lim_lo, lim_hi)))
 ggplot(hm_dt, aes(x = factor, y = item, fill = loading)) +
   geom_tile() +
   scale_fill_gradient2(
@@ -488,6 +492,46 @@ ggplot(hm_dt, aes(x = factor, y = item, fill = loading)) +
     x = "Latent factor",
     y = "Item"
   )
+
+truth_dt <- loading_norm[source == "truth" & form == "normalized", .(
+  row,
+  col,
+  truth = value
+)]
+
+diff_dt <- merge(
+  loading_norm[source != "truth" & form == "normalized", .(row, col, source, value)],
+  truth_dt,
+  by = c("row", "col"),
+  all.x = TRUE
+)[, .(
+  item = as.integer(row),
+  factor = as.integer(sub("^F", "", col)),
+  diff = value - truth,
+  method = source
+)]
+
+q_diff <- quantile(diff_dt$diff, probs = c(0.025, 0.975), na.rm = TRUE)
+lim_diff <- max(abs(q_diff))
+
+ggplot(diff_dt, aes(x = factor, y = item, fill = diff)) +
+  geom_tile() +
+  scale_fill_gradient2(
+    low = "navy",
+    mid = "white",
+    high = "firebrick",
+    midpoint = 0,
+    limits = c(-lim_diff, lim_diff)
+  ) +
+  facet_wrap(~ method, nrow = 1) +
+  scale_x_continuous(breaks = seq_len(Nscales)) +
+  theme_bw() +
+  labs(
+    title = "Loading discrepancy vs truth (normalized scale)",
+    x = "Latent factor",
+    y = "Item",
+    fill = "Estimate - truth"
+  )
 ```
 
 ## 8) Notes
@@ -495,4 +539,3 @@ ggplot(hm_dt, aes(x = factor, y = item, fill = loading)) +
 - This version centers the comparison on `marginalApprox = "laplace_direct"`.
 - It tests `mirt` with the methods listed in `mirt_methods` and records timing/status for each.
 - Recovery tables and plots now use `compareIRTmodels()` as the package-level extraction/normalization helper, so truth, `bigIRT`, and `mirt` all flow through one comparison pipeline.
-- Scatter recovery plots apply 95% absolute-value clipping and mark clipped points with a separate color/shape.

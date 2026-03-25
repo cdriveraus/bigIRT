@@ -46,10 +46,7 @@ fitIRT(
   ebayesFromFixed = FALSE,
   estMeans = c("ability", "B", "C", "D"),
   priors = TRUE,
-  integrateEachAbility = FALSE,
-  integrateEachAbilityFixedSE = FALSE,
-  NintegratePoints = 5,
-  marginalApprox = c("none", "sigma_em", "laplace_em", "laplace_direct"),
+  marginalApprox = c("none", "laplace_em", "laplace_direct"),
   estimateAbilityCorr = FALSE,
   laplaceCorrParam = c("normalized_chol", "stan_corsqrt"),
   laplaceOuterIter = 50,
@@ -181,15 +178,8 @@ discrimination means fixed.}
 
 \item{priors}{Logical. Whether to use prior distributions. Default is TRUE.}
 
-\item{integrateEachAbility}{Logical. Whether to integrate across each ability. Default is FALSE.}
-
-\item{integrateEachAbilityFixedSE}{Logical. Whether to integrate each ability with fixed standard error. Default is FALSE.}
-
-\item{NintegratePoints}{Integer. Number of integration points for numerical integration. Default is 5.}
-
 \item{marginalApprox}{Character. Marginal approximation backend. Use
-\code{"none"} for the legacy Stan/JML path, \code{"sigma_em"} for the
-legacy deterministic-support outer loop, \code{"laplace_em"} for the
+\code{"none"} for the legacy Stan/JML path, \code{"laplace_em"} for the
 pure-C++ Laplace marginal-likelihood outer loop, and
 \code{"laplace_direct"} for a single-stage direct Laplace optimizer that
 recomputes person modes inside each objective evaluation and uses an
