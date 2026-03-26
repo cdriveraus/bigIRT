@@ -45,26 +45,25 @@ head(fit$personPars)
 
 ## Sampled ability updates
 
-`fitIRT()` also supports a sampled-ability alternating routine:
+`fitIRT()` also supports blockwise and direct Laplace fitting:
 
 ``` r
-fit_sampled <- fitIRT(
+fit_laplace <- fitIRT(
   sim$dat,
   pl = 2,
-  sampledAbilityStep = TRUE,
-  sampledAbilityOuterIter = 30,
-  sampledAbilityDiagnostics = TRUE
+  marginalApprox = "laplace_em",
+  laplaceDiagnostics = TRUE
 )
 ```
 
 You can inspect diagnostics with:
 
 ``` r
-plotSampledAbilityDiagnostics(fit_sampled)
+plotLaplaceDiagnostics(fit_laplace)
 ```
 
-For a conceptual overview of the sampled-ability algorithm, see
-[`inst/docs/sampledAbility-algorithm.md`](inst/docs/sampledAbility-algorithm.md).
+For a conceptual overview of the Laplace EM algorithm, see
+[`inst/docs/laplace-em-algorithm.md`](inst/docs/laplace-em-algorithm.md).
 
 ## Notes
 

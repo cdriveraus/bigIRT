@@ -1206,14 +1206,9 @@ bigIRT_laplace_optimize_item <- function(state, sdat, thetaBase, prior_precision
   }
 
   eval_count <- 0L
-  cache_par <- NULL
-  cache_res <- NULL
   get_eval <- function(par){
-    if(!is.null(cache_par) && length(cache_par) == length(par) && identical(cache_par, par)) return(cache_res)
     eval_count <<- eval_count + 1L
-    cache_res <<- bigIRT_laplace_item_objective(par, state, sdat, thetaBase, prior_precision, jitter = jitter, context = context)
-    cache_par <<- par
-    cache_res
+    bigIRT_laplace_item_objective(par, state, sdat, thetaBase, prior_precision, jitter = jitter, context = context)
   }
   target_fg <- function(par){
     res <- get_eval(par)
@@ -1243,7 +1238,7 @@ bigIRT_laplace_optimize_direct <- function(state, sdat, prior_precision,
   niter = 50L, tol = 1e-4, jitter = 1e-6, person_tol = 1e-4,
   keep_covariance = FALSE, cores = 1L, estimateAbilityCorr = FALSE,
   corr_paramization = c("normalized_chol", "stan_corsqrt"),
-  collect_history = FALSE){
+  collect_history = FALSE, plot_callback = NULL, plot_every = 1L){
   corr_paramization <- match.arg(corr_paramization)
   direct_layout <- bigIRT_laplace_direct_layout(sdat, estimateAbilityCorr = estimateAbilityCorr)
   item_layout <- direct_layout[setdiff(names(direct_layout), "corr")]
@@ -1264,18 +1259,15 @@ bigIRT_laplace_optimize_direct <- function(state, sdat, prior_precision,
   }
 
   eval_count <- 0L
-  cache_par <- NULL
-  cache_res <- NULL
   theta_warm <- state$AbilityBase
   history <- list()
   last_value <- NULL
   last_par <- NULL
   last_theta <- NULL
   get_eval <- function(par){
-    if(!is.null(cache_par) && length(cache_par) == length(par) && identical(cache_par, par)) return(cache_res)
     t_eval <- as.numeric(proc.time()[["elapsed"]])
     eval_count <<- eval_count + 1L
-    cache_res <<- bigIRT_laplace_direct_objective(
+    res <- bigIRT_laplace_direct_objective(
       par = par,
       state = state,
       sdat = sdat,
@@ -1289,11 +1281,10 @@ bigIRT_laplace_optimize_direct <- function(state, sdat, prior_precision,
       context = context
     )
     eval_sec <- as.numeric(proc.time()[["elapsed"]]) - t_eval
-    theta_warm <<- cache_res$posterior$theta_mode
-    cache_par <<- par
+    theta_warm <<- res$posterior$theta_mode
     if(isTRUE(collect_history)){
-      cur_theta <- cache_res$posterior$theta_mode
-      cov_arr <- cache_res$posterior$covariance
+      cur_theta <- res$posterior$theta_mode
+      cov_arr <- res$posterior$covariance
       if(!is.null(cov_arr)){
         post_sd <- unlist(lapply(seq_len(dim(cov_arr)[3]), function(ii) sqrt(pmax(diag(cov_arr[,,ii]), 0))))
         mean_post_sd <- mean(post_sd, na.rm = TRUE)
@@ -1304,26 +1295,26 @@ bigIRT_laplace_optimize_direct <- function(state, sdat, prior_precision,
       }
       history[[length(history) + 1L]] <<- list(
         outerIter = eval_count,
-        objective = cache_res$value,
-        relativeImprove = if(is.null(last_value) || !is.finite(last_value) || abs(last_value) < .Machine$double.eps) NA_real_ else abs((cache_res$value - last_value) / last_value),
+        objective = res$value,
+        relativeImprove = if(is.null(last_value) || !is.finite(last_value) || abs(last_value) < .Machine$double.eps) NA_real_ else abs((res$value - last_value) / last_value),
         itemStepRms = if(is.null(last_par)) NA_real_ else sqrt(mean((par - last_par)^2)),
         personStepRms = if(is.null(last_theta)) NA_real_ else sqrt(mean((as.numeric(cur_theta) - as.numeric(last_theta))^2)),
-        itemGradNorm = sqrt(sum(cache_res$approx_grad^2)),
+        itemGradNorm = sqrt(sum(res$approx_grad^2)),
         meanPosteriorSD = mean_post_sd,
         maxPosteriorSD = max_post_sd,
-        personConverged = all(cache_res$posterior$converged),
+        personConverged = all(res$posterior$converged),
         personStepSec = NA_real_,
         itemStepSec = eval_sec,
         refreshStepSec = NA_real_,
         objectiveEvalSec = eval_sec,
         outerIterSec = eval_sec,
         itemTargetEvals = eval_count,
-        itemMaskedGradNorm = sqrt(sum(cache_res$approx_grad^2)),
+        itemMaskedGradNorm = sqrt(sum(res$approx_grad^2)),
         optimizerIter = NA_integer_,
         optimizerTerminate = NA_character_,
         optimizerTerminateValue = NA_real_,
-        personMeanNiter = mean(cache_res$posterior$niter, na.rm = TRUE),
-        personMaxNiter = max(cache_res$posterior$niter, na.rm = TRUE),
+        personMeanNiter = mean(res$posterior$niter, na.rm = TRUE),
+        personMaxNiter = max(res$posterior$niter, na.rm = TRUE),
         strictCriterion = FALSE,
         stabilityCriterion = FALSE,
         recentObjectiveRange = NA_real_,
@@ -1333,21 +1324,24 @@ bigIRT_laplace_optimize_direct <- function(state, sdat, prior_precision,
         strictStreak = 0L,
         stabilityStreak = 0L
       )
-      last_value <<- cache_res$value
+      last_value <<- res$value
       last_par <<- par
       last_theta <<- cur_theta
+      if(!is.null(plot_callback) && (eval_count %% max(1L, as.integer(plot_every)) == 0L)){
+        try(plot_callback(history), silent = TRUE)
+      }
     }
-    cache_res
+    res
   }
   target_fg <- function(par){
     res <- get_eval(par)
     list(fn = -res$value, gr = -res$approx_grad)
   }
   target_fn <- function(par){
-    -get_eval(par)$value
+    target_fg(par)$fn
   }
   target_gr <- function(par){
-    -get_eval(par)$approx_grad
+    target_fg(par)$gr
   }
 
   fit <- mize::mize(
@@ -1360,9 +1354,9 @@ bigIRT_laplace_optimize_direct <- function(state, sdat, prior_precision,
     c1 = 1e-10,
     c2 = 0.9,
     step0 = "schmidt",
-    ls_max_fn = 1L,
-    abs_tol = 0,
-    grad_tol = 0,
+    ls_max_fn = 20L,
+    abs_tol = tol,
+    grad_tol = tol,
     rel_tol = 0,
     step_tol = 0,
     ginf_tol = 0

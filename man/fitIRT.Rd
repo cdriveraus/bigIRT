@@ -58,17 +58,7 @@ fitIRT(
   laplaceDiagnostics = FALSE,
   laplacePlot = FALSE,
   laplacePlotEvery = 1L,
-  sampledAbilityStep = FALSE,
-  sampledAbilityOuterIter = 50,
-  sampledAbilityJitter = 1e-06,
-  sampledAbilitySigmaScale = 0.25,
-  sampledAbilityDiagnostics = FALSE,
-  sampledAbilityPlot = FALSE,
-  sampledAbilityPlotEvery = 1L,
-  sampledAbilityStepTol = 0.001,
-  sampledAbilitySpreadTol = 0.02,
-  sampledAbilityPatience = 3L,
-  sampledAbilityControl = NULL,
+  laplaceJitter = 1e-06,
   noptimsteps = 10,
   noptimgradtol = 0.01,
   normalise = FALSE,
@@ -224,38 +214,8 @@ fitting when \code{marginalApprox="laplace_em"}. Default is FALSE.}
 \item{laplacePlotEvery}{Integer. Plot every N outer iterations when
 \code{laplacePlot=TRUE}. Default is 1.}
 
-\item{sampledAbilityStep}{Logical. Whether to run the Laplace-EM style outer
-updates after the base optimization step. Default is FALSE.}
-
-\item{sampledAbilityOuterIter}{Integer. Number of Laplace-EM outer iterations. Default is 2.}
-
-\item{sampledAbilityJitter}{Numeric. Small jitter added to stabilize Laplace
+\item{laplaceJitter}{Numeric. Small jitter added to stabilize Laplace
 covariance calculations. Default is 1e-6.}
-
-\item{sampledAbilitySigmaScale}{Numeric. Multiplier applied to the deterministic
-Laplace support used in the item-update step. Default is 0.25.}
-
-\item{sampledAbilityDiagnostics}{Logical. Whether to store Laplace-EM diagnostics in
-\code{fit$sampledAbilityDiagnostics}. Default is FALSE.}
-
-\item{sampledAbilityPlot}{Logical. Whether to plot Laplace-EM diagnostics during outer
-iterations. Default is FALSE.}
-
-\item{sampledAbilityPlotEvery}{Integer. Plot Laplace-EM diagnostics every N outer iterations
-when \code{sampledAbilityPlot=TRUE}. Default is 1.}
-
-\item{sampledAbilityStepTol}{Numeric. RMS movement tolerance used by the
-sampled-ability multi-criterion stopping rule. Default is 1e-3.}
-
-\item{sampledAbilitySpreadTol}{Numeric. Relative posterior-spread tolerance
-used by the sampled-ability stopping rule. Default is 0.02.}
-
-\item{sampledAbilityPatience}{Integer. Number of consecutive accepted outer
-iterations required for sampled-ability convergence. Default is 3.}
-
-\item{sampledAbilityControl}{Optional named list of advanced Laplace-EM
-control settings. Flat arguments supply the defaults and entries in
-this list override them.}
 
 \item{noptimsteps}{Integer. Number of optimizer iterations used inside each sampled-ability
 item/person sub-step. Default is 10.}

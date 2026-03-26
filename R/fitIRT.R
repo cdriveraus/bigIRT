@@ -1622,23 +1622,6 @@ bigIRT_plot_sampled_diag_df <- function(diagdf, logGrad = TRUE,
   invisible(diagdf)
 }
 
-#' Plot sampled-ability diagnostics
-#'
-#' @param fit A fitted \code{bigIRT} model returned by \code{fitIRT()} with
-#'   \code{sampledAbilityStep=TRUE}.
-#' @param logGrad Whether to plot gradient norms on the log10 scale.
-#' @param showExtra Whether to include acceptance, sigma-scale, spread-ratio,
-#'   and transformed raw log-likelihood panels when those diagnostics are available.
-#'
-#' @return Invisibly returns the diagnostic data frame used for plotting.
-#' @export
-plotSampledAbilityDiagnostics <- function(fit, logGrad = TRUE, showExtra = TRUE){
-  if(is.null(fit$sampledAbilityDiagnostics) || nrow(fit$sampledAbilityDiagnostics) == 0){
-    stop("No sampled-ability diagnostics found on fit object.")
-  }
-  bigIRT_plot_sampled_diag_df(fit$sampledAbilityDiagnostics, logGrad = logGrad, showExtra = showExtra)
-}
-
 bigIRT_plot_laplace_diag_df <- function(diagdf, logGrad = TRUE, showTiming = TRUE){
   if(is.null(diagdf) || nrow(diagdf) == 0) return(invisible(NULL))
 
@@ -1705,6 +1688,12 @@ bigIRT_plot_laplace_diag_df <- function(diagdf, logGrad = TRUE, showTiming = TRU
   }
 
   invisible(diagdf)
+}
+
+bigIRT_refresh_plot_device <- function(){
+  try(utils::flush.console(), silent = TRUE)
+  try(grDevices::dev.flush(), silent = TRUE)
+  invisible(NULL)
 }
 
 #' Plot Laplace diagnostics
@@ -1853,8 +1842,6 @@ plotLaplaceDiagnostics <- function(fit, logGrad = TRUE, showTiming = TRUE){
 #' @param estMeans Character vector. Which means to estimate from 'ability', 'A', 'B', 'C', 'D'. Default is c('ability', 'B', 'C', 'D'), with
 #' discrimination means fixed.
 #' @param priors Logical. Whether to use prior distributions. Default is TRUE.
-#' @param sampledAbilityStep Logical. Whether to run the Laplace-EM style outer
-#'   updates after the base optimization step. Default is FALSE.
 #' @param marginalApprox Character. Marginal approximation backend. Use
 #'   \code{"none"} for the legacy Stan/JML path, \code{"laplace_em"} for the
 #'   pure-C++ Laplace marginal-likelihood outer loop, and
@@ -1890,30 +1877,12 @@ plotLaplaceDiagnostics <- function(fit, logGrad = TRUE, showTiming = TRUE){
 #'   fitting when \code{marginalApprox="laplace_em"}. Default is FALSE.
 #' @param laplacePlotEvery Integer. Plot every N outer iterations when
 #'   \code{laplacePlot=TRUE}. Default is 1.
-#' @param sampledAbilityOuterIter Integer. Number of Laplace-EM outer iterations. Default is 2.
-#' @param sampledAbilityJitter Numeric. Small jitter added to stabilize Laplace
+#' @param laplaceJitter Numeric. Small jitter added to stabilize Laplace
 #'   covariance calculations. Default is 1e-6.
-#' @param sampledAbilitySigmaScale Numeric. Multiplier applied to the deterministic
-#'   Laplace support used in the item-update step. Default is 0.25.
-#' @param sampledAbilityDiagnostics Logical. Whether to store Laplace-EM diagnostics in
-#'   \code{fit$sampledAbilityDiagnostics}. Default is FALSE.
-#' @param sampledAbilityPlot Logical. Whether to plot Laplace-EM diagnostics during outer
-#'   iterations. Default is FALSE.
-#' @param sampledAbilityPlotEvery Integer. Plot Laplace-EM diagnostics every N outer iterations
-#'   when \code{sampledAbilityPlot=TRUE}. Default is 1.
-#' @param sampledAbilityStepTol Numeric. RMS movement tolerance used by the
-#'   sampled-ability multi-criterion stopping rule. Default is 1e-3.
-#' @param sampledAbilitySpreadTol Numeric. Relative posterior-spread tolerance
-#'   used by the sampled-ability stopping rule. Default is 0.02.
-#' @param sampledAbilityPatience Integer. Number of consecutive accepted outer
-#'   iterations required for sampled-ability convergence. Default is 3.
-#' @param sampledAbilityControl Optional named list of advanced Laplace-EM
-#'   control settings. Flat arguments supply the defaults and entries in
-#'   this list override them.
-#' @param noptimsteps Integer. Number of optimizer iterations used inside each sampled-ability
-#'   item/person sub-step. Default is 10.
-#' @param noptimgradtol Numeric. Convergence tolerance for combined sampled-ability gradient norm.
-#'   Default is 1e-2.
+#' @param noptimsteps Integer. Number of optimizer iterations used inside each
+#'   Laplace item step. Default is 10.
+#' @param noptimgradtol Numeric. Reserved gradient tolerance for internal
+#'   optimizer configuration. Default is 1e-2.
 #' @param normalise Logical. Whether to normalize the output estimates. Default is FALSE.
 #' @param normaliseScale Numeric. Scale for normalization. Default is 1.
 #' @param normaliseMean Numeric. Mean for normalization. Default is 0.
@@ -1961,8 +1930,8 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   DitemPreds=character(),
   itemSpecificBetas=FALSE,
   betaScale=10,
-  invspAMeandat=.542,invspASD=1,BMeandat=0,BSD=10, logitCMeandat=-4,logitCSD=4,
-  logitDMeandat=4,logitDSD=4,
+  invspAMeandat=.542,invspASD=1,BMeandat=0,BSD=10, logitCMeandat=0,logitCSD=2,
+  logitDMeandat=0,logitDSD=2,
   AbilityMeandat=array(0,dim=c(length(unique(dat[[scale]])))),
   AbilitySD=array(10,dim=c(length(unique(dat[[scale]])))),
   AbilityCorr=diag(1,c(length(unique(dat[[scale]])))),
@@ -1974,13 +1943,9 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   marginalApprox=c("none","laplace_em","laplace_direct"),
   estimateAbilityCorr=FALSE,
   laplaceCorrParam=c("normalized_chol","stan_corsqrt"),
-  laplaceOuterIter=50,laplaceTol=1e-3,laplaceGradTol=1e-2,laplaceStabilityIter=5L,laplacePersonTol=1e-4,
+  laplaceOuterIter=500,laplaceTol=1e-3,laplaceGradTol=1e-2,laplaceStabilityIter=5L,laplacePersonTol=1e-4,
   laplaceKeepCovariance=FALSE,laplaceDiagnostics=FALSE,laplacePlot=FALSE,laplacePlotEvery=1L,
-  sampledAbilityStep=FALSE,sampledAbilityOuterIter=50,sampledAbilityJitter=1e-6,
-  sampledAbilitySigmaScale=0.25,sampledAbilityDiagnostics=FALSE,
-  sampledAbilityPlot=FALSE,sampledAbilityPlotEvery=1L,
-  sampledAbilityStepTol=1e-3,sampledAbilitySpreadTol=0.02,
-  sampledAbilityPatience=3L,sampledAbilityControl=NULL,noptimsteps=10,
+  laplaceJitter=1e-6,noptimsteps=10,
   noptimgradtol=1e-2,
   normalise=FALSE,normaliseScale=1,normaliseMean=0,
   dropPerfectScores=TRUE,trainingRows=1:nrow(dat),
@@ -2303,7 +2268,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     rowIndexPar=0L,
     originalRow=dat$`.originalRow`,
     doGenQuant=0L,
-    doRowEff=as.integer(isTRUE(sampledAbilityStep) || identical(marginalApprox, "laplace_em"))
+    doRowEff=as.integer(identical(marginalApprox, "laplace_em") || identical(marginalApprox, "laplace_direct"))
   ))
 
   sdat$freeAref=array(as.integer(cumsum(1-as.numeric(sdat$fixedAlog))))
@@ -2416,7 +2381,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   if(ebayes) JMLseq[[length(JMLseq)+1]] <- list(est=c('A','B','C',',D','Ability'),ebayes=TRUE,narrowPriors=FALSE)
 
   fit <- NA
-  if(!sampledAbilityStep && !identical(marginalApprox, "laplace_em") && !identical(marginalApprox, "laplace_direct")){
+  if(!identical(marginalApprox, "laplace_em") && !identical(marginalApprox, "laplace_direct")){
     for(i in 1:length(JMLseq)){
       if(i < length(JMLseq)) tol= basetol*ifelse(JMLseq[[i]]$narrowPriors,100,10) else tol = basetol
       fit <- JMLfit(est = JMLseq[[i]]$est,sdat = sdat, ebayes=JMLseq[[i]]$ebayes,
@@ -2436,6 +2401,13 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     laplace_trace <- function(level, ...){
       if(laplaceVerbose >= level) message(...)
     }
+    direct_plot_callback <- if(isTRUE(laplacePlot)) {
+      function(history){
+        diagdf <- data.table::rbindlist(history, fill = TRUE)
+        bigIRT_plot_laplace_diag_df(diagdf)
+        bigIRT_refresh_plot_device()
+      }
+    } else NULL
     wall_time_sec <- function() as.numeric(proc.time()[["elapsed"]])
     estimateAbilityCorrRequested <- isTRUE(estimateAbilityCorr)
     estimateAbilityCorr <- estimateAbilityCorrRequested && sdat$Nscales > 1L
@@ -2451,8 +2423,8 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
       warning("laplace_direct currently keeps Abilitybeta fixed during direct Laplace optimization when person predictors are present.")
     }
 
-    state <- bigIRT_laplace_initial_state(sdat, eps = sampledAbilityJitter, corr_paramization = laplaceCorrParam)
-    priorInfo <- bigIRT_laplace_prior_mats(sdat, jitter = sampledAbilityJitter)
+    state <- bigIRT_laplace_initial_state(sdat, eps = laplaceJitter, corr_paramization = laplaceCorrParam)
+    priorInfo <- bigIRT_laplace_prior_mats(sdat, jitter = laplaceJitter)
     priorPrecision <- priorInfo$precision_array
     laplace_trace(1, sprintf(
       "Direct Laplace: starting prior-anchored fit with %d persons, %d items, %d dimensions, max_iter=%d.",
@@ -2465,13 +2437,15 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
       prior_precision = priorPrecision,
       niter = max(2L, as.integer(laplaceOuterIter)),
       tol = laplaceTol,
-      jitter = sampledAbilityJitter,
+      jitter = laplaceJitter,
       person_tol = laplacePersonTol,
       keep_covariance = TRUE,
       cores = cores,
       estimateAbilityCorr = estimateAbilityCorr,
       corr_paramization = laplaceCorrParam,
-      collect_history = collectDirectDiag
+      collect_history = collectDirectDiag,
+      plot_callback = direct_plot_callback,
+      plot_every = laplacePlotEvery
     )
     directSec <- wall_time_sec() - t_direct
     state <- directFit$state
@@ -2487,7 +2461,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
       par = directFit$optim$par,
       target_evals = directFit$optim$target_evals,
       masked_grad_norm = directFit$optim$masked_grad_norm,
-      iter = if(!is.null(directFit$optim$iter)) directFit$optim$iter else NA_integer_,
+      iter = directFit$optim$iter,
       terminate = directFit$optim$terminate
     )
     fit$dat <- sdat
@@ -2502,11 +2476,12 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
       converged = finalPosterior$converged
     )
     direct_terminate <- if(!is.null(directFit$optim$terminate$what)) as.character(directFit$optim$terminate$what) else "unknown"
-    direct_converged <- isTRUE(directFit$optim$masked_grad_norm < laplaceGradTol)
+    directDiag <- if(length(directFit$history)) data.table::rbindlist(directFit$history, fill = TRUE) else NULL
+    strict_direct <- isTRUE(directFit$optim$masked_grad_norm < laplaceGradTol)
     fit$laplaceStatus <- list(
-      converged = isTRUE(direct_converged),
-      reason = if(isTRUE(direct_converged)) "approx_gradient" else "max_iter",
-      outer_iters = if(!is.null(directFit$optim$iter)) as.integer(directFit$optim$iter) else max(1L, as.integer(laplaceOuterIter)),
+      converged = strict_direct,
+      reason = if(isTRUE(strict_direct)) "approx_gradient" else "max_iter",
+      outer_iters = if(!is.null(directFit$optim$iter)) directFit$optim$iter else max(2L, as.integer(laplaceOuterIter)),
       beta_frozen = sdat$NpersonPreds > 0,
       initialized_from = "prior_anchored",
       direct_objective = TRUE,
@@ -2526,11 +2501,25 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     )
     if(isTRUE(collectDirectDiag)){
       if(length(directFit$history)){
-        fit$laplaceDiagnostics <- data.table::rbindlist(directFit$history, fill = TRUE)
+        fit$laplaceDiagnostics <- directDiag
         fit$laplaceDiagnostics[, strictCriterion := itemGradNorm < laplaceGradTol]
-        fit$laplaceDiagnostics[, strictStreak := cumsum(ifelse(strictCriterion, 1L, 0L)) - cummax(cumsum(ifelse(!strictCriterion, 1L, 0L)))]
-        fit$laplaceDiagnostics[, stabilityCriterion := FALSE]
-        fit$laplaceDiagnostics[, stabilityStreak := 0L]
+        fit$laplaceDiagnostics[, strictStreak := {
+          out <- integer(.N)
+          streak <- 0L
+          for(ii in seq_len(.N)){
+            streak <- if(isTRUE(strictCriterion[ii])) streak + 1L else 0L
+            out[ii] <- streak
+          }
+          out
+        }]
+        fit$laplaceDiagnostics[, `:=`(
+          stabilityCriterion = NA,
+          recentObjectiveRange = NA_real_,
+          recentGradRelChange = NA_real_,
+          recentItemStepMean = NA_real_,
+          recentPersonStepMean = NA_real_,
+          stabilityStreak = NA_integer_
+        )]
       } else {
         fit$laplaceDiagnostics <- data.table::data.table(
           outerIter = 1L,
@@ -2555,17 +2544,20 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
           personMeanNiter = mean(finalPosterior$niter, na.rm = TRUE),
           personMaxNiter = max(finalPosterior$niter, na.rm = TRUE),
           strictCriterion = fit$laplaceStatus$converged,
-          stabilityCriterion = FALSE,
+          stabilityCriterion = NA,
           recentObjectiveRange = NA_real_,
           recentGradRelChange = NA_real_,
           recentItemStepMean = NA_real_,
           recentPersonStepMean = NA_real_,
           strictStreak = if(fit$laplaceStatus$converged) 1L else 0L,
-          stabilityStreak = 0L
+          stabilityStreak = NA_integer_
         )
       }
       if(isTRUE(laplacePlot)){
-        try(bigIRT_plot_laplace_diag_df(fit$laplaceDiagnostics), silent = TRUE)
+        try({
+          bigIRT_plot_laplace_diag_df(fit$laplaceDiagnostics)
+          bigIRT_refresh_plot_device()
+        }, silent = TRUE)
       }
     }
     laplace_trace(1, sprintf(
@@ -2608,8 +2600,8 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
       warning("laplace_em currently keeps Abilitybeta fixed during the Laplace outer loop when person predictors are present.")
     }
 
-    state <- bigIRT_laplace_initial_state(sdat, eps = sampledAbilityJitter)
-    priorPrecision <- bigIRT_laplace_prior_precision_array(sdat, jitter = sampledAbilityJitter)
+    state <- bigIRT_laplace_initial_state(sdat, eps = laplaceJitter)
+    priorPrecision <- bigIRT_laplace_prior_precision_array(sdat, jitter = laplaceJitter)
     laplaceDiag <- list()
     lastObjective <- NA_real_
     strictConvergedStreak <- 0L
@@ -2652,7 +2644,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
         state = state,
         sdat = sdat,
         prior_precision = priorPrecision,
-        jitter = sampledAbilityJitter,
+        jitter = laplaceJitter,
         max_iter = max(4, as.integer(noptimsteps * 2L)),
         tol = laplacePersonTol,
         keep_covariance = isTRUE(laplaceKeepCovariance) || isTRUE(laplaceDiagnostics),
@@ -2670,7 +2662,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
         prior_precision = priorPrecision,
         niter = max(2L, as.integer(noptimsteps)),
         tol = laplaceTol,
-        jitter = sampledAbilityJitter,
+        jitter = laplaceJitter,
         cores = cores
       )
       itemStepSec <- wall_time_sec() - t_item
@@ -2682,7 +2674,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
         state = state,
         sdat = sdat,
         prior_precision = priorPrecision,
-        jitter = sampledAbilityJitter,
+        jitter = laplaceJitter,
         max_iter = max(20L, as.integer(noptimsteps * 2L)),
         tol = laplacePersonTol,
         keep_covariance = TRUE,
@@ -2699,7 +2691,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
         sdat = sdat,
         thetaBase = state$AbilityBase,
         prior_precision = priorPrecision,
-        jitter = sampledAbilityJitter
+        jitter = laplaceJitter
       )
       objectiveEvalSec <- wall_time_sec() - t_eval
       itemStepRms <- if(length(itemBase)) sqrt(mean((bigIRT_laplace_pack_item_state(state, sdat) - itemBase)^2)) else 0
@@ -2782,6 +2774,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
 
       if(isTRUE(laplacePlot) && (outeri %% max(1L, as.integer(laplacePlotEvery)) == 0L)){
         bigIRT_plot_laplace_diag_df(data.table::rbindlist(laplaceDiag, fill = TRUE), logGrad = TRUE, showTiming = TRUE)
+        bigIRT_refresh_plot_device()
       }
 
       laplace_trace(1, sprintf(
@@ -2831,7 +2824,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
         state = state,
         sdat = sdat,
         prior_precision = priorPrecision,
-        jitter = sampledAbilityJitter,
+        jitter = laplaceJitter,
         max_iter = max(20L, as.integer(noptimsteps * 2L)),
         tol = laplacePersonTol,
         keep_covariance = TRUE,
@@ -2845,7 +2838,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
         sdat = sdat,
         thetaBase = state$AbilityBase,
         prior_precision = priorPrecision,
-        jitter = sampledAbilityJitter
+        jitter = laplaceJitter
       )$value
     }
 
@@ -2864,327 +2857,6 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     if(collectLaplaceDiag){
       fit$laplaceDiagnostics <- data.table::rbindlist(laplaceDiag, fill = TRUE)
     }
-  }
-
-  if(sampledAbilityStep && length(which(sdat$Abilityparsindex > 0)) > 0){
-    # Laplace-EM outer loop:
-    # 1. update person modes conditional on the current item state,
-    # 2. refresh the Laplace posterior and deterministic support,
-    # 3. update item parameters against the frozen posterior support,
-    # 4. evaluate convergence on the resulting outer iterate.
-    #
-    # This intentionally avoids the old sampled-ability acceptance/rejection
-    # state machine. The earlier scheme mixed JML-style person updates with
-    # uncertainty-aware item updates and required a large amount of damping and
-    # sigma-scale bookkeeping to stay stable. Here we use a simpler generalized
-    # EM structure: frozen Laplace posterior in the M-step, then refresh.
-    layout <- bigIRT_param_layout(sdat)
-    sampledAbilityHistory <- list()
-    sampledAbilityDiag <- list()
-    sampledAbilityTiming <- list()
-    collectSampledAbilityDiag <- isTRUE(sampledAbilityDiagnostics) || isTRUE(sampledAbilityPlot)
-    optimdots <- list(...)
-    sampledVerbose <- if("verbose" %in% names(optimdots)) optimdots$verbose else 0
-    sampledPlot <- if("plot" %in% names(optimdots)) optimdots$plot else 0
-    sampledOpt <- bigIRT_sampled_optimizer_setup(
-      standata = sdat,
-      cores = cores,
-      verbose = sampledVerbose,
-      plot = sampledPlot
-    )
-    on.exit(sampledOpt$cleanup(), add = TRUE)
-    sampled_step <- function(init, objective){
-      bigIRT_sampled_optimizer_step(
-        engine = sampledOpt,
-        objective = objective,
-        Niter = noptimsteps,
-        tol = basetol,
-        init = init,
-        materialize_fit = FALSE
-      )
-    }
-    wall_time_sec <- function() as.numeric(proc.time()[["elapsed"]])
-    fullInit <- if(is.na(init[1])) rep(0, sampledOpt$npars_full) else init
-    if(sampledAbilityOuterIter < 1) stop("sampledAbilityOuterIter must be >= 1 when sampledAbilityStep=TRUE.")
-    sampledControl <- bigIRT_sampled_build_control(
-      sampledAbilitySigmaScale = sampledAbilitySigmaScale,
-      sampledAbilityStepTol = sampledAbilityStepTol,
-      sampledAbilitySpreadTol = sampledAbilitySpreadTol,
-      sampledAbilityPatience = sampledAbilityPatience,
-      sampledAbilityControl = sampledAbilityControl,
-      noptimgradtol = noptimgradtol
-    )
-    currentPar <- fullInit
-    posterior <- NULL
-    priorSD <- pmax(as.numeric(sdat$AbilitySD), sampledAbilityJitter)
-    priorCov <- diag(priorSD, length(priorSD)) %*% sdat$AbilityCorr %*% diag(priorSD, length(priorSD))
-    sampledPriorPrec <- solve(priorCov + diag(sampledAbilityJitter, nrow(priorCov)))
-    acceptedWindow <- list()
-    acceptedOuterIter <- 0L
-    rejectedOuterIter <- 0L
-    worseningConsecutive <- 0L
-    lastObservedCombinedGrad <- NA_real_
-    lastAcceptedPosteriorMetrics <- NULL
-    sampledStatus <- list(
-      converged = FALSE,
-      reason = "max_outer_iter",
-      accepted_outer_iters = 0L,
-      rejected_outer_iters = 0L
-    )
-    fit <- NULL
-
-    for(outeri in seq_len(sampledAbilityOuterIter)){
-      sigmaScaleUsed <- sampledControl$sigmaScale
-      basePar <- currentPar
-      rejectReason <- ""
-      personStepDamping <- 1
-      itemStepDamping <- 1
-      personObjectiveBefore <- NA_real_
-      personObjectiveAfter <- NA_real_
-      itemObjectiveBefore <- NA_real_
-      itemObjectiveAfter <- NA_real_
-      meanPosteriorSD_ratio <- NA_real_
-      maxPosteriorSD_ratio <- NA_real_
-      personOptElapsed <- 0
-      posteriorElapsed <- 0
-      itemOptElapsed <- 0
-      itemTargetEvals <- 0L
-      itemLogProbEvals <- 0L
-      itemGradNorm <- NA_real_
-      combinedGradNorm <- NA_real_
-      acceptedOuter <- TRUE
-      personDiagRow <- NULL
-      itemDiagRow <- NULL
-      personFit <- NULL
-      itemFit <- NULL
-
-      message(paste0("Laplace EM outer step ", outeri, ": person update"))
-      personObjective <- bigIRT_sampled_make_objective(
-        engine = sampledOpt,
-        free_par_index = layout$person,
-        fixed_par_full = basePar
-      )
-      t0_person_opt <- wall_time_sec()
-      personStep <- sampled_step(
-        init = basePar[layout$person],
-        objective = personObjective
-      )
-      personOptElapsed <- wall_time_sec() - t0_person_opt
-      personGradNorm <- personStep$optim$masked_grad_norm
-      personTargetEvals <- if(!is.null(personStep$optim$target_evals)) personStep$optim$target_evals else NA_integer_
-      personLogProbEvals <- if(!is.null(personStep$optim$logprob_evals)) personStep$optim$logprob_evals else NA_integer_
-      personObjectiveBefore <- bigIRT_sampled_eval_objective(personObjective, basePar)
-      personObjectiveAfter <- bigIRT_sampled_eval_objective(personObjective, personStep$optim$par)
-      personFit <- bigIRT_sampled_materialize_fit(
-        sampledOpt,
-        personStep$optim$par,
-        optim = utils::modifyList(personStep$optim, list(par = personStep$optim$par))
-      )
-      personFit <- apply_fit_dimnames(personFit)
-
-      t0_post <- wall_time_sec()
-      postSigma <- bigIRT_person_posterior_and_sigma(
-        fit = personFit,
-        sdat = sdat,
-        layout = layout,
-        jitter = sampledAbilityJitter,
-        sigmaScale = sigmaScaleUsed,
-        priorPrec = sampledPriorPrec
-      )
-      posteriorCandidate <- postSigma$posterior
-      posteriorElapsed <- wall_time_sec() - t0_post
-      sigmaTemplates <- postSigma$sigmaTemplates
-      posteriorMetrics <- bigIRT_sampled_posterior_metrics(posteriorCandidate)
-      if(!is.null(lastAcceptedPosteriorMetrics)){
-        meanPosteriorSD_ratio <- posteriorMetrics$meanPosteriorSD / pmax(lastAcceptedPosteriorMetrics$meanPosteriorSD, sampledAbilityJitter)
-        maxPosteriorSD_ratio <- posteriorMetrics$maxPosteriorSD / pmax(lastAcceptedPosteriorMetrics$maxPosteriorSD, sampledAbilityJitter)
-      } else {
-        meanPosteriorSD_ratio <- 1
-        maxPosteriorSD_ratio <- 1
-      }
-      if(collectSampledAbilityDiag && !is.null(personFit)){
-        personDiagRow <- bigIRT_sampled_diag_snapshot(
-          personFit,
-          layout,
-          stage = "person",
-          outerIter = outeri,
-          posterior = posteriorCandidate,
-          sigmaScale = sigmaScaleUsed,
-          sigmaScaleUsed = sigmaScaleUsed,
-          personGradNorm = personGradNorm,
-          prevPar = basePar,
-          accepted = NA,
-          rejected = NA,
-          personStepDamping = personStepDamping,
-          personObjectiveBefore = personObjectiveBefore,
-          personObjectiveAfter = personObjectiveAfter,
-          meanPosteriorSD_ratio = meanPosteriorSD_ratio,
-          maxPosteriorSD_ratio = maxPosteriorSD_ratio
-        )
-      }
-
-      message(paste0("Laplace EM outer step ", outeri, ": item update"))
-      itemObjective <- bigIRT_sampled_make_objective(
-        engine = sampledOpt,
-        free_par_index = layout$item,
-        fixed_par_full = personStep$optim$par,
-        fixed_par_samples = sigmaTemplates$samples,
-        sample_weights = sigmaTemplates$weights
-      )
-      t0_item_opt <- wall_time_sec()
-      itemStep <- sampled_step(
-        init = personStep$optim$par[layout$item],
-        objective = itemObjective
-      )
-      itemOptElapsed <- wall_time_sec() - t0_item_opt
-      itemGradNorm <- itemStep$optim$masked_grad_norm
-      itemTargetEvals <- if(!is.null(itemStep$optim$target_evals)) itemStep$optim$target_evals else NA_integer_
-      itemLogProbEvals <- if(!is.null(itemStep$optim$logprob_evals)) itemStep$optim$logprob_evals else NA_integer_
-      itemObjectiveBefore <- bigIRT_sampled_eval_objective(itemObjective, personStep$optim$par)
-      itemObjectiveAfter <- bigIRT_sampled_eval_objective(itemObjective, itemStep$optim$par)
-      combinedGradNorm <- suppressWarnings(sqrt(itemGradNorm^2 + personGradNorm^2))
-      itemFit <- bigIRT_sampled_materialize_fit(
-        sampledOpt,
-        itemStep$optim$par,
-        optim = utils::modifyList(itemStep$optim, list(par = itemStep$optim$par))
-      )
-      itemFit <- apply_fit_dimnames(itemFit)
-
-      totalOuterElapsed <- itemOptElapsed + personOptElapsed + posteriorElapsed
-      if(collectSampledAbilityDiag && !is.null(personDiagRow)){
-        personDiagRow$accepted <- acceptedOuter
-        personDiagRow$rejected <- FALSE
-        personDiagRow$reject_reason <- ""
-        personDiagRow$itemGradNorm <- itemGradNorm
-        personDiagRow$combinedGradNorm <- sqrt(sum(c(itemGradNorm, personGradNorm)^2, na.rm = TRUE))
-        sampledAbilityDiag[[length(sampledAbilityDiag)+1]] <- personDiagRow
-      }
-      if(collectSampledAbilityDiag && !is.null(itemFit)){
-        itemDiagRow <- bigIRT_sampled_diag_snapshot(
-          itemFit,
-          layout,
-          stage = "item",
-          outerIter = outeri,
-          posterior = posteriorCandidate,
-          sigmaScale = sigmaScaleUsed,
-          sigmaScaleUsed = sigmaScaleUsed,
-          itemGradNorm = itemGradNorm,
-          personGradNorm = personGradNorm,
-          prevPar = personStep$optim$par,
-          accepted = acceptedOuter,
-          rejected = FALSE,
-          reject_reason = "",
-          personStepDamping = personStepDamping,
-          itemStepDamping = itemStepDamping,
-          personObjectiveBefore = personObjectiveBefore,
-          personObjectiveAfter = personObjectiveAfter,
-          itemObjectiveBefore = itemObjectiveBefore,
-          itemObjectiveAfter = itemObjectiveAfter,
-          meanPosteriorSD_ratio = meanPosteriorSD_ratio,
-          maxPosteriorSD_ratio = maxPosteriorSD_ratio
-        )
-        sampledAbilityDiag[[length(sampledAbilityDiag)+1]] <- itemDiagRow
-      }
-      currentPar <- itemStep$optim$par
-      fit <- itemFit
-      posterior <- posteriorCandidate
-      acceptedOuterIter <- acceptedOuterIter + 1L
-      if(bigIRT_sampled_gradient_worsened(combinedGradNorm, lastObservedCombinedGrad)){
-        worseningConsecutive <- worseningConsecutive + 1L
-      } else if(is.finite(combinedGradNorm)) {
-        worseningConsecutive <- 0L
-      }
-      if(is.finite(combinedGradNorm)) lastObservedCombinedGrad <- combinedGradNorm
-
-      acceptedMetrics <- list(
-        accepted = TRUE,
-        combinedGradNorm = combinedGradNorm,
-        itemStepRms = if(!is.null(itemDiagRow)) itemDiagRow$itemStepRms else sqrt(mean((currentPar[layout$item] - personStep$optim$par[layout$item])^2)),
-        personStepRms = if(!is.null(personDiagRow)) personDiagRow$personStepRms else sqrt(mean((personStep$optim$par[layout$person] - basePar[layout$person])^2)),
-        meanPosteriorSD_ratio = meanPosteriorSD_ratio
-      )
-      acceptedWindow <- bigIRT_sampled_update_window(acceptedWindow, acceptedMetrics, sampledControl)
-      sampledAbilityHistory[[length(sampledAbilityHistory)+1]] <- list(
-        outerIter = outeri,
-        AbilityMeandat = posterior$meanPrior,
-        AbilitySD = posterior$sdPrior,
-        AbilityCorr = posterior$corrPrior,
-        sigmaScale = sigmaScaleUsed,
-        itemGradNorm = itemGradNorm,
-        personGradNorm = personGradNorm,
-        combinedGradNorm = combinedGradNorm,
-        meanPosteriorSD_ratio = meanPosteriorSD_ratio,
-        maxPosteriorSD_ratio = maxPosteriorSD_ratio,
-        timing = list(
-          item_opt_sec = itemOptElapsed,
-          person_opt_sec = personOptElapsed,
-          posterior_sec = posteriorElapsed,
-          total_sec = totalOuterElapsed
-        )
-      )
-      lastAcceptedPosteriorMetrics <- posteriorMetrics
-      if(bigIRT_sampled_window_converged(acceptedWindow, sampledControl)){
-        sampledStatus$converged <- TRUE
-        sampledStatus$reason <- "accepted_window_below_tolerance"
-      }
-
-      sampledAbilityTiming[[length(sampledAbilityTiming)+1]] <- data.frame(
-        outerIter = as.integer(outeri),
-        stage = "outer",
-        accepted = acceptedOuter,
-        rejected = FALSE,
-        reject_reason = "",
-        sigmaScaleUsed = sigmaScaleUsed,
-        personStepDamping = personStepDamping,
-        itemStepDamping = itemStepDamping,
-        personObjectiveBefore = personObjectiveBefore,
-        personObjectiveAfter = personObjectiveAfter,
-        itemObjectiveBefore = itemObjectiveBefore,
-        itemObjectiveAfter = itemObjectiveAfter,
-        meanPosteriorSD_ratio = meanPosteriorSD_ratio,
-        maxPosteriorSD_ratio = maxPosteriorSD_ratio,
-        cumulativeMeanPosteriorSD_ratio = NA_real_,
-        cumulativeMaxPosteriorSD_ratio = NA_real_,
-        sdAbility_ratio = NA_real_,
-        combinedGradNorm = combinedGradNorm,
-        person_opt_sec = personOptElapsed,
-        posterior_sec = posteriorElapsed,
-        item_opt_sec = itemOptElapsed,
-        person_target_evals = as.integer(personTargetEvals),
-        item_target_evals = as.integer(itemTargetEvals),
-        person_logprob_evals = as.integer(personLogProbEvals),
-        item_logprob_evals = as.integer(itemLogProbEvals),
-        total_sec = totalOuterElapsed
-      )
-
-      if(collectSampledAbilityDiag && isTRUE(sampledAbilityPlot) && outeri %% sampledAbilityPlotEvery == 0){
-        diagdf <- data.table::rbindlist(sampledAbilityDiag, fill = TRUE)
-        try(bigIRT_plot_sampled_diag_df(as.data.frame(diagdf)), silent = TRUE)
-      }
-
-      sampledStatus$accepted_outer_iters <- acceptedOuterIter
-      sampledStatus$rejected_outer_iters <- rejectedOuterIter
-      if(isTRUE(sampledStatus$converged)){
-        message(paste0("Laplace EM outer steps converged at iteration ", outeri,
-          " with combined gradient norm ", signif(combinedGradNorm, 4)))
-        break
-      }
-      if(worseningConsecutive >= sampledControl$max_worsening_outer){
-        sampledStatus$reason <- "repeated_worsening_combined_gradient"
-        break
-      }
-    }
-    if(is.null(fit)){
-      fit <- apply_fit_dimnames(bigIRT_sampled_materialize_fit(sampledOpt, currentPar, optim = list(par = currentPar)))
-    }
-    fit$sampledAbilityHistory <- sampledAbilityHistory
-    fit$sampledAbilityTiming <- as.data.frame(data.table::rbindlist(sampledAbilityTiming, fill = TRUE))
-    if(collectSampledAbilityDiag){
-      fit$sampledAbilityDiagnostics <- as.data.frame(data.table::rbindlist(sampledAbilityDiag, fill = TRUE))
-    }
-    fit$sampledAbilityControl <- sampledControl
-    fit$sampledAbilityStatus <- sampledStatus
-    fit$personPosterior <- posterior
   }
 
   if(normalise){   #normalise pars
@@ -3297,7 +2969,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
 
   fit$personPars <- data.frame(id=rownames(fit$pars$Ability),fit$pars$Ability)
   colnames(fit$personPars)[1] = id
-  if((isTRUE(sampledAbilityStep) || identical(marginalApprox, "laplace_em")) && !is.null(fit$pars$sAbilitySD)){
+  if(identical(marginalApprox, "laplace_em") && !is.null(fit$pars$sAbilitySD)){
     abilitySD <- fit$pars$sAbilitySD
     if(is.null(dim(abilitySD))) abilitySD <- matrix(abilitySD, ncol = ncol(fit$pars$Ability))
     colnames(abilitySD) <- paste0(colnames(fit$pars$Ability), "_SD")

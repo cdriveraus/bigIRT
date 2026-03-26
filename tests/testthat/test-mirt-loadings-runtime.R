@@ -94,7 +94,7 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     expect_true(all(c("A", "A_1", "A_2") %in% colnames(fit$itemPars)))
   })
 
-  test_that("runtime sampled-ability fit exposes Stan row-effective outputs", {
+  test_that("runtime laplace fit exposes row-effective outputs", {
     set.seed(103)
     sim <- simIRT(
       Nsubs = 24,
@@ -116,8 +116,8 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
       iter = 10,
       priors = TRUE,
       ebayes = FALSE,
-      sampledAbilityStep = TRUE,
-      sampledAbilityOuterIter = 1,
+      marginalApprox = "laplace_em",
+      laplaceOuterIter = 1,
       noptimsteps = 5,
       dropPerfectScores = FALSE,
       normalise = FALSE,
@@ -138,10 +138,7 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     expect_true(!is.null(fit$rowEffective))
     expect_equal(length(fit$rowEffective$b), fit$dat$Nobs)
     expect_equal(dim(fit$rowEffective$loadings), c(fit$dat$Nobs, fit$dat$Nscales))
-    expect_equal(fit$personPosterior$backend, "cpp_sigma")
-    expect_true(is.null(fit$personPosterior$cov))
-    expect_true(is.matrix(fit$personPosterior$posteriorSDMat))
-    expect_true(all(is.finite(fit$personPosterior$posteriorSDMat)))
-    expect_false("precision" %in% names(fit$personPosterior))
+    expect_true(is.matrix(fit$personPosterior$precision))
+    expect_true(is.array(fit$personPosterior$covariance) || is.null(fit$personPosterior$covariance))
   })
 }
