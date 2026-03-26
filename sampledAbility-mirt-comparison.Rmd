@@ -154,7 +154,12 @@ mirt_fit_status
 rmse <- function(x, y) sqrt(mean((x - y)^2))
 
 calc_observed_nll <- function(fit){
-  p_obs <- pmin(pmax(bigIRT:::checkP(fit), 1e-10), 1 - 1e-10)
+  p_obs <- fit$pars$p
+  if(is.null(p_obs)){
+    pcorrect <- fit$pars$pcorrect
+    p_obs <- sim$dat$score * pcorrect + (1 - sim$dat$score) * (1 - pcorrect)
+  }
+  p_obs <- pmin(pmax(p_obs, 1e-10), 1 - 1e-10)
   -mean(log(p_obs))
 }
 
@@ -183,11 +188,13 @@ comparison <- compareIRTmodels(comparison_inputs)
 model_states <- c(
   list(
     JML = list(
-      p_obs = fit_jml$pars$pcorrect,
+      pcorrect = fit_jml$pars$pcorrect,
+      p_obs = fit_jml$pars$p,
       observed_nll = calc_observed_nll(fit_jml)
     ),
     LaplaceDirect = list(
-      p_obs = fit_laplace$pars$pcorrect,#sim$dat$score * fit_laplace$pars$pcorrect + (1 - sim$dat$score) * (1 - fit_laplace$pars$pcorrect),
+      pcorrect = fit_laplace$pars$pcorrect,
+      p_obs = fit_laplace$pars$p,
       observed_nll = calc_observed_nll(fit_laplace)
     )
   ),
@@ -203,10 +210,12 @@ model_states <- c(
     d <- coef_items[ord, "d"]
     eta <- th %*% t(A) + matrix(d, nrow = nrow(th), ncol = nrow(A), byrow = TRUE)
     p_full <- pmin(pmax(plogis(eta), 1e-10), 1 - 1e-10)
-    p_obs <- p_full[cbind(sim$dat$id, sim$dat$Item)]
+    pcorrect <- p_full[cbind(sim$dat$id, sim$dat$Item)]
+    p_obs <- sim$dat$score * pcorrect + (1 - sim$dat$score) * (1 - pcorrect)
     list(
+      pcorrect = pcorrect,
       p_obs = p_obs,
-      observed_nll = -mean(log(ifelse(sim$dat$score == 1, p_obs, 1 - p_obs)))
+      observed_nll = -mean(log(p_obs))
     )
   }), paste0("mirt_", ok_mirt))
 )
@@ -214,7 +223,7 @@ model_states <- c(
 item_norm <- comparison$itempars[form == "normalized"]
 person_norm <- comparison$personpars[form == "normalized"]
 loading_norm <- comparison$loading_matrix[form == "normalized"]
-corr_norm <- comparison$ability_corr_matrix[form == "normalized" & corr_type == "estimated"]
+corr_raw <- comparison$ability_corr_matrix[form == "raw" & corr_type == "estimated"]
 
 free_items <- data.table(
   item = rownames(loading_mask)[row(loading_mask)[is.na(loading_mask)]],
@@ -235,7 +244,7 @@ metric_rows <- rbindlist(lapply(setdiff(unique(item_norm$source), "truth"), func
   ability_dt <- person_norm[source == method_name]
   loading_full_dt <- item_norm[source == method_name & parameter == "A"]
   loading_free_dt <- loading_free[source == method_name]
-  corr_dt <- corr_norm[source == method_name]
+  corr_dt <- corr_raw[source == method_name]
   data.table(
     method = method_name,
     ability_rmse = rmse(ability_dt$value, ability_dt$referenceVal),
@@ -341,7 +350,7 @@ ggplot(loading_dt, aes(x = x_plot, y = y_plot)) +
 ### Per-factor ability correlation
 
 ```{r factor-correlation}
-ability_corr_dt <- ability_dt[, .(corr = abs(cor(true, est))), by = .(method, factor)]
+ability_corr_dt <- ability_dt[, .(corr = cor(true, est)), by = .(method, factor)]
 
 ggplot(ability_corr_dt, aes(x = factor, y = corr, fill = method)) +
   geom_col(position = position_dodge(width = 0.7), width = 0.65) +
@@ -359,7 +368,7 @@ ability_corr_dt[order(factor, -corr)]
 ### Per-factor loading correlation
 
 ```{r loading-correlation}
-loading_corr_dt <- loading_dt[, .(corr = abs(cor(true, est))), by = .(method, factor)]
+loading_corr_dt <- loading_dt[, .(corr = cor(true, est)), by = .(method, factor)]
 
 ggplot(loading_corr_dt, aes(x = factor, y = corr, fill = method)) +
   geom_col(position = position_dodge(width = 0.7), width = 0.65) +
@@ -375,7 +384,7 @@ ggplot(loading_corr_dt, aes(x = factor, y = corr, fill = method)) +
 ### Ability-correlation recovery
 
 ```{r ability-corr-recovery}
-corr_plot_dt <- corr_norm[source != "truth" & row < col, .(
+corr_plot_dt <- corr_raw[source != "truth" & row < col, .(
   method = source,
   row,
   col,
@@ -431,7 +440,7 @@ ggplot(loading_dt, aes(x = method, y = abs_err_plot, fill = method)) +
 
 ```{r calibration}
 calib <- rbindlist(lapply(names(model_states), function(m){
-  data.table(method = m, p = model_states[[m]]$p_obs, y = sim$dat$score)
+  data.table(method = m, p = model_states[[m]]$pcorrect, y = sim$dat$score)
 }))
 
 calib[, bin := cut(p, breaks = seq(0, 1, by = 0.1), include.lowest = TRUE)]
@@ -448,8 +457,8 @@ ggplot(calib_dt, aes(x = mean_pred, y = obs_rate, color = method)) +
   coord_equal(xlim = c(0, 1), ylim = c(0, 1)) +
   theme_bw() +
   labs(
-    title = "Observed-response calibration",
-    x = "Mean predicted probability",
+    title = "Probability-correct calibration",
+    x = "Mean predicted probability correct",
     y = "Observed proportion correct",
     size = "Count"
   )

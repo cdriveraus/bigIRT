@@ -247,18 +247,37 @@ normaliseMIRT <- function(B, Ability, A, AbilityCorr = NULL,
   K <- ncol(A)
   if(K <= 1L){
     out <- normaliseIRT(B = B, Ability = as.numeric(Ability[,1]), A = as.numeric(A[,1]),
-      normbase = "B", normaliseScale = normaliseScale, normaliseMean = normaliseMean, robust = FALSE)
-    names(out$B) <- B_names
-    return(c(out, list(
+      normbase = "Ability", normaliseScale = normaliseScale, normaliseMean = normaliseMean, robust = FALSE)
+    A1 <- matrix(as.numeric(out$A), ncol = 1L)
+    Ability1 <- matrix(as.numeric(out$Ability), ncol = 1L)
+    B1 <- as.numeric(out$B)
+    sign_val <- 1
+    if(!is.null(referenceA) && identical(align, "orthogonal")){
+      referenceA <- as.matrix(referenceA)
+      if(!all(dim(referenceA) == dim(A1))) stop("referenceA must have the same dimensions as A.")
+      align_score <- sum(A1 * referenceA, na.rm = TRUE)
+      if(is.finite(align_score) && align_score < 0){
+        sign_val <- -1
+        A1 <- A1 * sign_val
+        Ability1 <- Ability1 * sign_val
+      }
+    }
+    dimnames(A1) <- A_dimnames
+    dimnames(Ability1) <- ability_dimnames
+    names(B1) <- B_names
+    return(list(
+      A = A1,
+      B = B1,
+      Ability = Ability1,
       center = mean(Ability[,1], na.rm = TRUE),
-      chol_cov = matrix(stats::sd(Ability[,1], na.rm = TRUE), 1, 1),
-      inv_chol = matrix(1 / pmax(stats::sd(Ability[,1], na.rm = TRUE), jitter), 1, 1),
-      global_scale = stats::sd(B, na.rm = TRUE) / normaliseScale,
+      chol_cov = matrix(stats::sd(Ability[,1], na.rm = TRUE) / normaliseScale, 1, 1),
+      inv_chol = matrix(normaliseScale / pmax(stats::sd(Ability[,1], na.rm = TRUE), jitter), 1, 1),
+      global_scale = 1,
       latent_shift = 0,
       AbilityCorr = matrix(1, 1, 1),
-      sign = 1,
-      rotation = matrix(1, 1, 1)
-    )))
+      sign = sign_val,
+      rotation = matrix(sign_val, 1, 1)
+    ))
   }
 
   mu <- colMeans(Ability, na.rm = TRUE)
@@ -480,6 +499,14 @@ bigIRT_comparison_itempars_dt <- function(state, source, form){
     parameter = "B",
     value = as.numeric(state$B)
   )
+  loading_norm <- sqrt(rowSums(A^2))
+  loading_norm[loading_norm <= 0] <- NA_real_
+  dt_Bcorr <- data.table::data.table(
+    item = item_names,
+    factor = NA_character_,
+    parameter = "B_loading_corrected",
+    value = as.numeric(state$B) / loading_norm
+  )
   dt_C <- data.table::data.table(
     item = item_names,
     factor = NA_character_,
@@ -493,7 +520,7 @@ bigIRT_comparison_itempars_dt <- function(state, source, form){
     value = as.numeric(state$D)
   )
 
-  out <- data.table::rbindlist(list(dt_A, dt_B, dt_C, dt_D), fill = TRUE, use.names = TRUE)
+  out <- data.table::rbindlist(list(dt_A, dt_B, dt_Bcorr, dt_C, dt_D), fill = TRUE, use.names = TRUE)
   out[, `:=`(source = source, form = form)]
   data.table::setcolorder(out, c("source", "form", "parameter", "item", "factor", "value"))
   out[]
@@ -2404,6 +2431,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   if(identical(marginalApprox, "laplace_direct") && length(which(sdat$Abilityparsindex > 0)) > 0){
     optimdots <- list(...)
     laplaceVerbose <- if("verbose" %in% names(optimdots)) as.integer(optimdots$verbose) else 0L
+    collectDirectDiag <- isTRUE(laplaceDiagnostics) || isTRUE(laplacePlot)
     if(requireNamespace("RcppParallel", quietly = TRUE)) RcppParallel::setThreadOptions(numThreads = max(1L, as.integer(cores)))
     laplace_trace <- function(level, ...){
       if(laplaceVerbose >= level) message(...)
@@ -2442,7 +2470,8 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
       keep_covariance = TRUE,
       cores = cores,
       estimateAbilityCorr = estimateAbilityCorr,
-      corr_paramization = laplaceCorrParam
+      corr_paramization = laplaceCorrParam,
+      collect_history = collectDirectDiag
     )
     directSec <- wall_time_sec() - t_direct
     state <- directFit$state
@@ -2495,38 +2524,49 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
       precision = as.matrix(directFit$eval$prior_mats$precision),
       estimated_corr = estimateAbilityCorr
     )
-    if(isTRUE(laplaceDiagnostics)){
-      fit$laplaceDiagnostics <- data.table::data.table(
-        outerIter = 1L,
-        objective = directFit$eval$value,
-        relativeImprove = NA_real_,
-        itemStepRms = NA_real_,
-        personStepRms = NA_real_,
-        itemGradNorm = directFit$optim$masked_grad_norm,
-        meanPosteriorSD = if("covariance" %in% names(finalPosterior)) mean(unlist(lapply(seq_len(dim(finalPosterior$covariance)[3]), function(ii) sqrt(pmax(diag(finalPosterior$covariance[,,ii]), 0)))), na.rm = TRUE) else NA_real_,
-        maxPosteriorSD = if("covariance" %in% names(finalPosterior)) max(unlist(lapply(seq_len(dim(finalPosterior$covariance)[3]), function(ii) sqrt(pmax(diag(finalPosterior$covariance[,,ii]), 0)))), na.rm = TRUE) else NA_real_,
-        personConverged = all(finalPosterior$converged),
-        personStepSec = NA_real_,
-        itemStepSec = directSec,
-        refreshStepSec = NA_real_,
-        objectiveEvalSec = NA_real_,
-        outerIterSec = directSec,
-        itemTargetEvals = directFit$optim$target_evals,
-        itemMaskedGradNorm = directFit$optim$masked_grad_norm,
-        optimizerIter = if(!is.null(directFit$optim$iter)) directFit$optim$iter else NA_integer_,
-        optimizerTerminate = direct_terminate,
-        optimizerTerminateValue = if(!is.null(directFit$optim$terminate$val)) directFit$optim$terminate$val else NA_real_,
-        personMeanNiter = mean(finalPosterior$niter, na.rm = TRUE),
-        personMaxNiter = max(finalPosterior$niter, na.rm = TRUE),
-        strictCriterion = fit$laplaceStatus$converged,
-        stabilityCriterion = FALSE,
-        recentObjectiveRange = NA_real_,
-        recentGradRelChange = NA_real_,
-        recentItemStepMean = NA_real_,
-        recentPersonStepMean = NA_real_,
-        strictStreak = if(fit$laplaceStatus$converged) 1L else 0L,
-        stabilityStreak = 0L
-      )
+    if(isTRUE(collectDirectDiag)){
+      if(length(directFit$history)){
+        fit$laplaceDiagnostics <- data.table::rbindlist(directFit$history, fill = TRUE)
+        fit$laplaceDiagnostics[, strictCriterion := itemGradNorm < laplaceGradTol]
+        fit$laplaceDiagnostics[, strictStreak := cumsum(ifelse(strictCriterion, 1L, 0L)) - cummax(cumsum(ifelse(!strictCriterion, 1L, 0L)))]
+        fit$laplaceDiagnostics[, stabilityCriterion := FALSE]
+        fit$laplaceDiagnostics[, stabilityStreak := 0L]
+      } else {
+        fit$laplaceDiagnostics <- data.table::data.table(
+          outerIter = 1L,
+          objective = directFit$eval$value,
+          relativeImprove = NA_real_,
+          itemStepRms = NA_real_,
+          personStepRms = NA_real_,
+          itemGradNorm = directFit$optim$masked_grad_norm,
+          meanPosteriorSD = if("covariance" %in% names(finalPosterior)) mean(unlist(lapply(seq_len(dim(finalPosterior$covariance)[3]), function(ii) sqrt(pmax(diag(finalPosterior$covariance[,,ii]), 0)))), na.rm = TRUE) else NA_real_,
+          maxPosteriorSD = if("covariance" %in% names(finalPosterior)) max(unlist(lapply(seq_len(dim(finalPosterior$covariance)[3]), function(ii) sqrt(pmax(diag(finalPosterior$covariance[,,ii]), 0)))), na.rm = TRUE) else NA_real_,
+          personConverged = all(finalPosterior$converged),
+          personStepSec = NA_real_,
+          itemStepSec = directSec,
+          refreshStepSec = NA_real_,
+          objectiveEvalSec = NA_real_,
+          outerIterSec = directSec,
+          itemTargetEvals = directFit$optim$target_evals,
+          itemMaskedGradNorm = directFit$optim$masked_grad_norm,
+          optimizerIter = if(!is.null(directFit$optim$iter)) directFit$optim$iter else NA_integer_,
+          optimizerTerminate = direct_terminate,
+          optimizerTerminateValue = if(!is.null(directFit$optim$terminate$val)) directFit$optim$terminate$val else NA_real_,
+          personMeanNiter = mean(finalPosterior$niter, na.rm = TRUE),
+          personMaxNiter = max(finalPosterior$niter, na.rm = TRUE),
+          strictCriterion = fit$laplaceStatus$converged,
+          stabilityCriterion = FALSE,
+          recentObjectiveRange = NA_real_,
+          recentGradRelChange = NA_real_,
+          recentItemStepMean = NA_real_,
+          recentPersonStepMean = NA_real_,
+          strictStreak = if(fit$laplaceStatus$converged) 1L else 0L,
+          stabilityStreak = 0L
+        )
+      }
+      if(isTRUE(laplacePlot)){
+        try(bigIRT_plot_laplace_diag_df(fit$laplaceDiagnostics), silent = TRUE)
+      }
     }
     laplace_trace(1, sprintf(
       "Direct Laplace: obj=%.6f | approx_grad=%.3g | target_evals=%d | person_conv=%s | t(total)=%.2fs",

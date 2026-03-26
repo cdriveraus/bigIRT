@@ -1242,7 +1242,8 @@ bigIRT_laplace_optimize_item <- function(state, sdat, thetaBase, prior_precision
 bigIRT_laplace_optimize_direct <- function(state, sdat, prior_precision,
   niter = 50L, tol = 1e-4, jitter = 1e-6, person_tol = 1e-4,
   keep_covariance = FALSE, cores = 1L, estimateAbilityCorr = FALSE,
-  corr_paramization = c("normalized_chol", "stan_corsqrt")){
+  corr_paramization = c("normalized_chol", "stan_corsqrt"),
+  collect_history = FALSE){
   corr_paramization <- match.arg(corr_paramization)
   direct_layout <- bigIRT_laplace_direct_layout(sdat, estimateAbilityCorr = estimateAbilityCorr)
   item_layout <- direct_layout[setdiff(names(direct_layout), "corr")]
@@ -1266,8 +1267,13 @@ bigIRT_laplace_optimize_direct <- function(state, sdat, prior_precision,
   cache_par <- NULL
   cache_res <- NULL
   theta_warm <- state$AbilityBase
+  history <- list()
+  last_value <- NULL
+  last_par <- NULL
+  last_theta <- NULL
   get_eval <- function(par){
     if(!is.null(cache_par) && length(cache_par) == length(par) && identical(cache_par, par)) return(cache_res)
+    t_eval <- as.numeric(proc.time()[["elapsed"]])
     eval_count <<- eval_count + 1L
     cache_res <<- bigIRT_laplace_direct_objective(
       par = par,
@@ -1282,8 +1288,55 @@ bigIRT_laplace_optimize_direct <- function(state, sdat, prior_precision,
       keep_covariance = keep_covariance,
       context = context
     )
+    eval_sec <- as.numeric(proc.time()[["elapsed"]]) - t_eval
     theta_warm <<- cache_res$posterior$theta_mode
     cache_par <<- par
+    if(isTRUE(collect_history)){
+      cur_theta <- cache_res$posterior$theta_mode
+      cov_arr <- cache_res$posterior$covariance
+      if(!is.null(cov_arr)){
+        post_sd <- unlist(lapply(seq_len(dim(cov_arr)[3]), function(ii) sqrt(pmax(diag(cov_arr[,,ii]), 0))))
+        mean_post_sd <- mean(post_sd, na.rm = TRUE)
+        max_post_sd <- max(post_sd, na.rm = TRUE)
+      } else {
+        mean_post_sd <- NA_real_
+        max_post_sd <- NA_real_
+      }
+      history[[length(history) + 1L]] <<- list(
+        outerIter = eval_count,
+        objective = cache_res$value,
+        relativeImprove = if(is.null(last_value) || !is.finite(last_value) || abs(last_value) < .Machine$double.eps) NA_real_ else abs((cache_res$value - last_value) / last_value),
+        itemStepRms = if(is.null(last_par)) NA_real_ else sqrt(mean((par - last_par)^2)),
+        personStepRms = if(is.null(last_theta)) NA_real_ else sqrt(mean((as.numeric(cur_theta) - as.numeric(last_theta))^2)),
+        itemGradNorm = sqrt(sum(cache_res$approx_grad^2)),
+        meanPosteriorSD = mean_post_sd,
+        maxPosteriorSD = max_post_sd,
+        personConverged = all(cache_res$posterior$converged),
+        personStepSec = NA_real_,
+        itemStepSec = eval_sec,
+        refreshStepSec = NA_real_,
+        objectiveEvalSec = eval_sec,
+        outerIterSec = eval_sec,
+        itemTargetEvals = eval_count,
+        itemMaskedGradNorm = sqrt(sum(cache_res$approx_grad^2)),
+        optimizerIter = NA_integer_,
+        optimizerTerminate = NA_character_,
+        optimizerTerminateValue = NA_real_,
+        personMeanNiter = mean(cache_res$posterior$niter, na.rm = TRUE),
+        personMaxNiter = max(cache_res$posterior$niter, na.rm = TRUE),
+        strictCriterion = FALSE,
+        stabilityCriterion = FALSE,
+        recentObjectiveRange = NA_real_,
+        recentGradRelChange = NA_real_,
+        recentItemStepMean = NA_real_,
+        recentPersonStepMean = NA_real_,
+        strictStreak = 0L,
+        stabilityStreak = 0L
+      )
+      last_value <<- cache_res$value
+      last_par <<- par
+      last_theta <<- cur_theta
+    }
     cache_res
   }
   target_fg <- function(par){
@@ -1318,7 +1371,12 @@ bigIRT_laplace_optimize_direct <- function(state, sdat, prior_precision,
   fit$masked_grad_norm <- sqrt(sum(final$approx_grad^2))
   fit$target_evals <- eval_count
   fit$logLik <- final$value
-  list(state = final$state, optim = fit, eval = final)
+  if(length(history)){
+    history[[length(history)]][["optimizerIter"]] <- if(!is.null(fit$iter)) fit$iter else NA_integer_
+    history[[length(history)]][["optimizerTerminate"]] <- if(!is.null(fit$terminate$what)) as.character(fit$terminate$what) else NA_character_
+    history[[length(history)]][["optimizerTerminateValue"]] <- if(!is.null(fit$terminate$val)) fit$terminate$val else NA_real_
+  }
+  list(state = final$state, optim = fit, eval = final, history = history)
 }
 
 bigIRT_laplace_constrained_pars <- function(state, sdat, posterior = NULL){

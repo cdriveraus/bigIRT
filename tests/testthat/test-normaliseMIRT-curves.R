@@ -48,6 +48,39 @@ if(identical(Sys.getenv("NOT_CRAN"), "true")){
     )
   }
 
+  test_that("1D normaliseMIRT resolves reference sign ambiguity and preserves curves", {
+    set.seed(2500)
+    Ability <- matrix(rnorm(200, mean = 0.2, sd = 1.4), ncol = 1)
+    A <- matrix(runif(6, min = 0.7, max = 1.3), ncol = 1)
+    B <- rnorm(6, sd = 0.9)
+    C <- rep(0, 6)
+    D <- rep(1, 6)
+
+    ref_norm <- normaliseMIRT(B = B, Ability = Ability, A = A)
+
+    shift <- -0.4
+    scale <- 1.8
+    Ability_alt <- matrix((Ability - shift) / scale, ncol = 1)
+    A_alt <- matrix(A * scale, ncol = 1)
+    B_alt <- (B - shift) / scale
+
+    alt_norm <- normaliseMIRT(
+      B = B_alt,
+      Ability = Ability_alt,
+      A = A_alt,
+      referenceA = ref_norm$A,
+      align = "orthogonal"
+    )
+
+    p_ref <- response_surface(list(A = ref_norm$A, B = ref_norm$B, C = C, D = D, Ability = ref_norm$Ability))
+    p_alt <- response_surface(list(A = alt_norm$A, B = alt_norm$B, C = C, D = D, Ability = alt_norm$Ability))
+
+    expect_equal(alt_norm$A, ref_norm$A, tolerance = 1e-8, scale = 1)
+    expect_equal(alt_norm$B, ref_norm$B, tolerance = 1e-8, scale = 1)
+    expect_equal(alt_norm$Ability, ref_norm$Ability, tolerance = 1e-8, scale = 1)
+    expect_equal(p_alt, p_ref, tolerance = 1e-8, scale = 1)
+  })
+
   test_that("3D 4PL response curves are invariant to normaliseMIRT for bigIRT and mirt", {
     skip_if_not_installed("mirt")
 
@@ -82,8 +115,7 @@ if(identical(Sys.getenv("NOT_CRAN"), "true")){
       ASD = 0.1,
       logitCMean = -2,
       logitCSD = 0.2,
-      AbilityCorr = ability_corr,
-      normalise = FALSE
+      AbilityCorr = ability_corr
     )
 
     loading_mask <- build_confirmatory_loading_mask(sim$A, scale_names = sort(unique(sim$dat$Scale)))
