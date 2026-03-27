@@ -37,6 +37,14 @@ cores=2
       betaScale = 100,
       normalise = F,ebayes = T,ebayesmultiplier = 2)
 
+    fitlap <- fitIRT(dat$dat,cores=cores,pl=2,plot=F,verbose=10,priors=T,marginalApprox = 'laplace_direct',
+      BitemPreds = c('V1','V2','V3'),
+      AitemPreds = c('V1','V2','V3'),
+      # personPreds = c('V1','V2','V3'),
+      # personDat = persondat,
+      betaScale = 100,
+      normalise = F,ebayes = T,ebayesmultiplier = 2)
+
     # apply(fit$pars$invspAbeta,1,mean)
     # apply(fit$pars$Bbeta,2,mean)
     #

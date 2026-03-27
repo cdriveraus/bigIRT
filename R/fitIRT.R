@@ -526,6 +526,34 @@ bigIRT_comparison_itempars_dt <- function(state, source, form){
   out[]
 }
 
+bigIRT_comparison_theta_sample <- function(state, n_points = 50L, jitter = 1e-8){
+  Ability <- as.matrix(state$Ability)
+  K <- ncol(Ability)
+  mu <- colMeans(Ability, na.rm = TRUE)
+  if(K <= 1L){
+    sd1 <- stats::sd(Ability[, 1], na.rm = TRUE)
+    if(!is.finite(sd1) || sd1 < jitter) sd1 <- 1
+    return(matrix(stats::rnorm(as.integer(n_points), mean = mu[1], sd = sd1), ncol = 1L))
+  }
+  Sigma <- stats::cov(Ability, use = "pairwise.complete.obs")
+  Sigma[!is.finite(Sigma)] <- 0
+  Sigma <- (Sigma + t(Sigma)) / 2
+  diag(Sigma) <- pmax(diag(Sigma), jitter)
+  L <- chol(Sigma + diag(jitter, K))
+  Z <- matrix(stats::rnorm(as.integer(n_points) * K), ncol = K)
+  sweep(Z %*% L, 2, mu, "+")
+}
+
+bigIRT_comparison_item_curve_rmse <- function(state, reference_state, theta_sample){
+  A <- as.matrix(state$A)
+  A_ref <- as.matrix(reference_state$A)
+  pred <- IRTcurve(A = A, B = state$B, C = state$C, D = state$D, theta = theta_sample, plot = FALSE)
+  ref_pred <- IRTcurve(A = A_ref, B = reference_state$B, C = reference_state$C, D = reference_state$D, theta = theta_sample, plot = FALSE)
+  pred <- as.matrix(pred)
+  ref_pred <- as.matrix(ref_pred)
+  sqrt(colMeans((pred - ref_pred)^2))
+}
+
 bigIRT_comparison_personpars_dt <- function(state, source, form){
   Ability <- as.matrix(state$Ability)
   factor_names <- colnames(Ability)
@@ -569,6 +597,9 @@ bigIRT_comparison_attach_reference <- function(dt, id_cols, ref_name){
 #'   extracting abilities from `mirt` fits.
 #' @param normaliseScale Numeric scalar passed to [normaliseMIRT()].
 #' @param normaliseMean Numeric scalar or vector passed to [normaliseMIRT()].
+#' @param curveSampleN Integer. Number of multivariate-normal theta draws used
+#'   to compute item-response-curve RMSE against the reference model for each
+#'   item and form. Default is 50.
 #'
 #' @return A list with elements `itempars`, `personpars`, `loading_matrix`,
 #'   `ability_corr_matrix`, `raw`, `normalized`, and `reference_model`.
@@ -577,7 +608,7 @@ bigIRT_comparison_attach_reference <- function(dt, id_cols, ref_name){
 #'   the reference model.
 #' @export
 compareIRTmodels <- function(models, score_method = "EAP", normaliseScale = 1,
-  normaliseMean = 0){
+  normaliseMean = 0, curveSampleN = 50L){
   if(!is.list(models) || length(models) == 0L) stop("models must be a non-empty list.")
   if(is.null(names(models))) names(models) <- rep("", length(models))
   empty_names <- names(models) == ""
@@ -622,6 +653,13 @@ compareIRTmodels <- function(models, score_method = "EAP", normaliseScale = 1,
     )
   }
 
+  raw_theta_sample <- bigIRT_comparison_theta_sample(raw_states[[ref_idx]], n_points = curveSampleN)
+  normalized_theta_sample <- bigIRT_comparison_theta_sample(normalized_states[[ref_idx]], n_points = curveSampleN)
+  raw_curve_rmse <- lapply(raw_states, function(st) bigIRT_comparison_item_curve_rmse(st, raw_states[[ref_idx]], raw_theta_sample))
+  normalized_curve_rmse <- lapply(normalized_states, function(st) bigIRT_comparison_item_curve_rmse(st, normalized_states[[ref_idx]], normalized_theta_sample))
+  names(raw_curve_rmse) <- names(raw_states)
+  names(normalized_curve_rmse) <- names(normalized_states)
+
   itempars <- data.table::rbindlist(c(
     Map(bigIRT_comparison_itempars_dt, raw_states, names(raw_states), MoreArgs = list(form = "raw")),
     Map(bigIRT_comparison_itempars_dt, normalized_states, names(normalized_states), MoreArgs = list(form = "normalized"))
@@ -631,7 +669,26 @@ compareIRTmodels <- function(models, score_method = "EAP", normaliseScale = 1,
     c("form", "parameter", "item", "factor"),
     ref_name = names(models)[ref_idx]
   )
-  data.table::setcolorder(itempars, c("source", "form", "parameter", "item", "factor", "value", "referenceVal"))
+  curve_dt <- data.table::rbindlist(c(
+    Map(function(rmse, source_name){
+      data.table::data.table(
+        source = source_name,
+        form = "raw",
+        item = item_names,
+        itemCurveRMSE = as.numeric(rmse)
+      )
+    }, raw_curve_rmse, names(raw_curve_rmse)),
+    Map(function(rmse, source_name){
+      data.table::data.table(
+        source = source_name,
+        form = "normalized",
+        item = item_names,
+        itemCurveRMSE = as.numeric(rmse)
+      )
+    }, normalized_curve_rmse, names(normalized_curve_rmse))
+  ), use.names = TRUE, fill = TRUE)
+  itempars <- merge(itempars, curve_dt, by = c("source", "form", "item"), all.x = TRUE, sort = FALSE)
+  data.table::setcolorder(itempars, c("source", "form", "parameter", "item", "factor", "value", "referenceVal", "itemCurveRMSE"))
 
   personpars <- data.table::rbindlist(c(
     Map(bigIRT_comparison_personpars_dt, raw_states, names(raw_states), MoreArgs = list(form = "raw")),
@@ -1628,12 +1685,27 @@ bigIRT_plot_laplace_diag_df <- function(diagdf, logGrad = TRUE, showTiming = TRU
   x <- seq_len(nrow(diagdf))
   cols <- grDevices::colorRampPalette(c("#173f5f", "#20639b", "#3caea3", "#f6d55c", "#ed553b"))(max(2, nrow(diagdf)))
   grady <- if(logGrad) log1p(pmax(diagdf$itemGradNorm, 0)) else diagdf$itemGradNorm
+  finite_range <- function(x, fallback = c(0, 1)){
+    x <- x[is.finite(x)]
+    if(!length(x)) return(fallback)
+    rng <- range(x)
+    if(!all(is.finite(rng)) || diff(rng) <= 0) {
+      pad <- if(length(x) && is.finite(x[1])) max(1e-8, abs(x[1]) * 0.05) else 1e-8
+      return(c(rng[1] - pad, rng[2] + pad))
+    }
+    rng
+  }
   panels <- if(isTRUE(showTiming)) c(2, 3) else c(2, 2)
   oldpar <- graphics::par(no.readonly = TRUE)
   on.exit(graphics::par(oldpar))
   graphics::par(mfrow = panels, mar = c(4, 4, 2, 1))
 
-  objy <- log1p(-diagdf$objective - min(-diagdf$objective, na.rm = TRUE))
+  negobj <- -diagdf$objective
+  if(any(is.finite(negobj))){
+    objy <- log1p(negobj - min(negobj, na.rm = TRUE))
+  } else {
+    objy <- rep(NA_real_, nrow(diagdf))
+  }
   graphics::plot(x, objy, type = "b", pch = 19, col = cols,
     xlab = "Outer iteration", ylab = "log(1 + objective - min(objective))", main = "Objective")
   if(nrow(diagdf) > 1) graphics::lines(stats::lowess(x, objy, f = 0.6), lwd = 2)
@@ -1644,7 +1716,7 @@ bigIRT_plot_laplace_diag_df <- function(diagdf, logGrad = TRUE, showTiming = TRU
     main = "Gradient")
   if(nrow(diagdf) > 1) graphics::lines(stats::lowess(x, grady, f = 0.6), lwd = 2)
 
-  ylim_step <- range(c(diagdf$itemStepRms, diagdf$personStepRms), finite = TRUE)
+  ylim_step <- finite_range(c(diagdf$itemStepRms, diagdf$personStepRms))
   graphics::plot(x, diagdf$itemStepRms, type = "b", pch = 19, col = "#20639b",
     xlab = "Outer iteration", ylab = "RMS movement", ylim = ylim_step,
     main = "Parameter Movement")
@@ -1652,7 +1724,7 @@ bigIRT_plot_laplace_diag_df <- function(diagdf, logGrad = TRUE, showTiming = TRU
   graphics::legend("topright", legend = c("Item", "Person"),
     col = c("#20639b", "#ed553b"), pch = c(19, 17), bty = "n", cex = 0.85)
 
-  ylim_sd <- range(c(diagdf$meanPosteriorSD, diagdf$maxPosteriorSD), finite = TRUE)
+  ylim_sd <- finite_range(c(diagdf$meanPosteriorSD, diagdf$maxPosteriorSD))
   graphics::plot(x, diagdf$meanPosteriorSD, type = "b", pch = 19, col = "#3caea3",
     xlab = "Outer iteration", ylab = "Posterior SD", ylim = ylim_sd,
     main = "Posterior Spread")
@@ -1930,16 +2002,16 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   DitemPreds=character(),
   itemSpecificBetas=FALSE,
   betaScale=10,
-  invspAMeandat=.542,invspASD=1,BMeandat=0,BSD=10, logitCMeandat=0,logitCSD=2,
-  logitDMeandat=0,logitDSD=2,
+  invspAMeandat=.542,invspASD=1,BMeandat=0,BSD=10, logitCMeandat=0,logitCSD=5,
+  logitDMeandat=0,logitDSD=5,
   AbilityMeandat=array(0,dim=c(length(unique(dat[[scale]])))),
-  AbilitySD=array(10,dim=c(length(unique(dat[[scale]])))),
+  AbilitySD=array(1,dim=c(length(unique(dat[[scale]])))),
   AbilityCorr=diag(1,c(length(unique(dat[[scale]])))),
   AMeanSD=1,BMeanSD=BSD,logitCMeanSD=logitCSD,logitDMeanSD=logitDSD,
   AbilityMeanSD=array(1,dim=c(length(unique(dat[[scale]])))),
   iter=2000,cores=6,carefulfit=FALSE,
   ebayes=TRUE,ebayesmultiplier=2,ebayesFromFixed=FALSE,
-  estMeans=c('ability','B','C','D'),priors=TRUE,
+  estMeans=c('A','B','C','D'),priors=TRUE,
   marginalApprox=c("none","laplace_em","laplace_direct"),
   estimateAbilityCorr=FALSE,
   laplaceCorrParam=c("normalized_chol","stan_corsqrt"),
@@ -2257,8 +2329,10 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     AbilityMeandat=AbilityMeandat,
     AbilitySD=array(AbilitySD),
     AbilityCorr=AbilityCorr,
+    AMeanSD=AMeanSD,
     BMeanSD=BMeanSD,
     logitCMeanSD=logitCMeanSD,
+    logitDMeanSD=logitDMeanSD,
     AbilityMeanSD=array(AbilityMeanSD),
     fixedAMean=as.integer(!'A' %in% estMeans || pl < 2),
     fixedBMean=as.integer(!'B' %in% estMeans),
@@ -2445,7 +2519,9 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
       corr_paramization = laplaceCorrParam,
       collect_history = collectDirectDiag,
       plot_callback = direct_plot_callback,
-      plot_every = laplacePlotEvery
+      plot_every = laplacePlotEvery,
+      verbose = laplaceVerbose,
+      trace_fn = function(msg) laplace_trace(2, msg)
     )
     directSec <- wall_time_sec() - t_direct
     state <- directFit$state
@@ -2559,6 +2635,29 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
           bigIRT_refresh_plot_device()
         }, silent = TRUE)
       }
+    }
+    if(laplaceVerbose >= 2L){
+      final_t <- directFit$optim$timings
+      laplace_trace(2, sprintf(
+        paste0(
+          "Direct Laplace optimizer summary: iter=%s | terminate=%s | target_evals=%d | ",
+          "person=%.2fs | row=%.2fs | item=%.2fs | post=%.2fs | setup=%.2fs | prior=%.2fs | item_grad=%.2fs | ",
+          "mean_grad=%.2fs | corr_grad=%.2fs | total_eval=%.2fs"
+        ),
+        if(!is.null(directFit$optim$iter)) as.character(directFit$optim$iter) else "NA",
+        direct_terminate,
+        directFit$optim$target_evals,
+        if(!is.null(final_t$personKernelSec)) final_t$personKernelSec else NA_real_,
+        if(!is.null(final_t$rowAssemblySec)) final_t$rowAssemblySec else NA_real_,
+        if(!is.null(final_t$itemKernelSec)) final_t$itemKernelSec else if(!is.null(final_t$kernelSec)) final_t$kernelSec else NA_real_,
+        if(!is.null(final_t$postKernelSec)) final_t$postKernelSec else NA_real_,
+        if(!is.null(final_t$setupSec)) final_t$setupSec else NA_real_,
+        if(!is.null(final_t$priorSec)) final_t$priorSec else NA_real_,
+        if(!is.null(final_t$itemGradSec)) final_t$itemGradSec else NA_real_,
+        if(!is.null(final_t$abilityMeanSec)) final_t$abilityMeanSec else 0,
+        if(!is.null(final_t$corrGradSec)) final_t$corrGradSec else 0,
+        if(!is.null(final_t$totalSec)) final_t$totalSec else NA_real_
+      ))
     }
     laplace_trace(1, sprintf(
       "Direct Laplace: obj=%.6f | approx_grad=%.3g | target_evals=%d | person_conv=%s | t(total)=%.2fs",

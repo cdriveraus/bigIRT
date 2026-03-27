@@ -15,6 +15,8 @@ simIRT(
   BMean = 0,
   logitCSD = 1,
   logitCMean = -2,
+  logitDSD = 0,
+  logitDMean = 20,
   AbilitySD = 1,
   AbilityMean = 0,
   AbilityCorr = diag(1, Nscales),
@@ -22,6 +24,7 @@ simIRT(
   AitemPredEffects = NA,
   BitemPredEffects = NA,
   logitCitemPredEffects = NA,
+  logitDitemPredEffects = NA,
   personPreds = NA,
   AbilityPredEffects = NA,
   mirt = FALSE,
@@ -55,6 +58,10 @@ sparse-response datasets.}
 
 \item{logitCMean}{Numeric. Mean of simulated guessing values on logit scale.}
 
+\item{logitDSD}{Numeric. SD of simulated upper asymptote values on logit scale.}
+
+\item{logitDMean}{Numeric. Mean of simulated upper asymptote values on logit scale.}
+
 \item{AbilitySD}{Numeric. SD of simulated person abilities.}
 
 \item{AbilityMean}{Numeric. Mean of simulated person abilities.}
@@ -70,6 +77,9 @@ should align with items.}
 
 \item{logitCitemPredEffects}{Optional numeric matrix/vector of effects of
 \code{itemPreds} on guessing values (logit scale).}
+
+\item{logitDitemPredEffects}{Optional numeric matrix/vector of effects of
+\code{itemPreds} on upper asymptote values (logit scale).}
 
 \item{personPreds}{Optional matrix/data frame of person-level predictors.
 Rows should align with subjects.}
@@ -104,6 +114,8 @@ A list with:
 \item{B}{Matrix/vector of true item difficulties. Matrix in legacy mode,
 vector in \code{mirt=TRUE} mode.}
 \item{C}{Matrix/vector of true item guessing parameters. Matrix in legacy
+mode, vector in \code{mirt=TRUE} mode.}
+\item{D}{Matrix/vector of true item upper asymptote parameters. Matrix in legacy
 mode, vector in \code{mirt=TRUE} mode.}
 \item{dat}{Long-format response data as a \code{data.table}.}
 }

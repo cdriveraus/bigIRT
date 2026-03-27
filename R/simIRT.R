@@ -2,6 +2,10 @@ inv_logit <- function(x){
   exp(x)/(1 + exp(x))
 }
 
+dfunc <- function(x){
+  inv_logit(x) * 0.5 + 0.5
+}
+
 inv_log1p_exp <- function(x){
   log(exp(x)-1)
 }
@@ -176,8 +180,9 @@ ggplot(record,aes(y=RMSE,colour=Random,x=AssessmentItemCount))+geom_line()+theme
 # }
 
 simResponse <- function(items, ability,score=TRUE){
+  D <- if("D" %in% names(items)) items$D else 1
   p=items$C +
-    (1-items$C) / (1+exp(
+    (D-items$C) / (1+exp(
       -items$A * #discrimination of item=
         (ability - #Ability
             items$B)))
@@ -195,23 +200,27 @@ simPersons <- function(N, mu, scaleChol, covs=numeric(), beta=numeric){
 
 
 simItems <- function(NperScale, scaleNames, invspAmu, invspASD, Bmu, BSD, logitCmu, logitCSD,
-  covs=numeric(), invspAbeta, Bbeta, logitCbeta){
+  logitDmu = 20, logitDSD = 0, covs=numeric(), invspAbeta, Bbeta, logitCbeta,
+  logitDbeta = NULL){
 
   items <- lapply(1:length(scaleNames),function(i){
     invspA=rnorm(NperScale,invspAmu[i],invspASD[i])
     B = rnorm(NperScale,Bmu[i],BSD[i])
     logitC=rnorm(NperScale,logitCmu[i],logitCSD[i])
+    logitD=rnorm(NperScale,logitDmu[i],logitDSD[i])
 
     if(length(covs) > 0){
       invspA <- c(invspA + as.matrix(covs) %*% t(invspAbeta[i,,drop=FALSE]))
       B <- c(B + as.matrix(covs) %*% t(Bbeta[i,,drop=FALSE]))
       logitC <- c(logitC + as.matrix(covs) %*% t(logitCbeta[i,,drop=FALSE]))
+      if(!is.null(logitDbeta)) logitD <- c(logitD + as.matrix(covs) %*% t(logitDbeta[i,,drop=FALSE]))
     }
 
     o=data.table(check.names = FALSE,Scale = scaleNames[i],
       A=log1p(exp(invspA)),
       B=B,
-      C=inv_logit(logitC)
+      C=inv_logit(logitC),
+      D=dfunc(logitD)
     )
     cbind(o,covs)
   })
@@ -313,6 +322,8 @@ IRTcurve <- function(A, B, C = 0, D = 1, theta = seq(-3, 3, .01),
 #' @param BMean Numeric. Mean of simulated item difficulty values (`B`).
 #' @param logitCSD Numeric. SD of simulated guessing values on logit scale.
 #' @param logitCMean Numeric. Mean of simulated guessing values on logit scale.
+#' @param logitDSD Numeric. SD of simulated upper asymptote values on logit scale.
+#' @param logitDMean Numeric. Mean of simulated upper asymptote values on logit scale.
 #' @param AbilitySD Numeric. SD of simulated person abilities.
 #' @param AbilityMean Numeric. Mean of simulated person abilities.
 #' @param itemPreds Optional matrix/data frame of item-level predictors. Rows
@@ -323,6 +334,8 @@ IRTcurve <- function(A, B, C = 0, D = 1, theta = seq(-3, 3, .01),
 #'   `itemPreds` on item difficulty values.
 #' @param logitCitemPredEffects Optional numeric matrix/vector of effects of
 #'   `itemPreds` on guessing values (logit scale).
+#' @param logitDitemPredEffects Optional numeric matrix/vector of effects of
+#'   `itemPreds` on upper asymptote values (logit scale).
 #' @param personPreds Optional matrix/data frame of person-level predictors.
 #'   Rows should align with subjects.
 #' @param AbilityPredEffects Optional matrix of effects of `personPreds` on
@@ -349,6 +362,8 @@ IRTcurve <- function(A, B, C = 0, D = 1, theta = seq(-3, 3, .01),
 #'   vector in `mirt=TRUE` mode.}
 #'   \item{C}{Matrix/vector of true item guessing parameters. Matrix in legacy
 #'   mode, vector in `mirt=TRUE` mode.}
+#'   \item{D}{Matrix/vector of true item upper asymptote parameters. Matrix in legacy
+#'   mode, vector in `mirt=TRUE` mode.}
 #'   \item{dat}{Long-format response data as a `data.table`.}
 #' }
 #' @export
@@ -357,9 +372,9 @@ IRTcurve <- function(A, B, C = 0, D = 1, theta = seq(-3, 3, .01),
 #' sim <- simIRT(Nsubs = 100, Nitems = 40, Nscales = 1, ASD = .2, BSD = .8)
 #' head(sim$dat)
 simIRT <- function(Nsubs=100,Nitems=200,Nscales=1, NitemsAnswered=Nitems,
-  ASD=0,AMean=1,BSD=1,BMean=0,logitCSD=1,logitCMean=-2,AbilitySD=1,AbilityMean=0,
+  ASD=0,AMean=1,BSD=1,BMean=0,logitCSD=1,logitCMean=-2,logitDSD=0,logitDMean=20,AbilitySD=1,AbilityMean=0,
   AbilityCorr=diag(1, Nscales),
-  itemPreds=NA, AitemPredEffects=NA,BitemPredEffects=NA,logitCitemPredEffects=NA,
+  itemPreds=NA, AitemPredEffects=NA,BitemPredEffects=NA,logitCitemPredEffects=NA,logitDitemPredEffects=NA,
   personPreds=NA, AbilityPredEffects=NA,
   mirt=FALSE, loadingSparsity=0.3, primaryScale=NA, loadings=NA,
   crossLoadingSD=0.15, returnRowLoadings=TRUE){
@@ -429,6 +444,7 @@ simIRT <- function(Nsubs=100,Nitems=200,Nscales=1, NitemsAnswered=Nitems,
 
     B <- rnorm(Nitems, BMean, BSD)
     logitC <- rnorm(Nitems, logitCMean, logitCSD)
+    logitD <- rnorm(Nitems, logitDMean, logitDSD)
 
     if(!all(is.na(itemPreds))){
       if(nrow(as.matrix(itemPreds)) != Nitems){
@@ -441,6 +457,7 @@ simIRT <- function(Nsubs=100,Nitems=200,Nscales=1, NitemsAnswered=Nitems,
       }
       if(all(!is.na(BitemPredEffects))) B <- B + as.numeric(itemPredMat %*% as.matrix(BitemPredEffects))
       if(all(!is.na(logitCitemPredEffects))) logitC <- logitC + as.numeric(itemPredMat %*% as.matrix(logitCitemPredEffects))
+      if(all(!is.na(logitDitemPredEffects))) logitD <- logitD + as.numeric(itemPredMat %*% as.matrix(logitDitemPredEffects))
     }
 
     if(!all(is.na(personPreds))){
@@ -455,15 +472,17 @@ simIRT <- function(Nsubs=100,Nitems=200,Nscales=1, NitemsAnswered=Nitems,
     }
 
     C <- inv_logit(logitC)
+    D <- dfunc(logitD)
     dat <- data.table(expand.grid(id = seq_len(Nsubs), Item = seq_len(Nitems)))
     dat[, Scale := primaryScale[Item]]
     dat[, Ability := Ability[cbind(id, Scale)]]
     dat[, A := A[cbind(Item, Scale)]]
     dat[, B := B[Item]]
     dat[, C := C[Item]]
+    dat[, D := D[Item]]
 
     eta <- rowSums(A[dat$Item,,drop=FALSE] * Ability[dat$id,,drop=FALSE]) - B[dat$Item]
-    dat[, p := C + (1 - C) / (1 + exp(-eta))]
+    dat[, p := C + (D - C) / (1 + exp(-eta))]
     dat[, pcorrect := p]
     dat[, score := rbinom(.N, size = 1, prob = p)]
 
@@ -502,6 +521,7 @@ simIRT <- function(Nsubs=100,Nitems=200,Nscales=1, NitemsAnswered=Nitems,
       A = A,
       B = B,
       C = C,
+      D = D,
       primaryScale = primaryScale,
       dat = as.data.table(dat)
     )
@@ -512,11 +532,13 @@ simIRT <- function(Nsubs=100,Nitems=200,Nscales=1, NitemsAnswered=Nitems,
   A <- matrix(rnorm(Nitems*Nscales,AMean,ASD),Nitems)
   B <- matrix(rnorm(Nitems*Nscales,BMean,BSD),Nitems)
   logitC <- matrix(rnorm(Nitems*Nscales,logitCMean,logitCSD),Nitems)
+  logitD <- matrix(rnorm(Nitems*Nscales,logitDMean,logitDSD),Nitems)
 
   if(!all(is.na(itemPreds))){
     if(all(!is.na(AitemPredEffects))) A <- A + apply(itemPreds,1,function(x) sum(AitemPredEffects * x))
     if(all(!is.na(BitemPredEffects))) B <- B + apply(itemPreds,1,function(x) sum(BitemPredEffects * x))
     if(all(!is.na(logitCitemPredEffects))) logitC <- logitC + apply(itemPreds,1,function(x) sum(logitCitemPredEffects * x))
+    if(all(!is.na(logitDitemPredEffects))) logitD <- logitD + apply(itemPreds,1,function(x) sum(logitDitemPredEffects * x))
   }
 
   if(!all(is.na(personPreds))){
@@ -531,6 +553,7 @@ simIRT <- function(Nsubs=100,Nitems=200,Nscales=1, NitemsAnswered=Nitems,
 
 
   C <- inv_logit(logitC)
+  D <- dfunc(logitD)
 
 
   for(si in 1:Nscales){
@@ -542,10 +565,11 @@ simIRT <- function(Nsubs=100,Nitems=200,Nscales=1, NitemsAnswered=Nitems,
       A = rep(A[,si],times=Nsubs),
       B=rep(B[,si],times=Nsubs),
       C=rep(C[,si],times=Nsubs),
+      D=rep(D[,si],times=Nsubs),
       pcorrect=0,score=0)
 
     simdat$p= C[simdat$Item-(si-1)*Nitems,si]+
-      (1-C[simdat$Item-(si-1)*Nitems,si]) / (1+exp(
+      (D[simdat$Item-(si-1)*Nitems,si]-C[simdat$Item-(si-1)*Nitems,si]) / (1+exp(
         -A[simdat$Item-(si-1)*Nitems,si] * #discrimination of item=
           (Ability[simdat$id,si] - #Ability
               B[simdat$Item-(si-1)*Nitems,si]) #item difficulty
@@ -571,7 +595,7 @@ simIRT <- function(Nsubs=100,Nitems=200,Nscales=1, NitemsAnswered=Nitems,
   if(!all(is.na(itemPreds))) dat <- merge.data.table((dat),data.table(Item=1:Nitems,itemPreds),by=c('Item'))
   if(!all(is.na(personPreds))) dat <- merge.data.table((dat),data.table(id=1:Nsubs,personPreds),by=c('id'))
 
-  out <- list(Ability=Ability,A=A,B=B, C=C,dat=dat)
+  out <- list(Ability=Ability,A=A,B=B, C=C,D=D,dat=dat)
   class(out) <- c("bigIRT_simIRT", "list")
   return(out)
 }

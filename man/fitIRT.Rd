@@ -26,12 +26,12 @@ fitIRT(
   invspASD = 1,
   BMeandat = 0,
   BSD = 10,
-  logitCMeandat = -4,
-  logitCSD = 4,
-  logitDMeandat = 4,
-  logitDSD = 4,
+  logitCMeandat = 0,
+  logitCSD = 5,
+  logitDMeandat = 0,
+  logitDSD = 5,
   AbilityMeandat = array(0, dim = c(length(unique(dat[[scale]])))),
-  AbilitySD = array(10, dim = c(length(unique(dat[[scale]])))),
+  AbilitySD = array(1, dim = c(length(unique(dat[[scale]])))),
   AbilityCorr = diag(1, c(length(unique(dat[[scale]])))),
   AMeanSD = 1,
   BMeanSD = BSD,
@@ -44,12 +44,12 @@ fitIRT(
   ebayes = TRUE,
   ebayesmultiplier = 2,
   ebayesFromFixed = FALSE,
-  estMeans = c("ability", "B", "C", "D"),
+  estMeans = c("A", "B", "C", "D"),
   priors = TRUE,
   marginalApprox = c("none", "laplace_em", "laplace_direct"),
   estimateAbilityCorr = FALSE,
   laplaceCorrParam = c("normalized_chol", "stan_corsqrt"),
-  laplaceOuterIter = 50,
+  laplaceOuterIter = 500,
   laplaceTol = 0.001,
   laplaceGradTol = 0.01,
   laplaceStabilityIter = 5L,
@@ -217,11 +217,11 @@ fitting when \code{marginalApprox="laplace_em"}. Default is FALSE.}
 \item{laplaceJitter}{Numeric. Small jitter added to stabilize Laplace
 covariance calculations. Default is 1e-6.}
 
-\item{noptimsteps}{Integer. Number of optimizer iterations used inside each sampled-ability
-item/person sub-step. Default is 10.}
+\item{noptimsteps}{Integer. Number of optimizer iterations used inside each
+Laplace item step. Default is 10.}
 
-\item{noptimgradtol}{Numeric. Convergence tolerance for combined sampled-ability gradient norm.
-Default is 1e-2.}
+\item{noptimgradtol}{Numeric. Reserved gradient tolerance for internal
+optimizer configuration. Default is 1e-2.}
 
 \item{normalise}{Logical. Whether to normalize the output estimates. Default is FALSE.}
 

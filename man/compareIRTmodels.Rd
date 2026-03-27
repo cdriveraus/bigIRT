@@ -8,7 +8,8 @@ compareIRTmodels(
   models,
   score_method = "EAP",
   normaliseScale = 1,
-  normaliseMean = 0
+  normaliseMean = 0,
+  curveSampleN = 50L
 )
 }
 \arguments{
@@ -21,6 +22,10 @@ extracting abilities from \code{mirt} fits.}
 \item{normaliseScale}{Numeric scalar passed to \code{\link[=normaliseMIRT]{normaliseMIRT()}}.}
 
 \item{normaliseMean}{Numeric scalar or vector passed to \code{\link[=normaliseMIRT]{normaliseMIRT()}}.}
+
+\item{curveSampleN}{Integer. Number of multivariate-normal theta draws used
+to compute item-response-curve RMSE against the reference model for each
+item and form. Default is 50.}
 }
 \value{
 A list with elements \code{itempars}, \code{personpars}, \code{loading_matrix},
