@@ -1,5 +1,5 @@
-sgd <- function(init,fitfunc,whichignore=c(),nsubsets=1,nsubjects=NA,ndatapoints=NA,plot=FALSE,
-  stepbase=1e-3,gmeminit=ifelse(is.na(startnrows),.8,.8),gmemmax=.95, maxparchange = .50,
+sgd1 <- function(init,fitfunc,whichignore=c(),nsubsets=1,nsubjects=NA,ndatapoints=NA,plot=FALSE,
+  stepbase=1e-2,gmeminit=ifelse(is.na(startnrows),.8,.8),gmemmax=.95, maxparchange = .50,
   startnrows=NA,roughnessmemory=.9,groughnesstarget=.5,roughnesschangemulti = .2,
   parsets=1,
   lproughnesstarget=ifelse(parsets==1,.2,.5),
@@ -63,7 +63,7 @@ sgd <- function(init,fitfunc,whichignore=c(),nsubsets=1,nsubjects=NA,ndatapoints
   }
 
 
-  g=sign(attributes(lpg)$gradient)*(abs(lpg))^(1/2)
+  g=sign(attributes(lpg)$gradient)*(abs(attributes(lpg)$gradient))^(1/2)
   gsmooth=oldgsmooth=oldg=gmid=dgsmooth=gdelta=g
 
   lprdif = lpdif = 0
@@ -505,234 +505,260 @@ sgd <- function(init,fitfunc,whichignore=c(),nsubsets=1,nsubjects=NA,ndatapoints
   out=list(itervalues = lp, value = max(lp),
     par=bestpars,parstore=parstore,gstore=gstore,lpstore=tail(lp,nstore))
 
-  return(out)#,gstore=gstore,pstore=pstore) )
+return(out)#,gstore=gstore,pstore=pstore) )
 }
 
 
-
-sgd2 <- function(init,fitfunc,whichignore=c(),plot=FALSE,
-  stepbase=1e-3,gmeminit=.9,gmemmax=.98, maxparchange = .50,
-  roughnessmemory=.9,groughnesstarget=.5,roughnesschangemulti = 2,
-  lproughnesstarget=.1,
+sgd <- function(init,fitfunc,whichignore=c(),plot=FALSE,
+  stepbase=1e-3,gmeminit=.8,gmemmax=.8, maxparchange = .50,
+  roughnessmemory=.9,groughnesstarget=.3,roughnesschangemulti = 2,
+  lproughnesstarget=.2,
   gsmoothroughnesstarget=.05,
   warmuplength=20,nstore=max(100,length(init)),
   minparchange=1e-800,maxiter=50000,
-  nconvergeiter=30,
+  nconvergeiter=20,
   itertol=1e-3, deltatol=1e-5){
 
-  initfull=init #including ignored params start values
-  if(length(whichignore)>0) init=init[-whichignore]
-
-  errsum = function(x) sqrt(sum(abs(x)))
+  initfull <- init
+  if(length(whichignore) > 0) init <- init[-whichignore]
 
   if(plot){
-    parbase=par(no.readonly=TRUE)
-    on.exit(do.call(par,parbase),add=TRUE)
+    parbase <- par(no.readonly = TRUE)
+    on.exit(do.call(par, parbase), add = TRUE)
   }
-  pars=init
-  delta=deltaold=rep(0,length(pars))
-  bestpars = newpars=maxpars=minpars=changepars=pars
-  step=rep(stepbase,length(pars))
-  bestiter=1
 
-  lpg=fitfunc(init)
+  build_full_par <- function(par){
+    fullpar <- initfull
+    if(length(whichignore) > 0) fullpar[-whichignore] <- par else fullpar <- par
+    fullpar
+  }
 
-  g=sign(attributes(lpg)$gradient)*(abs(lpg))^(1/8)
-  gsmooth=oldgsmooth=oldg=gmid=dgsmooth=gdelta=g
+  eval_fit <- function(par){
+    out <- try(fitfunc(build_full_par(par)), silent = TRUE)
+    if(inherits(out, "try-error") || !is.finite(out[1])){
+      return(list(ok = FALSE, value = -Inf, grad = rep(0, length(par))))
+    }
+    grad <- attributes(out)$gradient
+    if(is.null(grad)){
+      return(list(ok = FALSE, value = -Inf, grad = rep(0, length(par))))
+    }
+    if(length(whichignore) > 0) grad <- grad[-whichignore]
+    grad <- as.numeric(grad)
+    if(any(!is.finite(grad))){
+      return(list(ok = FALSE, value = -Inf, grad = rep(0, length(par))))
+    }
+    list(ok = TRUE, value = as.numeric(out[1]), grad = grad)
+  }
 
-  lprdif = lpdif = 0
-  parscore=rep(0,length(pars))
+  clamp_move <- function(x){
+    x[abs(x) > maxparchange] <- maxparchange * sign(x[abs(x) > maxparchange])
+    x[abs(x) < minparchange] <- 0
+    x
+  }
 
-  groughness = rep(groughnesstarget,length(g))
-  gsmoothroughness = rep(gsmoothroughnesstarget,length(g))
-  lproughness=oldlproughnesstarget=lproughnesstarget
-  gmemory <- gmeminit
-  oldgmemory  <- gmemory
-  oldlpdif <- 0
-  lpdif <- 0
-  maxlp <- -Inf
-  i=0
-  lp<-c()
-  oldlp <- -Inf
-  converged <- FALSE
-  while(!converged && i < maxiter){
-    i = i + 1
-    accepted <- FALSE
-    lproughnesstarget2 = lproughnesstarget
-    notacceptedcount <- 0
+  flip_indicator <- function(a, b){
+    as.numeric(sign(a) != 0 & sign(b) != 0 & sign(a) != sign(b))
+  }
 
-    while(!accepted){
-      notacceptedcount <- notacceptedcount+1
-      if(notacceptedcount > 50) {
-        stop('Cannot optimize! Problematic model, or bug?')
-        print(lpg)
-      }
+  pars <- init
+  cur <- eval_fit(pars)
+  if(!isTRUE(cur$ok)) stop("Initial parameters are not evaluable in sgd2().")
 
-      if(i > 1){
-        delta =   step * (gsmooth+dgsmooth/2)
-        delta[abs(delta) > maxparchange] <- maxparchange*sign(delta[abs(delta) > maxparchange])
-        delta = delta +  delta/2 - deltaold/2
-        newpars = pars + delta
-      }
+  p <- length(pars)
+  momentum_base <- min(gmemmax, max(0, gmeminit))
+  local_rate <- max(0.01, 0.05 * roughnesschangemulti)
+  global_rate <- max(0.02, 0.15 * roughnesschangemulti)
 
-      if(any(is.na(newpars))) browser()
-      if(i==1) itertime <- Sys.time()
+  velocity <- rep(0, p)
+  step_local <- rep(1, p)
+  step_global <- stepbase
+  grad_ema <- cur$grad
+  grad_sq_ema <- pmax(cur$grad^2, 1e-12)
+  prev_grad <- cur$grad
+  prev_grad_ema <- grad_ema
 
-      fullnewpars <- initfull
-      if(length(whichignore)>0) fullnewpars[-whichignore] <- newpars else fullnewpars <- newpars
+  grad_flip_rate <- rep(0, p)
+  smooth_flip_rate <- rep(0, p)
+  lp_flip_rate <- 0
+  lp_change_scale <- max(abs(cur$value) * 1e-3, itertol, 1e-8)
+  recent_best_gain_ema <- Inf
+  no_best_streak <- 0L
 
-      lpg= fitfunc(fullnewpars)
+  bestpars <- pars
+  bestval <- cur$value
+  bestiter <- 1L
 
-      if(lpg > -1e99 &&       #regular check
-          class(lpg) !='try-error' &&
-          !is.nan(lpg[1]) &&
-          all(!is.nan(attributes(lpg)$gradient))
-      ){
-        accepted <- TRUE
-      }
-      else {
-        gsmooth= gsmooth*gmemory2^2 + (1-gmemory2^2) * g #increase influence of last gradient at inflections
-        step <- step * .5
-        deltaold <- deltaold * 0
-      }
+  lp <- rep(NA_real_, maxiter)
+  grad_norm <- rep(NA_real_, maxiter)
+  accepted <- rep(FALSE, maxiter)
+  parstore <- matrix(NA_real_, nrow = p, ncol = nstore)
+  step_global_store <- rep(NA_real_, maxiter)
+  lp_flip_store <- rep(NA_real_, maxiter)
 
-      if( #warmup check
-          i < warmuplength && i > 1 && lpg[1] < lp[i-1]-5) {
-        accepted <- FALSE
-        step = step * .1
-        deltaold <- deltaold * 0
+  lp[1] <- cur$value
+  grad_norm[1] <- sqrt(sum(cur$grad^2))
+  accepted[1] <- TRUE
+  parstore[,1] <- pars
+  step_global_store[1] <- step_global
+  lp_flip_store[1] <- 0
+  iter_done <- 1L
 
-      }
-      if(plot && !accepted) {
-        print(paste0('iter ', i,' not accepted!'))
-      }
-    } #end acceptance loop
+  for(i in 2:maxiter){
+    iter_done <- i
 
-    #once accepted
-    lp[i]=lpg[1]
-    pars=newpars
-    deltaold=delta
-    oldg=g
-    g=attributes(lpg)$gradient
-    g=sign(g)*(abs(g))^(1/2)#sqrt
-    gmemory2 = gmemory * min(i/warmuplength,1)^(1/8)
-    roughnessmemory2 = roughnessmemory * min(i/warmuplength,1)^(1/8)
-    oldgmid=gmid
-    gmid = g#(oldg+g)/2
-    oldgsmooth = gsmooth
-    gsmooth= gsmooth*gmemory2 + (1-gmemory2) * g
-    dgsmooth = gmemory2*dgsmooth +(1-gmemory2)*(gsmooth-oldgsmooth)
+    warmup_frac <- min(1, i / max(1, warmuplength))
+    momentum_now <- momentum_base * (0.25 + 0.75 * warmup_frac)
 
-    if(i > 1) lproughness = lproughness * (roughnessmemory2) + (1-(roughnessmemory2)) * as.numeric(lp[i-1] > (lp[i]))#because accepted here, also see non accepted version
-    groughness = groughness * (roughnessmemory2) + (1-(roughnessmemory2)) * as.numeric(sign(gmid)!=sign(oldgmid))
-    gsmoothroughness = gsmoothroughness * (roughnessmemory2) + (1-(roughnessmemory2)) * as.numeric(sign(gsmooth)!=sign(oldgsmooth))
+    scaled_grad <- grad_ema / sqrt(pmax(grad_sq_ema, 1e-12))
+    proposal_velocity <- momentum_now * velocity + step_global * step_local * scaled_grad
+    proposal_velocity <- clamp_move(proposal_velocity)
+    proposal_pars <- pars + proposal_velocity
+    prop <- eval_fit(proposal_pars)
 
-    lproughnessmod=  ( ( (1/(-lproughness-lproughnesstarget2)) / (1/-lproughnesstarget2) + .5) -1) #balanced eq for any centre / target
-    groughnessmod = ( ( ( (1/(-(groughness)-groughnesstarget)) / (1/-groughnesstarget) + .5) ) -1)
+    catastrophic_drop <- FALSE
+    if(isTRUE(prop$ok)){
+      catastrophic_drop <- (cur$value - prop$value) > max(100 * lp_change_scale, 50 * itertol)
+    }
 
-    step = (step + roughnesschangemulti*(
-      step* lproughnessmod
-      + step*
-        .8*groughnessmod
-    ))
+    if(!isTRUE(prop$ok) || catastrophic_drop){
+      accepted[i] <- FALSE
+      lp[i] <- cur$value
+      grad_norm[i] <- sqrt(sum(cur$grad^2))
+      step_global <- max(minparchange, step_global * 0.75)
+      velocity <- velocity * 0.05
+      grad_ema <- 0.5 * grad_ema + 0.5 * cur$grad
+      lp_flip_rate <- roughnessmemory * lp_flip_rate + (1 - roughnessmemory) * 1
+      lp_flip_store[i] <- 1
+      parstore[,1 + ((i - 1) %% nstore)] <- pars
+      step_global_store[i] <- step_global
+      next
+    }
 
-    signdif= sign(gsmooth)!=sign(gmid)
+    prev_value <- cur$value
+    prev_bestval <- bestval
+    lp_flip <- as.numeric(prop$value < prev_value)
 
-    if(i > 1 && lp[i] >= max(head(lp,length(lp)-1))) {
-      if(i > warmuplength) {
-        ##max/min par update extra
-        parscore <- parscore * .98
-        whichmax <- which(pars > maxpars | pars < minpars)
-        if(length(whichmax) > 0){
-          parscore[whichmax] <- parscore[whichmax]+.1*(as.numeric(pars[whichmax]>maxpars[whichmax])*2-1)
-          maxpars[pars>maxpars] <-pars[pars>maxpars]
-          minpars[pars<minpars] <-pars[pars<minpars]
-        }
-        changepars=pars
-        if(length(whichmax)) changepars[-whichmax] <- NA else changepars[]<-NA
-      }
-      bestpars <- pars <- newpars
-      bestg <- g
+    pars <- proposal_pars
+    velocity <- proposal_velocity
+    cur <- prop
+    lp[i] <- cur$value
+    grad_norm[i] <- sqrt(sum(cur$grad^2))
+    accepted[i] <- TRUE
+    parstore[,1 + ((i - 1) %% nstore)] <- pars
+
+    lp_change_scale <- roughnessmemory * lp_change_scale + (1 - roughnessmemory) * abs(cur$value - prev_value)
+    lp_flip_rate <- roughnessmemory * lp_flip_rate + (1 - roughnessmemory) * lp_flip
+    lp_flip_store[i] <- lp_flip
+
+    grad_sq_ema <- roughnessmemory * grad_sq_ema + (1 - roughnessmemory) * (cur$grad^2)
+    cur_scaled_grad <- cur$grad / sqrt(pmax(grad_sq_ema, 1e-12))
+    if(lp_flip){
+      bad_step_momentum <- 0.1 * momentum_now
+      grad_ema_new <- bad_step_momentum * grad_ema + (1 - bad_step_momentum) * cur$grad
+    } else {
+      grad_ema_new <- momentum_now * grad_ema + (1 - momentum_now) * cur$grad
+    }
+    grad_flip_rate <- roughnessmemory * grad_flip_rate + (1 - roughnessmemory) * flip_indicator(cur$grad, prev_grad)
+    smooth_flip_rate <- roughnessmemory * smooth_flip_rate + (1 - roughnessmemory) * flip_indicator(grad_ema_new, prev_grad_ema)
+
+    local_signal <- (groughnesstarget - grad_flip_rate) + 0.5 * (gsmoothroughnesstarget - smooth_flip_rate)
+    step_local <- step_local * exp(local_rate * local_signal)
+    step_local <- pmin(pmax(step_local, minparchange / max(step_global, 1e-12)), maxparchange / max(step_global, 1e-12))
+
+    current_best_gain <- max(0, cur$value - prev_bestval)
+    if(current_best_gain > 0){
+      no_best_streak <- 0L
+    } else {
+      no_best_streak <- no_best_streak + 1L
+    }
+    if(is.finite(recent_best_gain_ema)){
+      recent_best_gain_ema <- roughnessmemory * recent_best_gain_ema + (1 - roughnessmemory) * current_best_gain
+    } else {
+      recent_best_gain_ema <- current_best_gain
+    }
+
+    global_signal <- (lproughnesstarget - lp_flip_rate) / max(lproughnesstarget, 1e-6)
+    if(lp_flip == 0 && lp_flip_rate < lproughnesstarget){
+      global_signal <- global_signal + 0.35
+    }
+    if(current_best_gain > 0){
+      global_signal <- global_signal + 0.5 * pmin(2, current_best_gain / max(lp_change_scale, itertol, 1e-8))
+    } else if(is.finite(recent_best_gain_ema) && recent_best_gain_ema < 0.25 * max(lp_change_scale, itertol, 1e-8) &&
+              lp_flip_rate < (0.8 * lproughnesstarget)){
+      stall_push <- pmin(1.5, no_best_streak / max(5, nconvergeiter / 2))
+      global_signal <- global_signal + stall_push
+    }
+    step_global <- step_global * exp(global_rate * global_signal)
+    step_global <- min(maxparchange, max(minparchange, step_global))
+    step_global_store[i] <- step_global
+
+    if(lp_flip){
+      velocity <- clamp_move(0.1 * velocity + 0.9 * (step_global * step_local * cur_scaled_grad))
+    }
+
+    prev_grad <- cur$grad
+    prev_grad_ema <- grad_ema_new
+    grad_ema <- grad_ema_new
+
+    if(cur$value > bestval){
+      bestval <- cur$value
+      bestpars <- pars
       bestiter <- i
     }
 
-    if(i > 25 && i %% 20 == 0) {
-      oldlpdif <- lpdif
-      sublp <- tail(lp,20)
-      lpdif <- diff(c(max(head(sublp,5)),max(tail(sublp,5))))
-      if(oldlpdif > lpdif) gmemory <- oldgmemory
-      proposal = gmemory*2-oldgmemory
-      oldgmemory <- gmemory
-      gmemory <- min(gmemmax, max(0, proposal + runif(1,-.025,.05)))
-      if(gmemory < .95) gmemory <- gmemory + .02
+    if(plot && i %% as.numeric(plot) == 0){
+      par(mfrow = c(2, 3), mgp = c(2, .8, 0), mar = c(2, 3, 1, 0) + .2)
+      plot(pars, col = 1:p, main = "pars")
+      plot(log(abs(step_global * step_local) + 1e-50), col = 1:p, main = "log eff step")
+      plot(tail(lp[seq_len(i)], min(i, 500)), type = "l", main = "objective")
+      matplot(t(parstore[,seq_len(min(i, nstore)),drop = FALSE]), type = "l", main = "recent path")
+      plot(grad_flip_rate, col = 1:p, ylim = c(0, 1), main = "grad flip rate")
+      abline(h = groughnesstarget, lty = 2)
+      plot(lp_flip_store[seq_len(i)], type = "s", ylim = c(0, 1), main = "LP flips")
+      abline(h = lproughnesstarget, lty = 2)
+      message(
+        paste0(
+          "Iter = ", i,
+          " LP = ", signif(cur$value, 6),
+          " best = ", signif(bestval, 6),
+          " grad = ", signif(sqrt(sum(cur$grad^2)), 4),
+          " step_global = ", signif(step_global, 3),
+          " lp_flip_rate = ", signif(lp_flip_rate, 3)
+        )
+      )
     }
 
-    if(i > 31 && i %% 30 == 0) {
-      oldlprdif <- lprdif
-      sublp <- tail(lp,15)
-      lprdif <- diff(c(max(head(sublp,5)),max(tail(sublp,5))))
-      if(oldlprdif > lprdif) lproughnesstarget <- oldlproughnesstarget
-      lprproposal = lproughnesstarget*2-oldlproughnesstarget
-      oldlproughnesstarget <- lproughnesstarget
-      if(max(lp) > max(tail(lp,30))) lprproposal <- min(.2,.5 * lprproposal)
-      lproughnesstarget <- min(.5, max(.2, lprproposal + .025 * (-1+2*rbinom(n = 1,size = 1,prob = .5))))
+    if(i >= nconvergeiter){
+      recent_idx <- seq.int(max(1L, i - nconvergeiter + 1L), i)
+      recent_lp <- lp[recent_idx]
+      recent_best <- max(recent_lp, na.rm = TRUE)
+      prev_idx <- seq_len(max(0L, min(recent_idx) - 1L))
+      prev_best <- if(length(prev_idx)) max(lp[prev_idx], na.rm = TRUE) else -Inf
+      recent_gain <- if(is.finite(prev_best)) recent_best - prev_best else Inf
+      recent_grad_mean <- mean(grad_norm[recent_idx], na.rm = TRUE)
+      recent_grad_min <- min(grad_norm[recent_idx], na.rm = TRUE)
 
-    }
-
-    step[step > maxparchange] <- maxparchange
-    step[step < minparchange] <- minparchange
-
-    if(i > warmuplength && lp[i] < lp[i-1]) { #if worsening, update gradient faster
-      step[signdif]=step[signdif]*.5
-      if(lp[i] < lp[i-10]) gmemory <- gmemory * .995
-      gsmooth[signdif]= gsmooth[signdif]*gmemory2^2 + (1-gmemory2^2) * g[signdif] #increase influence of gradient at inflections
-    }
-
-    if(plot && i %% as.numeric(plot) ==0){
-      par(mfrow=c(2,3),mgp=c(2,.8,0),mar=c(2,3,1,0)+.2)
-      plot(pars,col=1:length(pars))
-      points(changepars,pch=17,col='red')
-      plot(log(abs(step*gsmooth)+1e-50),col=1:length(pars))
-      plot(tail(log(-(lp-max(lp)-1)),500),type='l')
-      # plot(gamweights,col=1:length(pars))
-      parsd=(apply(parstore,1,sd,na.rm=T))
-      matplot(t(parstore[
-        which(parsd > sort(parsd,decreasing = TRUE)[min(c(length(pars),5))]),,drop=FALSE]),
-        type='l')
-      if(1==1){
-        plot(groughness,col='red',ylim=c(0,1))
-        abline(h=mean(gsmoothroughness),col='blue',lty=2)
-        abline(h=(gsmoothroughnesstarget),col='blue',lty=1,lwd=2)
-        points(gsmoothroughness,ylim=c(0,1),col='blue')
-        abline(h=mean(groughness),col='red',lty=2)
-        abline(h=(groughnesstarget),col='red',lty=1)
-
-        abline(h=lproughnesstarget,lty=1,col='green')
-        abline(h=lproughness, col='green',lty=2)
-
-
-      }
-      message(paste0('Iter = ',i, '   LP = ', (lp[i]),'   grad = ', sqrt(sum(g^2)), '   gmem = ', gmemory,'  lprt = ',lproughnesstarget))
-    }
-
-    #check convergence
-    if(i > 30){
-      lpdiff=max(tail(lp,nconvergeiter)) - min(tail(lp,nconvergeiter))
-
-      if(lpdiff < itertol & lpdiff > 0) converged <- TRUE
-      if(i==31){ #configure progress bar
-        lpdiffbase <- lpdiff
-        pb <- txtProgressBar(min = 0, max = 100,style = 3, width = 10, char = "=", file = stderr())
-        on.exit(add=TRUE,expr = {close(pb)})
-      }
-      setTxtProgressBar(pb,100*(1 - log(lpdiff/itertol) / log(lpdiffbase/itertol)))
+      if(is.finite(recent_gain) && recent_gain < itertol) break
+      if(is.finite(recent_grad_mean) && recent_grad_mean < itertol) break
+      if(is.finite(recent_grad_min) && recent_grad_min < (itertol / 2)) break
     }
   }
 
-  setTxtProgressBar(pb,100)
-  out=list(itervalues = lp, value = max(lp),
-    par=bestpars,lpstore=tail(lp,nstore))
+  used_lp <- lp[seq_len(iter_done)]
+  out <- list(
+    itervalues = used_lp,
+    value = bestval,
+    par = bestpars,
+    parstore = parstore,
+    lpstore = tail(used_lp, nstore),
+    gradnorm = grad_norm[seq_len(iter_done)],
+    accepted = accepted[seq_len(iter_done)],
+    step_global = step_global_store[seq_len(iter_done)],
+    step_local = step_local,
+    lp_flip_rate = lp_flip_rate,
+    grad_flip_rate = grad_flip_rate,
+    smooth_flip_rate = smooth_flip_rate
+  )
 
   return(out)
 }
-

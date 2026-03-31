@@ -769,6 +769,7 @@ bigIRT_laplace_direct_layout <- function(sdat, estimateAbilityCorr = FALSE){
     cursor <<- cursor + n
     idx
   }
+  item_layout$ability_beta <- take(sdat$Nscales * sdat$NpersonPreds)
   item_layout$ability_mean <- take(if(sdat$fixedAbilityMean == 0L) sdat$Nscales else 0L)
   n_corr <- if(isTRUE(estimateAbilityCorr) && sdat$Nscales > 1L) sdat$Nscales * (sdat$Nscales - 1L) / 2L else 0L
   item_layout$corr <- take(n_corr)
@@ -783,6 +784,9 @@ bigIRT_laplace_pack_direct_state <- function(state, sdat,
   item_slots <- layout[intersect(names(layout), names(bigIRT_laplace_item_layout(sdat)))]
   if(length(unlist(item_slots))){
     out[seq_len(max(unlist(item_slots), 0L))] <- bigIRT_laplace_pack_item_state(state, sdat, layout = item_slots)
+  }
+  if(length(layout$ability_beta)){
+    out[layout$ability_beta] <- as.numeric(state$Abilitybeta)
   }
   if(length(layout$ability_mean)){
     out[layout$ability_mean] <- as.numeric(state$AbilityMean)
@@ -802,6 +806,13 @@ bigIRT_laplace_unpack_direct_state <- function(par, state, sdat,
   out <- state
   item_slots <- layout[intersect(names(layout), names(bigIRT_laplace_item_layout(sdat)))]
   out <- bigIRT_laplace_unpack_item_state(par, out, sdat, layout = item_slots)
+  if(length(layout$ability_beta)){
+    out$Abilitybeta <- matrix(
+      as.numeric(par[layout$ability_beta]),
+      nrow = nrow(state$Abilitybeta),
+      ncol = ncol(state$Abilitybeta)
+    )
+  }
   if(length(layout$ability_mean)){
     out$AbilityMean <- as.numeric(par[layout$ability_mean])
   }
@@ -835,9 +846,8 @@ bigIRT_laplace_corr_grad <- function(state, sdat, layout, posterior, prior_preci
   ))
 }
 
-bigIRT_laplace_item_prior <- function(state, sdat){
-  if(!isTRUE(as.logical(sdat$dopriors))) return(list(value = 0, grad = bigIRT_laplace_pack_item_state(state, sdat) * 0))
-  layout <- bigIRT_laplace_item_layout(sdat)
+bigIRT_laplace_item_prior <- function(state, sdat, layout = bigIRT_laplace_item_layout(sdat)){
+  if(!isTRUE(as.logical(sdat$dopriors))) return(list(value = 0, grad = numeric(max(unlist(layout), 0L))))
   grad <- numeric(max(unlist(layout), 0L))
   value <- 0
 
@@ -904,6 +914,10 @@ bigIRT_laplace_item_prior <- function(state, sdat){
 
   betaScale <- as.numeric(sdat$betaScale)
   if(betaScale > 0){
+    if(length(layout$ability_beta)){
+      value <- value + sum(dnorm(as.numeric(state$Abilitybeta), 0, betaScale, log = TRUE))
+      grad[layout$ability_beta] <- grad[layout$ability_beta] - as.numeric(state$Abilitybeta) / (betaScale^2)
+    }
     if(length(layout$A_beta)){
       value <- value + sum(dnorm(as.numeric(state$invspAbeta), 0, betaScale, log = TRUE))
       grad[layout$A_beta] <- grad[layout$A_beta] - as.numeric(state$invspAbeta) / (betaScale^2)
@@ -1139,7 +1153,7 @@ bigIRT_laplace_direct_objective <- function(par, state, sdat, prior_precision,
   t_setup0 <- wall_time_sec()
   if(is.null(context)) {
     direct_layout <- bigIRT_laplace_direct_layout(sdat, estimateAbilityCorr = estimateAbilityCorr)
-    item_layout <- direct_layout[setdiff(names(direct_layout), c("corr", "ability_mean"))]
+    item_layout <- direct_layout[setdiff(names(direct_layout), c("corr", "ability_mean", "ability_beta"))]
     context <- bigIRT_laplace_item_context(sdat, layout = item_layout)
     context$direct_layout <- direct_layout
     context$estimateAbilityCorr <- estimateAbilityCorr
@@ -1174,6 +1188,7 @@ bigIRT_laplace_direct_objective <- function(par, state, sdat, prior_precision,
   }
   setup_sec <- wall_time_sec() - t_setup0
   t_kernel0 <- wall_time_sec()
+  if(isTRUE(getOption("bigIRT.debug.direct", FALSE))) message("bigIRT debug: entering direct_fg kernel")
   direct_fg <- bigIRT_laplace_direct_block_fg_cpp_impl(
     id = sdat$id[context$train_rows],
     score = sdat$score[context$train_rows],
@@ -1216,6 +1231,7 @@ bigIRT_laplace_direct_objective <- function(par, state, sdat, prior_precision,
     keep_covariance = keep_covariance,
     grain_size = context$grain_size
   )
+  if(isTRUE(getOption("bigIRT.debug.direct", FALSE))) message("bigIRT debug: direct_fg kernel returned")
   kernel_sec <- wall_time_sec() - t_kernel0
   kernel_timings <- direct_fg$timings
   posterior <- direct_fg$posterior
@@ -1224,7 +1240,7 @@ bigIRT_laplace_direct_objective <- function(par, state, sdat, prior_precision,
   prior_norm_value <- if(isTRUE(context$estimateAbilityCorr)) {
     0.5 * sdat$Nsubs * as.numeric(determinant(prior_mats$precision, logarithm = TRUE)$modulus)
   } else 0
-  prior <- bigIRT_laplace_item_prior(curState, sdat)
+  prior <- bigIRT_laplace_item_prior(curState, sdat, layout = context$direct_layout)
   prior_sec <- wall_time_sec() - t_prior0
   t_grad0 <- wall_time_sec()
   approx_grad <- numeric(length(par))
@@ -1247,6 +1263,27 @@ bigIRT_laplace_direct_objective <- function(par, state, sdat, prior_precision,
   }
   if(length(prior$grad)) approx_grad[seq_along(prior$grad)] <- approx_grad[seq_along(prior$grad)] + prior$grad
   item_grad_sec <- wall_time_sec() - t_grad0
+  if(length(context$direct_layout$ability_beta)){
+    if(isTRUE(getOption("bigIRT.debug.direct", FALSE))) message("bigIRT debug: entering ability beta contribution")
+    row_effective <- bigIRT_laplace_row_effective(
+      state = curState,
+      sdat = sdat,
+      thetaBase = posterior$theta_mode,
+      rows = context$train_rows,
+      context = row_context
+    )
+    approx_grad[context$direct_layout$ability_beta] <- as.numeric(
+      bigIRT_laplace_ability_beta_contribution(
+        state = curState,
+        sdat = sdat,
+        posterior = posterior,
+        row_effective = row_effective,
+        row_context = row_context,
+        layout = context$direct_layout
+      )
+    )
+    if(isTRUE(getOption("bigIRT.debug.direct", FALSE))) message("bigIRT debug: ability beta contribution returned")
+  }
   ability_mean_sec <- 0
   if(length(context$direct_layout$ability_mean)){
     t_mean0 <- wall_time_sec()
@@ -1355,10 +1392,10 @@ bigIRT_laplace_optimize_direct <- function(state, sdat, prior_precision,
   keep_covariance = FALSE, cores = 1L, estimateAbilityCorr = FALSE,
   corr_paramization = c("normalized_chol", "stan_corsqrt"),
   collect_history = FALSE, plot_callback = NULL, plot_every = 1L,
-  verbose = 0L, trace_fn = NULL){
+  verbose = 0L, trace_fn = NULL, stochastic = FALSE){
   corr_paramization <- match.arg(corr_paramization)
   direct_layout <- bigIRT_laplace_direct_layout(sdat, estimateAbilityCorr = estimateAbilityCorr)
-  item_layout <- direct_layout[setdiff(names(direct_layout), c("corr", "ability_mean"))]
+  item_layout <- direct_layout[setdiff(names(direct_layout), c("corr", "ability_mean", "ability_beta"))]
   context <- bigIRT_laplace_item_context(sdat, layout = item_layout)
   context$grain_size <- bigIRT_laplace_subject_grain(sdat$Nsubs, cores)
   context$direct_layout <- direct_layout
@@ -1499,24 +1536,43 @@ bigIRT_laplace_optimize_direct <- function(state, sdat, prior_precision,
   target_gr <- function(par){
     target_fg(par)$gr
   }
-
-  fit <- mize::mize(
-    init,
-    fg = list(fg = target_fg, fn = target_fn, gr = target_gr),
-    max_iter = niter,
-    method = "L-BFGS",
-    memory = 30,
-    line_search = "Schmidt",
-    c1 = 1e-10,
-    c2 = 0.9,
-    step0 = "schmidt",
-    ls_max_fn = 20L,
-    abs_tol = tol,
-    grad_tol = tol,
-    rel_tol = 0,
-    step_tol = 0,
-    ginf_tol = 0
-  )
+  if(isTRUE(stochastic)){
+    target <- function(par){
+      res <- get_eval(par)
+      out <- res$value
+      attributes(out)$gradient <- res$approx_grad
+      out
+    }
+    fit <- sgd(
+      init = init,
+      maxiter = niter,
+      fitfunc = target,
+      itertol = tol
+    )
+    fit$iter <- length(fit$itervalues)
+    fit$terminate <- list(
+      what = if(length(fit$itervalues) < as.integer(niter)) "sgd_converged" else "sgd_max_iter",
+      val = if(length(fit$itervalues)) tail(fit$itervalues, 1L) else NA_real_
+    )
+  } else {
+    fit <- mize::mize(
+      init,
+      fg = list(fg = target_fg, fn = target_fn, gr = target_gr),
+      max_iter = niter,
+      method = "L-BFGS",
+      memory = 30,
+      line_search = "Schmidt",
+      # c1 = 1e-10,
+      # c2 = 0.9,
+      step0 = "schmidt",
+      ls_max_fn = 20L,
+      abs_tol = tol,
+      grad_tol = tol,
+      rel_tol = 0,
+      step_tol = 0,
+      ginf_tol = 0
+    )
+  }
   final <- get_eval(fit$par)
   fit$masked_grad_norm <- sqrt(sum(final$approx_grad^2))
   fit$target_evals <- eval_count
@@ -1528,6 +1584,93 @@ bigIRT_laplace_optimize_direct <- function(state, sdat, prior_precision,
     history[[length(history)]][["optimizerTerminateValue"]] <- if(!is.null(fit$terminate$val)) fit$terminate$val else NA_real_
   }
   list(state = final$state, optim = fit, eval = final, history = history)
+}
+
+bigIRT_laplace_transformed_betas <- function(state, sdat){
+  out <- list(
+    Abilitybeta = state$Abilitybeta,
+    Bbeta = state$Bbeta,
+    Abeta = state$invspAbeta,
+    Cbeta = state$logitCbeta,
+    Dbeta = state$logitDbeta
+  )
+
+  if(length(state$invspAbeta)){
+    if(nrow(state$invspAbeta) == 1L){
+      a_mult <- mean(inv_logit(state$invspApars), na.rm = TRUE)
+      if(!is.finite(a_mult)) a_mult <- 0
+      out$Abeta <- state$invspAbeta * a_mult
+    } else {
+      out$Abeta <- state$invspAbeta * matrix(
+        inv_logit(state$invspApars),
+        nrow = nrow(state$invspAbeta),
+        ncol = ncol(state$invspAbeta)
+      )
+    }
+  }
+
+  if(length(state$logitCbeta)){
+    c_mult_vec <- 0.5 * inv_logit(state$logitCpars) * (1 - inv_logit(state$logitCpars))
+    if(nrow(state$logitCbeta) == 1L){
+      c_mult <- mean(c_mult_vec, na.rm = TRUE)
+      if(!is.finite(c_mult)) c_mult <- 0
+      out$Cbeta <- state$logitCbeta * c_mult
+    } else {
+      out$Cbeta <- state$logitCbeta * matrix(c_mult_vec, nrow = nrow(state$logitCbeta), ncol = ncol(state$logitCbeta))
+    }
+  }
+
+  if(length(state$logitDbeta)){
+    d_sig <- inv_logit(state$logitDpars)
+    d_mult_vec <- 0.5 * d_sig * (1 - d_sig)
+    if(nrow(state$logitDbeta) == 1L){
+      d_mult <- mean(d_mult_vec, na.rm = TRUE)
+      if(!is.finite(d_mult)) d_mult <- 0
+      out$Dbeta <- state$logitDbeta * d_mult
+    } else {
+      out$Dbeta <- state$logitDbeta * matrix(d_mult_vec, nrow = nrow(state$logitDbeta), ncol = ncol(state$logitDbeta))
+    }
+  }
+
+  out
+}
+
+bigIRT_laplace_ability_beta_contribution <- function(state, sdat, posterior, row_effective, row_context, layout){
+  out <- matrix(0, nrow = sdat$Nscales, ncol = sdat$NpersonPreds)
+  if(length(layout$ability_beta) == 0L || sdat$NpersonPreds == 0L) return(out)
+  if(is.null(posterior$covariance)) stop("laplace_direct Abilitybeta gradients require posterior covariances.")
+
+  score <- sdat$score[row_context$rows]
+  for(obs in seq_along(row_context$rows)){
+    subj <- row_context$ids[obs]
+    Sigma <- posterior$covariance[,,subj, drop = FALSE][,,1]
+    a <- row_effective$loadings[obs,]
+    aSa <- as.numeric(t(a) %*% Sigma %*% a)
+    eta <- row_effective$eta_row[obs]
+    c_row <- row_effective$c_row[obs]
+    d_row <- row_effective$d_row[obs]
+    y <- as.numeric(score[obs])
+
+    g <- inv_logit(eta)
+    q <- g * (1 - g)
+    u <- d_row - c_row
+    p <- pmin(pmax(c_row + u * g, 1e-12), 1 - 1e-12)
+    s <- u * q
+    r <- pmax(p * (1 - p), 1e-12)
+    coeff <- (y - p) / r
+    grad_eta <- coeff * s
+    dq_deta <- q * (1 - 2 * g)
+    ds_deta <- u * dq_deta
+    dr_deta <- s * (1 - 2 * p)
+    dw_deta <- (2 * s * ds_deta * r - s^2 * dr_deta) / (r^2)
+    eta_mult <- grad_eta - 0.5 * dw_deta * aSa
+
+    for(k in seq_len(sdat$Nscales)){
+      if(row_context$fixed_ability[obs, k]) next
+      out[k,] <- out[k,] + row_context$person_pred[obs,] * a[k] * eta_mult
+    }
+  }
+  out
 }
 
 bigIRT_laplace_constrained_pars <- function(state, sdat, posterior = NULL){
@@ -1601,6 +1744,11 @@ bigIRT_laplace_constrained_pars <- function(state, sdat, posterior = NULL){
     p = materialized$p,
     pcorrect = materialized$pcorrect
   )
+  beta_alias <- bigIRT_laplace_transformed_betas(state, sdat)
+  out$Abeta <- beta_alias$Abeta
+  out$Bbeta <- beta_alias$Bbeta
+  out$Cbeta <- beta_alias$Cbeta
+  out$Dbeta <- beta_alias$Dbeta
   if(!is.null(posterior) && !is.null(posterior$covariance)){
     sAbilitySD <- matrix(0, nrow = sdat$Nsubs, ncol = sdat$Nscales)
     for(i in seq_len(sdat$Nsubs)) sAbilitySD[i,] <- sqrt(pmax(diag(as.matrix(posterior$covariance[,,i])), 0))

@@ -2013,8 +2013,8 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   ebayes=TRUE,ebayesmultiplier=2,ebayesFromFixed=FALSE,
   estMeans=c('A','B','C','D'),priors=TRUE,
   marginalApprox=c("none","laplace_em","laplace_direct"),
-  estimateAbilityCorr=FALSE,
-  laplaceCorrParam=c("normalized_chol","stan_corsqrt"),
+  estimateAbilityCorr=TRUE,
+  laplaceCorrParam=c("stan_corsqrt","normalized_chol"),
   laplaceOuterIter=500,laplaceTol=1e-3,laplaceGradTol=1e-2,laplaceStabilityIter=5L,laplacePersonTol=1e-4,
   laplaceKeepCovariance=FALSE,laplaceDiagnostics=FALSE,laplacePlot=FALSE,laplacePlotEvery=1L,
   laplaceJitter=1e-6,noptimsteps=10,
@@ -2493,10 +2493,6 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
       estimateAbilityCorr <- FALSE
     }
 
-    if(sdat$NpersonPreds > 0){
-      warning("laplace_direct currently keeps Abilitybeta fixed during direct Laplace optimization when person predictors are present.")
-    }
-
     state <- bigIRT_laplace_initial_state(sdat, eps = laplaceJitter, corr_paramization = laplaceCorrParam)
     priorInfo <- bigIRT_laplace_prior_mats(sdat, jitter = laplaceJitter)
     priorPrecision <- priorInfo$precision_array
@@ -2521,7 +2517,8 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
       plot_callback = direct_plot_callback,
       plot_every = laplacePlotEvery,
       verbose = laplaceVerbose,
-      trace_fn = function(msg) laplace_trace(2, msg)
+      trace_fn = function(msg) laplace_trace(2, msg),
+      stochastic = isTRUE(optimdots$stochastic)
     )
     directSec <- wall_time_sec() - t_direct
     state <- directFit$state
@@ -3084,7 +3081,11 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   if(fit$dat$NpersonPreds > 0){
     colnames(fit$pars$Abilitybeta) <- colnames(personPreds)
     fit$covariateEffects$Ability <- fit$pars$Abilitybeta
-    fit$covariateEffects$AbilityStd <- fit$pars$Abilitybeta * apply(fit$dat$personPreds,2,sd) / sd(fit$pars$Ability)
+    ability_sd <- apply(as.matrix(fit$pars$Ability), 2, sd)
+    ability_sd[!is.finite(ability_sd) | ability_sd == 0] <- 1
+    pred_sd <- apply(fit$dat$personPreds, 2, sd)
+    fit$covariateEffects$AbilityStd <- sweep(fit$pars$Abilitybeta, 1, ability_sd, "/")
+    fit$covariateEffects$AbilityStd <- sweep(fit$covariateEffects$AbilityStd, 2, pred_sd, "*")
   }
   if(fit$dat$NAitemPreds > 0 && pl > 1){
     dimnames(fit$pars$Abeta)[[2]] <- (AitemPreds)
