@@ -1974,7 +1974,7 @@ plotLaplaceDiagnostics <- function(fit, logGrad = TRUE, showTiming = TRUE){
 #' @examples
 #' #Generate some data (here 2pl model
 #' require(data.table)
-#' dat <- simIRT(Nsubs = 50,Nitems = 100,Nscales = 1,
+#' dat <- simIRT(Nsubs = 50,Nitems = 100,Nscales = 2,
 #'   logitCMean = -10,logitCSD = 0,AMean = 1,ASD = .3,
 #'   BMean=0,BSD = .5,
 #'   AbilityMean = 0,AbilitySD = 1)
