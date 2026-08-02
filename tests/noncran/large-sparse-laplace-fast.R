@@ -3,7 +3,7 @@
 ## Run from the project root, for example:
 ## Rscript package/tests/noncran/large-sparse-laplace-fast.R
 ##
-## Optional arguments: Nsubjects Nitems answers_per_subject cores output_csv
+## Optional arguments: Nsubjects Nitems answers_per_subject cores output_csv compare_mirt seed
 
 args <- commandArgs(trailingOnly = TRUE)
 arg_int <- function(position, default){
@@ -18,6 +18,10 @@ n_items <- arg_int(2L, 5000L)
 answers_per_subject <- arg_int(3L, 10L)
 cores <- arg_int(4L, min(4L, parallel::detectCores(logical = FALSE)))
 output_csv <- if(length(args) >= 5L) args[5L] else ""
+compare_mirt <- if(length(args) >= 6L) {
+  tolower(args[6L]) %in% c("true", "t", "1", "yes", "y")
+} else FALSE
+seed <- arg_int(7L, 20260802L)
 
 if(answers_per_subject > n_items) stop("answers_per_subject cannot exceed n_items.")
 if((n_subjects * answers_per_subject) %% n_items != 0L){
@@ -35,6 +39,7 @@ message(sprintf(
   n_subjects, n_items, answers_per_subject,
   format(n_subjects * answers_per_subject, big.mark = ",")
 ))
+set.seed(seed)
 
 ## Each round assigns every item equally often. Distinct round offsets ensure
 ## every subject receives distinct items; each item has exactly
@@ -110,4 +115,40 @@ result <- data.table(
   memory_mb_after = sum(gc_after[, 2L])
 )
 print(result)
+
+if(isTRUE(compare_mirt)){
+  ## mirt currently accepts a dense response matrix. This materialization is
+  ## reported separately because it is not needed by bigIRT's long-format API.
+  dense_gib <- n_subjects * n_items * 8 / 1024^3
+  message(sprintf("Materializing mirt's dense response matrix (%.2f GiB payload)...", dense_gib))
+  wide_started <- proc.time()[["elapsed"]]
+  wide <- matrix(NA_real_, nrow = n_subjects, ncol = n_items)
+  colnames(wide) <- paste0("I", seq_len(n_items))
+  wide[cbind(dat$id, dat$Item)] <- dat$score
+  wide_sec <- proc.time()[["elapsed"]] - wide_started
+  message("Starting one mirt EM cycle (NCYCLES = 1)...")
+  mirt_started <- proc.time()[["elapsed"]]
+  mirt_fit <- tryCatch(
+    mirt::mirt(
+      data = wide,
+      model = 1L,
+      itemtype = "2PL",
+      method = "EM",
+      technical = list(NCYCLES = 1L),
+      verbose = TRUE
+    ),
+    error = function(e) e
+  )
+  mirt_sec <- proc.time()[["elapsed"]] - mirt_started
+  mirt_result <- data.table(
+    mirt_dense_payload_gib = dense_gib,
+    mirt_dense_materialize_sec = wide_sec,
+    mirt_one_cycle_sec = mirt_sec,
+    mirt_status = if(inherits(mirt_fit, "error")) "failed" else "one_cycle_complete",
+    mirt_message = if(inherits(mirt_fit, "error")) conditionMessage(mirt_fit) else "NCYCLES=1; not converged by design"
+  )
+  print(mirt_result)
+  result <- cbind(result, mirt_result)
+}
+
 if(nzchar(output_csv)) fwrite(result, output_csv)
