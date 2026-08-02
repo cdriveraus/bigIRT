@@ -78,6 +78,40 @@ test_that("laplace item objective gradient matches finite differences", {
   expect_equal(obj$grad_loadings[3, 2], fd_grad(3, 2), tolerance = 1e-6)
 })
 
+test_that("laplace_direct gradient differentiates through resolved person modes", {
+  set.seed(20260802)
+  sim <- simIRT(Nsubs = 40, Nitems = 8, Nscales = 1, NitemsAnswered = 5,
+    ASD = 0.2, BSD = 0.8)
+  fit <- fitIRT(sim$dat, pl = 2, cores = 1, priors = TRUE, ebayes = FALSE,
+    dropPerfectScores = FALSE, normalise = FALSE,
+    marginalApprox = "laplace_direct", estimateAbilityCorr = FALSE,
+    laplaceOuterIter = 2, noptimsteps = 3, verbose = 0, plot = FALSE)
+  sdat <- fit$dat
+  state <- bigIRT:::bigIRT_laplace_initial_state(sdat)
+  layout <- bigIRT:::bigIRT_laplace_direct_layout(sdat, estimateAbilityCorr = FALSE)
+  item_layout <- layout[setdiff(names(layout), c("corr", "ability_mean", "ability_beta"))]
+  context <- bigIRT:::bigIRT_laplace_item_context(sdat, layout = item_layout)
+  context$grain_size <- bigIRT:::bigIRT_laplace_subject_grain(sdat$Nsubs, 1)
+  context$direct_layout <- layout
+  context$estimateAbilityCorr <- FALSE
+  context$corr_paramization <- "normalized_chol"
+  precision <- bigIRT:::bigIRT_laplace_prior_precision_array(sdat)
+  evaluate <- function(par) bigIRT:::bigIRT_laplace_direct_objective(
+    par, state, sdat, precision, theta_init = state$AbilityBase,
+    max_iter = 100, tol = 1e-9, keep_covariance = FALSE, context = context)
+  par <- fit$optim$par
+  result <- evaluate(par)
+  eps <- 1e-5
+  index <- seq_len(min(6L, length(par)))
+  finite_difference <- vapply(index, function(i) {
+    plus <- minus <- par
+    plus[i] <- plus[i] + eps
+    minus[i] <- minus[i] - eps
+    (evaluate(plus)$value - evaluate(minus)$value) / (2 * eps)
+  }, numeric(1))
+  expect_equal(result$approx_grad[index], finite_difference, tolerance = 1e-5)
+})
+
 test_that("laplace_em returns posterior outputs and finite MIRT parameters", {
   set.seed(123)
   sim <- simIRT(
