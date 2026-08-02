@@ -1948,7 +1948,7 @@ plotLaplaceDiagnostics <- function(fit, logGrad = TRUE, showTiming = TRUE){
 #'   matrices on the Laplace path. Covariances are otherwise retained only when
 #'   needed to estimate ability correlations. Default is FALSE.
 #' @param laplaceDiagnostics Logical. Whether to store outer-loop diagnostics for
-#'   \code{laplace_em}. Default is FALSE.
+#'   \code{laplace_fast} or \code{laplace_direct}. Default is FALSE.
 #' @param laplacePlot Logical. Whether to draw the Laplace diagnostic plot during
 #'   fitting when \code{marginalApprox="laplace_fast"}. Default is FALSE.
 #' @param laplacePlotEvery Integer. Plot every N outer iterations when

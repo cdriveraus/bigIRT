@@ -24,7 +24,7 @@ run_laplace_case <- function(name, seed, ...){
     ebayes = FALSE,
     dropPerfectScores = FALSE,
     normalise = FALSE,
-    marginalApprox = "laplace_em",
+    marginalApprox = "laplace_fast",
     laplaceOuterIter = 12,
     noptimsteps = 10,
     laplaceDiagnostics = TRUE,

@@ -55,7 +55,7 @@ head(fit$personPars)
 fit_laplace <- fitIRT(
   sim$dat,
   pl = 2,
-  marginalApprox = "laplace_em",
+  marginalApprox = "laplace_fast",
   laplaceDiagnostics = TRUE
 )
 ```

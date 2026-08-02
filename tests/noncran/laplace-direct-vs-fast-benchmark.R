@@ -36,28 +36,28 @@ fit_case <- function(dat, method, cores = 1L){
 run_compare_case <- function(name, seed, cores = 1L, ...){
   set.seed(seed)
   sim <- simIRT(...)
-  em <- fit_case(sim$dat, "laplace_em", cores = cores)
+  fast <- fit_case(sim$dat, "laplace_fast", cores = cores)
   direct <- fit_case(sim$dat, "laplace_direct", cores = cores)
 
   rbindlist(list(
     data.table(
       scenario = name,
-      method = "laplace_em",
+      method = "laplace_fast",
       cores = cores,
       Nobs = nrow(sim$dat),
-      Nsubs = em$fit$dat$Nsubs,
-      Nitems = em$fit$dat$Nitems,
-      Nscales = em$fit$dat$Nscales,
-      elapsed_sec = em$elapsed,
-      outer_iter = nrow(em$diag),
-      converged = isTRUE(em$fit$laplaceStatus$converged),
-      reason = as.character(em$fit$laplaceStatus$reason),
-      final_grad = tail(em$diag$itemGradNorm, 1),
-      final_objective = tail(em$diag$objective, 1),
-      mean_item_step_sec = mean(em$diag$itemStepSec),
-      mean_person_step_sec = mean(em$diag$personStepSec),
-      ability_rmse = sqrt(mean((as.matrix(em$fit$pars$Ability) - sim$Ability)^2)),
-      loading_rmse = sqrt(mean((as.matrix(em$fit$pars$A) - sim$A)^2))
+      Nsubs = fast$fit$dat$Nsubs,
+      Nitems = fast$fit$dat$Nitems,
+      Nscales = fast$fit$dat$Nscales,
+      elapsed_sec = fast$elapsed,
+      outer_iter = nrow(fast$diag),
+      converged = isTRUE(fast$fit$laplaceStatus$converged),
+      reason = as.character(fast$fit$laplaceStatus$reason),
+      final_grad = tail(fast$diag$itemGradNorm, 1),
+      final_objective = tail(fast$diag$objective, 1),
+      mean_item_step_sec = mean(fast$diag$itemStepSec),
+      mean_person_step_sec = mean(fast$diag$personStepSec),
+      ability_rmse = sqrt(mean((as.matrix(fast$fit$pars$Ability) - sim$Ability)^2)),
+      loading_rmse = sqrt(mean((as.matrix(fast$fit$pars$A) - sim$A)^2))
     ),
     data.table(
       scenario = name,

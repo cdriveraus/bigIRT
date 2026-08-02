@@ -46,14 +46,15 @@ fitIRT(
   ebayesFromFixed = FALSE,
   estMeans = c("A", "B", "C", "D"),
   priors = TRUE,
-  marginalApprox = c("none", "laplace_em", "laplace_direct"),
-  estimateAbilityCorr = TRUE,
+  marginalApprox = c("none", "laplace_fast", "laplace_direct"),
+  estimateAbilityCorr = FALSE,
   laplaceCorrParam = c("stan_corsqrt", "normalized_chol"),
   laplaceOuterIter = 500,
   laplaceTol = 0.001,
   laplaceGradTol = 0.01,
   laplaceStabilityIter = 5L,
   laplacePersonTol = 1e-04,
+  laplaceItemIter = 3L,
   laplaceKeepCovariance = FALSE,
   laplaceDiagnostics = FALSE,
   laplacePlot = FALSE,
@@ -169,8 +170,8 @@ discrimination means fixed.}
 \item{priors}{Logical. Whether to use prior distributions. Default is TRUE.}
 
 \item{marginalApprox}{Character. Marginal approximation backend. Use
-\code{"none"} for the legacy Stan/JML path, \code{"laplace_em"} for the
-pure-C++ Laplace marginal-likelihood outer loop, and
+\code{"none"} for the legacy Stan/JML path, \code{"laplace_fast"} for a
+speed-first blockwise Laplace optimizer, and
 \code{"laplace_direct"} for a single-stage direct Laplace optimizer that
 recomputes person modes inside each objective evaluation and uses an
 approximate gradient that ignores derivatives through those inner solves.
@@ -178,38 +179,43 @@ Default is \code{"none"}.}
 
 \item{estimateAbilityCorr}{Logical. If \code{TRUE}, estimate the latent
 ability correlation matrix directly inside \code{marginalApprox =
-  "laplace_direct"} while keeping \code{AbilitySD} fixed. Ignored for other
+"laplace_direct"} while keeping \code{AbilitySD} fixed. Ignored for other
 backends and for unidimensional fits. Default is FALSE.}
 
-\item{laplaceOuterIter}{Integer. Maximum number of outer iterations for
-\code{marginalApprox="laplace_em"}. This is a fallback limit rather than
+\item{laplaceOuterIter}{Integer. Maximum number of outer iterations for a
+Laplace backend. This is a fallback limit rather than
 the primary convergence criterion. Default is 50.}
 
 \item{laplaceTol}{Numeric. General outer tolerance for
-\code{marginalApprox="laplace_em"}, used for relative objective
+\code{marginalApprox="laplace_fast"}, used for relative objective
 improvement and RMS step-size checks. Default is 1e-3.}
 
 \item{laplaceGradTol}{Numeric. Gradient-norm tolerance for the item-step
 Laplace surrogate. Default is 1e-2.}
 
 \item{laplaceStabilityIter}{Integer. Window size for stability-based
-convergence in \code{laplace_em}. If the last
+convergence in \code{laplace_fast}. If the last
 \code{laplaceStabilityIter} outer iterations show negligible objective
 change and no meaningful reduction in the item-step gradient norm, the fit
 stops even when the gradient norm is still above \code{laplaceGradTol}.
 Default is 5.}
 
 \item{laplacePersonTol}{Numeric. Newton tolerance for person-mode updates in
-\code{laplace_em}. Default is 1e-4.}
+\code{laplace_fast}. Default is 1e-4.}
+
+\item{laplaceItemIter}{Integer. Maximum L-BFGS iterations in each
+\code{"laplace_fast"} item block. The deliberately small default (3)
+prioritizes end-to-end throughput; \code{"laplace_direct"} ignores it.}
 
 \item{laplaceKeepCovariance}{Logical. Whether to keep full person covariance
-matrices on the Laplace path. Default is FALSE.}
+matrices on the Laplace path. Covariances are otherwise retained only when
+needed to estimate ability correlations. Default is FALSE.}
 
 \item{laplaceDiagnostics}{Logical. Whether to store outer-loop diagnostics for
-\code{laplace_em}. Default is FALSE.}
+\code{laplace_fast} or \code{laplace_direct}. Default is FALSE.}
 
 \item{laplacePlot}{Logical. Whether to draw the Laplace diagnostic plot during
-fitting when \code{marginalApprox="laplace_em"}. Default is FALSE.}
+fitting when \code{marginalApprox="laplace_fast"}. Default is FALSE.}
 
 \item{laplacePlotEvery}{Integer. Plot every N outer iterations when
 \code{laplacePlot=TRUE}. Default is 1.}

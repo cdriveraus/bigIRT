@@ -39,5 +39,10 @@ Useful links:
 \author{
 \strong{Maintainer}: Charles Driver \email{charles.driver@psychologie.uzh.ch} (\href{https://orcid.org/0000-0002-4174-2970}{ORCID})
 
+Authors:
+\itemize{
+  \item Charles Driver \email{charles.driver@psychologie.uzh.ch} (\href{https://orcid.org/0000-0002-4174-2970}{ORCID})
+}
+
 }
 \keyword{internal}

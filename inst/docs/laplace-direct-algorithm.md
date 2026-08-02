@@ -5,7 +5,7 @@ This note describes the current `marginalApprox = "laplace_direct"` path.
 ## Goal
 
 The direct path optimizes a single Laplace-approximated marginal objective rather
-than alternating separate person and item blocks as in `laplace_em`.
+than alternating separate person and item blocks as in `laplace_fast`.
 
 For item/global parameters \(\psi\), define the person-specific conditional log
 posterior
@@ -90,9 +90,9 @@ The outer optimizer is L-BFGS with warm starts.
 
 ## Interpretation
 
-Relative to `laplace_em`:
+Relative to `laplace_fast`:
 
-- `laplace_em` optimizes a blockwise generalized-EM surrogate
+- `laplace_fast` optimizes a speed-first blockwise surrogate
 - `laplace_direct` optimizes a single direct objective value, but with an
   approximate gradient
 
@@ -106,7 +106,8 @@ comparison. It is useful when you want:
 
 - a single-stage objective
 - no explicit outer person/item alternation
-- a direct comparison against `laplace_em`
+- a direct comparison against `laplace_fast`
 
-But it should still be treated as approximate, because the gradient ignores the
-dependence of the resolved person modes and Hessians on the item parameters.
+But it should still be treated as approximate: item derivatives include the
+mode adjustment, while some global-parameter derivatives remain frozen-mode and
+the curvature is expected-information rather than observed-information.

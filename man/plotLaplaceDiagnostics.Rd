@@ -8,7 +8,7 @@ plotLaplaceDiagnostics(fit, logGrad = TRUE, showTiming = TRUE)
 }
 \arguments{
 \item{fit}{A fitted \code{bigIRT} model returned by \code{fitIRT()} with
-\code{marginalApprox="laplace_em"} and \code{laplaceDiagnostics=TRUE}.}
+\code{marginalApprox="laplace_fast"} and \code{laplaceDiagnostics=TRUE}.}
 
 \item{logGrad}{Whether to plot the item-step gradient norm on a log10 scale.}
 

@@ -51,7 +51,7 @@ head(fit$personPars)
 fit_laplace <- fitIRT(
   sim$dat,
   pl = 2,
-  marginalApprox = "laplace_em",
+  marginalApprox = "laplace_fast",
   laplaceDiagnostics = TRUE
 )
 ```
@@ -62,8 +62,10 @@ You can inspect diagnostics with:
 plotLaplaceDiagnostics(fit_laplace)
 ```
 
-For a conceptual overview of the Laplace EM algorithm, see
-[`inst/docs/laplace-em-algorithm.md`](inst/docs/laplace-em-algorithm.md).
+`laplace_fast` is the throughput-oriented blockwise backend. Use
+`marginalApprox = "laplace_direct"` when a single direct objective is more
+important than speed; its status records that remaining global-parameter
+derivatives are approximate.
 
 ## Notes
 
