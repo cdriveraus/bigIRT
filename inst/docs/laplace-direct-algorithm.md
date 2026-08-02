@@ -55,17 +55,23 @@ The direct objective is
 The current implementation recomputes the objective value above at each optimizer
 evaluation, but it does **not** differentiate through the inner person solves.
 
-Instead, it uses:
+For item parameters, it now uses:
 
 - the exact direct Laplace objective value
-- an approximate gradient built from the existing frozen-mode Laplace item
-  gradient, evaluated at the current resolved person modes
+- a mode-adjusted Laplace gradient: the frozen-mode item derivative plus the
+  implicit derivative of the log-determinant through the resolved person mode
+  map, computed with one adjoint solve per person
+
+Ability-predictor and correlation derivatives still use their frozen-mode
+approximations, and the curvature is expected-information rather than the
+observed Hessian. Consequently the overall direct optimizer remains
+experimental.
 
 So the optimizer sees
 
 - `fn`: the direct Laplace value
-- `gr`: an approximate gradient that ignores derivatives through
-  \(\hat\theta_i(\psi)\) and the corresponding Hessian solves
+- `gr`: a mode-adjusted gradient for item parameters, with remaining
+  global-parameter derivatives still approximate
 
 This makes the method a practical single-stage approximation rather than an
 exact direct Laplace optimizer.
