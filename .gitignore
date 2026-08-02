@@ -1,4 +1,6 @@
 .Rproj.user
 ^.testing
 .Rhistory
-src
+src/*.o
+src/*.dll
+src/*.so

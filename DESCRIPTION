@@ -7,6 +7,8 @@ Authors@R:
            role = c("aut", "cre"),
            email = "charles.driver@psychologie.uzh.ch",
            comment = c(ORCID = "0000-0002-4174-2970"))
+Author: Charles Driver [aut, cre]
+Maintainer: Charles Driver <charles.driver@psychologie.uzh.ch>
 Description: Fits binary item response theory (IRT) models for large and sparse
     data in long format. Supports 1PL to 4PL models, optional covariate effects
     on item and person parameters, empirical-Bayes style prior adaptation, and
