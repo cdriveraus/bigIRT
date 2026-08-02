@@ -1771,7 +1771,7 @@ bigIRT_refresh_plot_device <- function(){
 #' Plot Laplace diagnostics
 #'
 #' @param fit A fitted \code{bigIRT} model returned by \code{fitIRT()} with
-#'   \code{marginalApprox="laplace_em"} and \code{laplaceDiagnostics=TRUE}.
+#'   \code{marginalApprox="laplace_fast"} and \code{laplaceDiagnostics=TRUE}.
 #' @param logGrad Whether to plot the item-step gradient norm on a log10 scale.
 #' @param showTiming Whether to include timing and stability panels.
 #'
@@ -1915,8 +1915,8 @@ plotLaplaceDiagnostics <- function(fit, logGrad = TRUE, showTiming = TRUE){
 #' discrimination means fixed.
 #' @param priors Logical. Whether to use prior distributions. Default is TRUE.
 #' @param marginalApprox Character. Marginal approximation backend. Use
-#'   \code{"none"} for the legacy Stan/JML path, \code{"laplace_em"} for the
-#'   pure-C++ Laplace marginal-likelihood outer loop, and
+#'   \code{"none"} for the legacy Stan/JML path, \code{"laplace_fast"} for a
+#'   speed-first blockwise Laplace optimizer, and
 #'   \code{"laplace_direct"} for a single-stage direct Laplace optimizer that
 #'   recomputes person modes inside each objective evaluation and uses an
 #'   approximate gradient that ignores derivatives through those inner solves.
@@ -1925,28 +1925,32 @@ plotLaplaceDiagnostics <- function(fit, logGrad = TRUE, showTiming = TRUE){
 #'   ability correlation matrix directly inside \code{marginalApprox =
 #'   "laplace_direct"} while keeping \code{AbilitySD} fixed. Ignored for other
 #'   backends and for unidimensional fits. Default is FALSE.
-#' @param laplaceOuterIter Integer. Maximum number of outer iterations for
-#'   \code{marginalApprox="laplace_em"}. This is a fallback limit rather than
+#' @param laplaceOuterIter Integer. Maximum number of outer iterations for a
+#'   Laplace backend. This is a fallback limit rather than
 #'   the primary convergence criterion. Default is 50.
 #' @param laplaceTol Numeric. General outer tolerance for
-#'   \code{marginalApprox="laplace_em"}, used for relative objective
+#'   \code{marginalApprox="laplace_fast"}, used for relative objective
 #'   improvement and RMS step-size checks. Default is 1e-3.
 #' @param laplaceGradTol Numeric. Gradient-norm tolerance for the item-step
 #'   Laplace surrogate. Default is 1e-2.
+#' @param laplaceItemIter Integer. Maximum L-BFGS iterations in each
+#'   \code{"laplace_fast"} item block. The deliberately small default (3)
+#'   prioritizes end-to-end throughput; \code{"laplace_direct"} ignores it.
 #' @param laplaceStabilityIter Integer. Window size for stability-based
-#'   convergence in \code{laplace_em}. If the last
+#'   convergence in \code{laplace_fast}. If the last
 #'   \code{laplaceStabilityIter} outer iterations show negligible objective
 #'   change and no meaningful reduction in the item-step gradient norm, the fit
 #'   stops even when the gradient norm is still above \code{laplaceGradTol}.
 #'   Default is 5.
 #' @param laplacePersonTol Numeric. Newton tolerance for person-mode updates in
-#'   \code{laplace_em}. Default is 1e-4.
+#'   \code{laplace_fast}. Default is 1e-4.
 #' @param laplaceKeepCovariance Logical. Whether to keep full person covariance
-#'   matrices on the Laplace path. Default is FALSE.
+#'   matrices on the Laplace path. Covariances are otherwise retained only when
+#'   needed to estimate ability correlations. Default is FALSE.
 #' @param laplaceDiagnostics Logical. Whether to store outer-loop diagnostics for
 #'   \code{laplace_em}. Default is FALSE.
 #' @param laplacePlot Logical. Whether to draw the Laplace diagnostic plot during
-#'   fitting when \code{marginalApprox="laplace_em"}. Default is FALSE.
+#'   fitting when \code{marginalApprox="laplace_fast"}. Default is FALSE.
 #' @param laplacePlotEvery Integer. Plot every N outer iterations when
 #'   \code{laplacePlot=TRUE}. Default is 1.
 #' @param laplaceJitter Numeric. Small jitter added to stabilize Laplace
@@ -2012,10 +2016,10 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   iter=2000,cores=6,carefulfit=FALSE,
   ebayes=TRUE,ebayesmultiplier=2,ebayesFromFixed=FALSE,
   estMeans=c('A','B','C','D'),priors=TRUE,
-  marginalApprox=c("none","laplace_em","laplace_direct"),
-  estimateAbilityCorr=TRUE,
+  marginalApprox=c("none","laplace_fast","laplace_direct"),
+  estimateAbilityCorr=FALSE,
   laplaceCorrParam=c("stan_corsqrt","normalized_chol"),
-  laplaceOuterIter=500,laplaceTol=1e-3,laplaceGradTol=1e-2,laplaceStabilityIter=5L,laplacePersonTol=1e-4,
+  laplaceOuterIter=500,laplaceTol=1e-3,laplaceGradTol=1e-2,laplaceStabilityIter=5L,laplacePersonTol=1e-4,laplaceItemIter=3L,
   laplaceKeepCovariance=FALSE,laplaceDiagnostics=FALSE,laplacePlot=FALSE,laplacePlotEvery=1L,
   laplaceJitter=1e-6,noptimsteps=10,
   noptimgradtol=1e-2,
@@ -2342,7 +2346,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     rowIndexPar=0L,
     originalRow=dat$`.originalRow`,
     doGenQuant=0L,
-    doRowEff=as.integer(identical(marginalApprox, "laplace_em") || identical(marginalApprox, "laplace_direct"))
+    doRowEff=as.integer(identical(marginalApprox, "laplace_fast") || identical(marginalApprox, "laplace_direct"))
   ))
 
   sdat$freeAref=array(as.integer(cumsum(1-as.numeric(sdat$fixedAlog))))
@@ -2455,7 +2459,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   if(ebayes) JMLseq[[length(JMLseq)+1]] <- list(est=c('A','B','C',',D','Ability'),ebayes=TRUE,narrowPriors=FALSE)
 
   fit <- NA
-  if(!identical(marginalApprox, "laplace_em") && !identical(marginalApprox, "laplace_direct")){
+  if(!identical(marginalApprox, "laplace_fast") && !identical(marginalApprox, "laplace_direct")){
     for(i in 1:length(JMLseq)){
       if(i < length(JMLseq)) tol= basetol*ifelse(JMLseq[[i]]$narrowPriors,100,10) else tol = basetol
       fit <- JMLfit(est = JMLseq[[i]]$est,sdat = sdat, ebayes=JMLseq[[i]]$ebayes,
@@ -2509,7 +2513,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
       tol = laplaceTol,
       jitter = laplaceJitter,
       person_tol = laplacePersonTol,
-      keep_covariance = TRUE,
+      keep_covariance = isTRUE(laplaceKeepCovariance) || isTRUE(estimateAbilityCorr) || sdat$NpersonPreds > 0L,
       cores = cores,
       estimateAbilityCorr = estimateAbilityCorr,
       corr_paramization = laplaceCorrParam,
@@ -2683,7 +2687,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     }
   }
 
-  if(identical(marginalApprox, "laplace_em") && length(which(sdat$Abilityparsindex > 0)) > 0){
+  if(identical(marginalApprox, "laplace_fast") && length(which(sdat$Abilityparsindex > 0)) > 0){
     optimdots <- list(...)
     laplaceVerbose <- if("verbose" %in% names(optimdots)) as.integer(optimdots$verbose) else 0L
     if(requireNamespace("RcppParallel", quietly = TRUE)) RcppParallel::setThreadOptions(numThreads = max(1L, as.integer(cores)))
@@ -2693,7 +2697,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     wall_time_sec <- function() as.numeric(proc.time()[["elapsed"]])
 
     if(sdat$NpersonPreds > 0){
-      warning("laplace_em currently keeps Abilitybeta fixed during the Laplace outer loop when person predictors are present.")
+      warning("laplace_fast currently keeps Abilitybeta fixed during the blockwise outer loop when person predictors are present.")
     }
 
     state <- bigIRT_laplace_initial_state(sdat, eps = laplaceJitter)
@@ -2704,6 +2708,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     collectLaplaceDiag <- isTRUE(laplaceDiagnostics) || isTRUE(laplacePlot)
     laplaceStatus <- list(
       converged = FALSE,
+      stopped_early = FALSE,
       reason = "max_outer_iter",
       outer_iters = 0L,
       beta_frozen = sdat$NpersonPreds > 0,
@@ -2714,14 +2719,14 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     finalPosterior <- NULL
 
     laplace_trace(1, sprintf(
-      "Laplace EM: starting prior-anchored fit with %d persons, %d items, %d dimensions, max_outer=%d.",
+      "Fast Laplace: starting prior-anchored fit with %d persons, %d items, %d dimensions, max_outer=%d.",
       sdat$Nsubs, sdat$Nitems, sdat$Nscales, laplaceOuterIter
     ))
 
     laplaceMaterializeFit <- function(base_fit, state, posterior, objective){
       base_fit$pars <- bigIRT_laplace_constrained_pars(state, sdat, posterior = posterior)
       base_fit$optim <- list(
-        method = "laplace_em",
+        method = "laplace_fast",
         logLik = objective,
         par = numeric()
       )
@@ -2734,29 +2739,33 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
       personBase <- state$AbilityBase
       itemBase <- bigIRT_laplace_pack_item_state(state, sdat)
 
-      laplace_trace(2, sprintf("Laplace EM iter %d/%d: person mode step", outeri, laplaceOuterIter))
+      # The posterior refresh at the previous iteration is already a fully
+      # resolved mode step for the current item state. Reusing it removes one
+      # complete person pass from every outer iteration after the first.
+      run_person_step <- outeri == 1L
+      laplace_trace(2, sprintf("Fast Laplace iter %d/%d: %s", outeri, laplaceOuterIter,
+        if(run_person_step) "initial person mode step" else "reusing refreshed person modes"))
       t_person1 <- wall_time_sec()
-      personStep <- bigIRT_laplace_person_step(
-        state = state,
-        sdat = sdat,
-        prior_precision = priorPrecision,
-        jitter = laplaceJitter,
-        max_iter = max(4, as.integer(noptimsteps * 2L)),
-        tol = laplacePersonTol,
-        keep_covariance = isTRUE(laplaceKeepCovariance) || isTRUE(laplaceDiagnostics),
-        cores = cores
-      )
+      if(run_person_step){
+        personStep <- bigIRT_laplace_person_step(
+          state = state, sdat = sdat, prior_precision = priorPrecision,
+          jitter = laplaceJitter, max_iter = max(4L, as.integer(laplaceItemIter * 2L)),
+          tol = laplacePersonTol,
+          keep_covariance = isTRUE(laplaceKeepCovariance) || isTRUE(laplaceDiagnostics),
+          cores = cores
+        )
+        state <- personStep$state
+      }
       personStepSec <- wall_time_sec() - t_person1
-      state <- personStep$state
 
-      laplace_trace(2, sprintf("Laplace EM iter %d/%d: item step", outeri, laplaceOuterIter))
+      laplace_trace(2, sprintf("Fast Laplace iter %d/%d: item step", outeri, laplaceOuterIter))
       t_item <- wall_time_sec()
       itemStep <- bigIRT_laplace_optimize_item(
         state = state,
         sdat = sdat,
         thetaBase = state$AbilityBase,
         prior_precision = priorPrecision,
-        niter = max(2L, as.integer(noptimsteps)),
+        niter = max(1L, as.integer(laplaceItemIter)),
         tol = laplaceTol,
         jitter = laplaceJitter,
         cores = cores
@@ -2764,7 +2773,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
       itemStepSec <- wall_time_sec() - t_item
       state <- itemStep$state
 
-      laplace_trace(2, sprintf("Laplace EM iter %d/%d: posterior refresh", outeri, laplaceOuterIter))
+      laplace_trace(2, sprintf("Fast Laplace iter %d/%d: posterior refresh", outeri, laplaceOuterIter))
       t_refresh <- wall_time_sec()
       refreshStep <- bigIRT_laplace_person_step(
         state = state,
@@ -2773,7 +2782,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
         jitter = laplaceJitter,
         max_iter = max(20L, as.integer(noptimsteps * 2L)),
         tol = laplacePersonTol,
-        keep_covariance = TRUE,
+        keep_covariance = isTRUE(laplaceKeepCovariance) || isTRUE(laplaceDiagnostics),
         cores = cores
       )
       refreshStepSec <- wall_time_sec() - t_refresh
@@ -2875,7 +2884,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
 
       laplace_trace(1, sprintf(
         paste(
-          "Laplace EM iter %d/%d | obj=%.6f | rel=%.3g | item_rms=%.3g | person_rms=%.3g |",
+          "Fast Laplace iter %d/%d | obj=%.6f | rel=%.3g | item_rms=%.3g | person_rms=%.3g |",
           "grad=%.3g | postSD(mean/max)=%.3g/%.3g | person_conv=%s |",
           "t(person/item/refresh/eval/total)=%.2fs/%.2fs/%.2fs/%.2fs/%.2fs"
         ),
@@ -2907,7 +2916,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
         break
       }
       if(stabilityCriterion){
-        laplaceStatus$converged <- TRUE
+        laplaceStatus$stopped_early <- TRUE
         laplaceStatus$reason <- "stability_patience"
         break
       }
@@ -2915,7 +2924,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     }
 
     if(is.null(finalPosterior)){
-      laplace_trace(2, "Laplace EM: no completed outer iteration; running one posterior refresh for final output.")
+      laplace_trace(2, "Fast Laplace: no completed outer iteration; running one posterior refresh for final output.")
       refreshStep <- bigIRT_laplace_person_step(
         state = state,
         sdat = sdat,
@@ -2923,7 +2932,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
         jitter = laplaceJitter,
         max_iter = max(20L, as.integer(noptimsteps * 2L)),
         tol = laplacePersonTol,
-        keep_covariance = TRUE,
+        keep_covariance = isTRUE(laplaceKeepCovariance) || isTRUE(laplaceDiagnostics),
         cores = cores
       )
       state <- refreshStep$state
@@ -3065,7 +3074,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
 
   fit$personPars <- data.frame(id=rownames(fit$pars$Ability),fit$pars$Ability)
   colnames(fit$personPars)[1] = id
-  if(identical(marginalApprox, "laplace_em") && !is.null(fit$pars$sAbilitySD)){
+  if(identical(marginalApprox, "laplace_fast") && !is.null(fit$pars$sAbilitySD)){
     abilitySD <- fit$pars$sAbilitySD
     if(is.null(dim(abilitySD))) abilitySD <- matrix(abilitySD, ncol = ncol(fit$pars$Ability))
     colnames(abilitySD) <- paste0(colnames(fit$pars$Ability), "_SD")

@@ -1,6 +1,6 @@
 library(bigIRT)
 
-test_that("laplace_em records timing and optimizer diagnostics", {
+test_that("laplace_fast records timing and optimizer diagnostics", {
   set.seed(20260320)
   sim <- simIRT(
     Nsubs = 80,
@@ -19,7 +19,7 @@ test_that("laplace_em records timing and optimizer diagnostics", {
     ebayes = FALSE,
     dropPerfectScores = FALSE,
     normalise = FALSE,
-    marginalApprox = "laplace_em",
+    marginalApprox = "laplace_fast",
     laplaceOuterIter = 3,
     noptimsteps = 6,
     laplaceDiagnostics = TRUE,

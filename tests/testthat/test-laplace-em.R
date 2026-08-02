@@ -112,7 +112,7 @@ test_that("laplace_direct gradient differentiates through resolved person modes"
   expect_equal(result$approx_grad[index], finite_difference, tolerance = 1e-5)
 })
 
-test_that("laplace_em returns posterior outputs and finite MIRT parameters", {
+test_that("laplace_fast returns posterior outputs and finite MIRT parameters", {
   set.seed(123)
   sim <- simIRT(
     Nsubs = 120,
@@ -131,7 +131,7 @@ test_that("laplace_em returns posterior outputs and finite MIRT parameters", {
     ebayes = FALSE,
     dropPerfectScores = FALSE,
     normalise = FALSE,
-    marginalApprox = "laplace_em",
+    marginalApprox = "laplace_fast",
     laplaceOuterIter = 3,
     noptimsteps = 10,
     verbose = 0,
@@ -150,9 +150,9 @@ test_that("laplace_em returns posterior outputs and finite MIRT parameters", {
   expect_false("samples" %in% names(fit$personPosterior))
 })
 
-test_that("laplace_em does not call the legacy JML optimizer", {
+test_that("laplace_fast does not call the legacy JML optimizer", {
   local_mocked_bindings(
-    optimIRT = function(...) stop("legacy optimIRT/JML path should not run for laplace_em"),
+    optimIRT = function(...) stop("legacy optimIRT/JML path should not run for laplace_fast"),
     .package = "bigIRT"
   )
 
@@ -174,7 +174,7 @@ test_that("laplace_em does not call the legacy JML optimizer", {
     ebayes = FALSE,
     dropPerfectScores = FALSE,
     normalise = FALSE,
-    marginalApprox = "laplace_em",
+    marginalApprox = "laplace_fast",
     laplaceOuterIter = 1,
     noptimsteps = 3,
     verbose = 0,
