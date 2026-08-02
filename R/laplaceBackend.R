@@ -1359,9 +1359,17 @@ bigIRT_laplace_optimize_item <- function(state, sdat, thetaBase, prior_precision
   }
 
   eval_count <- 0L
+  cache_par <- NULL
+  cache_eval <- NULL
   get_eval <- function(par){
+    # mize may ask fn and gr separately at the same point.  The Laplace
+    # evaluator is expensive, so make that contract a single kernel call.
+    if(!is.null(cache_par) && identical(as.numeric(par), cache_par)) return(cache_eval)
     eval_count <<- eval_count + 1L
-    bigIRT_laplace_item_objective(par, state, sdat, thetaBase, prior_precision, jitter = jitter, context = context)
+    cache_par <<- as.numeric(par)
+    cache_eval <<- bigIRT_laplace_item_objective(
+      par, state, sdat, thetaBase, prior_precision, jitter = jitter, context = context)
+    cache_eval
   }
   target_fg <- function(par){
     res <- get_eval(par)
@@ -1414,11 +1422,14 @@ bigIRT_laplace_optimize_direct <- function(state, sdat, prior_precision,
 
   eval_count <- 0L
   theta_warm <- state$AbilityBase
+  cache_par <- NULL
+  cache_eval <- NULL
   history <- list()
   last_value <- NULL
   last_par <- NULL
   last_theta <- NULL
   get_eval <- function(par){
+    if(!is.null(cache_par) && identical(as.numeric(par), cache_par)) return(cache_eval)
     t_eval <- as.numeric(proc.time()[["elapsed"]])
     eval_count <<- eval_count + 1L
     res <- bigIRT_laplace_direct_objective(
@@ -1435,7 +1446,11 @@ bigIRT_laplace_optimize_direct <- function(state, sdat, prior_precision,
       context = context
     )
     eval_sec <- as.numeric(proc.time()[["elapsed"]]) - t_eval
+    # Keep the last solved modes as a warm start for a *new* candidate, but
+    # never rerun a candidate merely because mize requests its fn/gr pair.
     theta_warm <<- res$posterior$theta_mode
+    cache_par <<- as.numeric(par)
+    cache_eval <<- res
     if(as.integer(verbose) >= 2L){
       tt <- res$timings
       trace_msg <- sprintf(
@@ -1524,7 +1539,7 @@ bigIRT_laplace_optimize_direct <- function(state, sdat, prior_precision,
         try(plot_callback(history), silent = TRUE)
       }
     }
-    res
+    cache_eval
   }
   target_fg <- function(par){
     res <- get_eval(par)
