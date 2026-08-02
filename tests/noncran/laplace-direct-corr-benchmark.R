@@ -54,8 +54,7 @@ sim <- simIRT(
     1.0, 0.35, 0.15,
     0.35, 1.0, 0.25,
     0.15, 0.25, 1.0
-  ), 3, 3, byrow = TRUE),
-  normalise = TRUE
+  ), 3, 3, byrow = TRUE)
 )
 
 truth_corr <- cor(sim$Ability)

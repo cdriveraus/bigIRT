@@ -1,7 +1,9 @@
 library(bigIRT)
 
-make_correlated_mirt_sim <- function(AbilityCorr, ..., normalise = TRUE){
-  sim <- bigIRT::simIRT(..., normalise = normalise)
+make_correlated_mirt_sim <- function(AbilityCorr, ...){
+  # simIRT() returns data on its generated metric; normalisation belongs to
+  # fitIRT()/comparison, not to the simulator.
+  sim <- bigIRT::simIRT(...)
   Nsubs <- nrow(sim$Ability)
   Nscales <- ncol(sim$Ability)
   Z <- matrix(rnorm(Nsubs * Nscales), nrow = Nsubs, ncol = Nscales) %*% chol(AbilityCorr)
@@ -285,7 +287,7 @@ test_that("laplace_direct estimated AbilityCorr is SPD in 3D", {
   )
 
   eig <- eigen(fit$abilityPrior$corr, symmetric = TRUE, only.values = TRUE)$values
-  expect_equal(diag(fit$abilityPrior$corr), rep(1, 3), tolerance = 1e-8)
+  expect_equal(unname(diag(fit$abilityPrior$corr)), rep(1, 3), tolerance = 1e-8)
   expect_true(isTRUE(all(eig > 0)))
   expect_equal(fit$abilityPrior$corr, t(fit$abilityPrior$corr), tolerance = 1e-8)
 })
@@ -296,8 +298,7 @@ test_that("laplace_direct ignores AbilityCorr estimation in 1D and FALSE reprodu
     Nsubs = 120,
     Nitems = 16,
     Nscales = 1,
-    NitemsAnswered = 6,
-    normalise = TRUE
+    NitemsAnswered = 6
   )
 
   fit_default <- fitIRT(

@@ -35,7 +35,7 @@ fit_case <- function(dat, method, cores = 1L){
 
 run_compare_case <- function(name, seed, cores = 1L, ...){
   set.seed(seed)
-  sim <- simIRT(..., normalise = TRUE)
+  sim <- simIRT(...)
   em <- fit_case(sim$dat, "laplace_em", cores = cores)
   direct <- fit_case(sim$dat, "laplace_direct", cores = cores)
 
