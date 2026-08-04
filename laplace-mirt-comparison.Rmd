@@ -1,5 +1,5 @@
 ---
-title: "3-Factor MIRT: bigIRT Laplace-Direct vs JML vs mirt"
+title: "3-Factor MIRT: bigIRT Methods vs mirt"
 output:
   html_document:
     toc: true
@@ -18,9 +18,8 @@ library(ggplot2)
 
 This notebook compares a sparse 3-factor MIRT fit across:
 
-1. `bigIRT` JML,
-2. `bigIRT` direct Laplace (`marginalApprox = "laplace_direct"`),
-3. `mirt` with EM and MHRM.
+1. selected `bigIRT` methods from `bigirt_methods` below,
+2. selected `mirt` methods from `mirt_methods` below.
 
 All parameter extraction and normalization now go through `compareIRTmodels()`, so
 truth and fitted models are compared on one package-level normalized metric.
@@ -28,7 +27,7 @@ truth and fitted models are compared on one package-level normalized metric.
 ## 1) Simulate sparse 3-factor MIRT data
 
 ```{r simulate}
-Nsubs <- 700
+Nsubs <- 4700
 Nitems <- 36
 Nscales <- 3
 
@@ -36,7 +35,7 @@ sim <- simIRT(
   Nsubs = Nsubs,
   Nitems = Nitems,
   Nscales = Nscales,
-  NitemsAnswered = c(10, 10, 10),
+  NitemsAnswered = c(4, 4, 4),
   mirt = TRUE,
   AMean = 1.0,
   ASD = 0.20,
@@ -44,8 +43,10 @@ sim <- simIRT(
   crossLoadingSD = 0.20,
   BMean = 0,
   BSD = 0.9,
-  logitCMean = -20,
-  logitCSD = 0
+  logitCMean = 0,
+  logitCSD = 1,
+  logitDMean = 1,
+  logitDSD = 1
 )
 
 A_true <- sim$A
@@ -65,39 +66,43 @@ colnames(loading_mask) <- as.character(seq_len(ncol(loading_mask)))
 summary(as.vector(is.na(loading_mask)))
 ```
 
-## 3) Fit JML, Laplace-Direct, and two mirt estimators
+## 3) Fit selected bigIRT and mirt estimators
 
 ```{r fit-models}
-fit_jml_time <- system.time({
-  fit_jml <- fitIRT(
-    sim$dat,
-    pl = 2,
-    cores = 1,
-    priors = TRUE,
-    ebayes = FALSE,
-    loadings = loading_mask,
-    dropPerfectScores = FALSE,
-    normalise = FALSE,
-    verbose = 0,
-    plot = FALSE
-  )
-})
+bigirt_methods <- list(
+  LaplaceDirect = list(marginalApprox = "laplace_direct")
+)
+# To include JML as well:
+# bigirt_methods$JML <- list()
 
-fit_laplace_time <- system.time({
-  fit_laplace <- fitIRT(
-    sim$dat,
-    pl = 2,
-    cores = 1,
-    priors = TRUE,
-    ebayes = FALSE,
-    loadings = loading_mask,
-    marginalApprox = "laplace_direct",
-    dropPerfectScores = FALSE,
-    normalise = FALSE,
-    verbose = 0,
-    plot = FALSE
+base_bigirt_args <- list(
+  dat = sim$dat,
+  pl = 4,
+  cores = 1,
+  priors = TRUE,
+  ebayes = FALSE,
+  loadings = loading_mask,
+  dropPerfectScores = FALSE,
+  normalise = FALSE,
+  verbose = 0,
+  plot = FALSE
+)
+
+fit_bigirt <- list()
+bigirt_fit_status <- rbindlist(lapply(names(bigirt_methods), function(m){
+  t0 <- proc.time()
+  fit_try <- tryCatch(
+    do.call(fitIRT, c(base_bigirt_args, bigirt_methods[[m]])),
+    error = function(e) e
   )
-})
+  elapsed <- unname((proc.time() - t0)[["elapsed"]])
+  if(inherits(fit_try, "error")){
+    data.table(method = m, status = "failed", elapsed_sec = elapsed, error_message = conditionMessage(fit_try))
+  } else {
+    fit_bigirt[[m]] <<- fit_try
+    data.table(method = m, status = "ok", elapsed_sec = elapsed, error_message = NA_character_)
+  }
+}))
 
 if(!requireNamespace("mirt", quietly = TRUE)){
   stop("This notebook requires the 'mirt' package.")
@@ -107,7 +112,7 @@ wide <- dcast(sim$dat, id ~ Item, value.var = "score", fill = NA)
 setorder(wide, id)
 resp_mat <- as.matrix(wide[, -1])
 
-mirt_methods <- c("MHRM", "EM")
+mirt_methods <- c("EM") #"MHRM", 
 fit_mirt <- list()
 build_mirt_model_from_loadings <- function(A_true){
   lines <- vapply(seq_len(ncol(A_true)), function(k){
@@ -117,15 +122,16 @@ build_mirt_model_from_loadings <- function(A_true){
   mirt::mirt.model(paste(lines, collapse = "\n"))
 }
 mirt_model <- build_mirt_model_from_loadings(A_true)
+mirt_itemtype <- "4PL"
 mirt_fit_status <- rbindlist(lapply(mirt_methods, function(m){
   t0 <- proc.time()
   fit_try <- tryCatch(
     mirt::mirt(
       data = resp_mat,
       model = mirt_model,
-      itemtype = "2PL",
+      itemtype = mirt_itemtype,
       method = m,
-      verbose = FALSE,
+      verbose = TRUE, TOL=1e-2, #check this
       technical = list(NCYCLES = 500L)
     ),
     error = function(e) e
@@ -139,12 +145,15 @@ mirt_fit_status <- rbindlist(lapply(mirt_methods, function(m){
   }
 }))
 
+if(!any(bigirt_fit_status$status == "ok")){
+  stop("All requested bigIRT estimation methods failed.")
+}
+
 if(!any(mirt_fit_status$status == "ok")){
   stop("All requested mirt estimation methods failed.")
 }
 
-fit_jml_time
-fit_laplace_time
+bigirt_fit_status
 mirt_fit_status
 ```
 
@@ -153,14 +162,24 @@ mirt_fit_status
 ```{r comparison-helpers}
 rmse <- function(x, y) sqrt(mean((x - y)^2))
 
-calc_observed_nll <- function(fit){
-  p_obs <- fit$pars$p
-  if(is.null(p_obs)){
-    pcorrect <- fit$pars$pcorrect
-    p_obs <- sim$dat$score * pcorrect + (1 - sim$dat$score) * (1 - pcorrect)
-  }
+calc_observed_response_metrics <- function(model, dat){
+  state <- extractMIRTpars(model)
+  pcorrect_mat <- as.matrix(IRTcurve(
+    A = state$A,
+    B = state$B,
+    C = state$C,
+    D = state$D,
+    theta = state$Ability,
+    plot = FALSE
+  ))
+  pcorrect <- pcorrect_mat[cbind(dat$id, dat$Item)]
+  p_obs <- dat$score * pcorrect + (1 - dat$score) * (1 - pcorrect)
   p_obs <- pmin(pmax(p_obs, 1e-10), 1 - 1e-10)
-  -mean(log(p_obs))
+  list(
+    pcorrect = pcorrect,
+    p_obs = p_obs,
+    observed_nll = -mean(log(p_obs))
+  )
 }
 
 compress_scatter <- function(dt, x_col, y_col, p = 0.98){
@@ -177,46 +196,22 @@ compress_scatter <- function(dt, x_col, y_col, p = 0.98){
   dt
 }
 
+ok_bigirt <- bigirt_fit_status[status == "ok", method]
 ok_mirt <- mirt_fit_status[status == "ok", method]
 comparison_inputs <- c(
-  list(truth = sim, JML = fit_jml, LaplaceDirect = fit_laplace),
+  list(truth = sim),
+  fit_bigirt[ok_bigirt],
   setNames(fit_mirt[ok_mirt], paste0("mirt_", ok_mirt))
 )
 
 comparison <- compareIRTmodels(comparison_inputs)
 
 model_states <- c(
-  list(
-    JML = list(
-      pcorrect = fit_jml$pars$pcorrect,
-      p_obs = fit_jml$pars$p,
-      observed_nll = calc_observed_nll(fit_jml)
-    ),
-    LaplaceDirect = list(
-      pcorrect = fit_laplace$pars$pcorrect,
-      p_obs = fit_laplace$pars$p,
-      observed_nll = calc_observed_nll(fit_laplace)
-    )
-  ),
+  setNames(lapply(ok_bigirt, function(m){
+    calc_observed_response_metrics(fit_bigirt[[m]], sim$dat)
+  }), ok_bigirt),
   setNames(lapply(ok_mirt, function(m){
-    coef_items <- as.data.frame(mirt::coef(fit_mirt[[m]], simplify = TRUE)$items)
-    a_cols <- grep("^a[0-9]+$", colnames(coef_items), value = TRUE)
-    A_raw <- as.matrix(coef_items[, a_cols, drop = FALSE])
-    item_order <- as.integer(rownames(A_raw))
-    if(any(is.na(item_order))) item_order <- seq_len(nrow(A_raw))
-    ord <- order(item_order)
-    A <- A_raw[ord, , drop = FALSE]
-    th <- as.matrix(mirt::fscores(fit_mirt[[m]], method = "EAP", full.scores = TRUE))
-    d <- coef_items[ord, "d"]
-    eta <- th %*% t(A) + matrix(d, nrow = nrow(th), ncol = nrow(A), byrow = TRUE)
-    p_full <- pmin(pmax(plogis(eta), 1e-10), 1 - 1e-10)
-    pcorrect <- p_full[cbind(sim$dat$id, sim$dat$Item)]
-    p_obs <- sim$dat$score * pcorrect + (1 - sim$dat$score) * (1 - pcorrect)
-    list(
-      pcorrect = pcorrect,
-      p_obs = p_obs,
-      observed_nll = -mean(log(p_obs))
-    )
+    calc_observed_response_metrics(fit_mirt[[m]], sim$dat)
   }), paste0("mirt_", ok_mirt))
 )
 
@@ -255,15 +250,13 @@ metric_rows <- rbindlist(lapply(setdiff(unique(item_norm$source), "truth"), func
 }))
 
 elapsed <- data.table(
-  method = c("JML", "LaplaceDirect", paste0("mirt_", ok_mirt)),
+  method = c(ok_bigirt, paste0("mirt_", ok_mirt)),
   elapsed_sec = c(
-    unname(fit_jml_time["elapsed"]),
-    unname(fit_laplace_time["elapsed"]),
+    bigirt_fit_status[match(ok_bigirt, method), elapsed_sec],
     mirt_fit_status[match(ok_mirt, method), elapsed_sec]
   ),
   observed_nll = c(
-    model_states$JML$observed_nll,
-    model_states$LaplaceDirect$observed_nll,
+    sapply(ok_bigirt, function(m) model_states[[m]]$observed_nll),
     sapply(ok_mirt, function(m) model_states[[paste0("mirt_", m)]]$observed_nll)
   )
 )
@@ -279,8 +272,7 @@ mirt_fit_status[order(status, elapsed_sec)]
 
 ```{r all-approach-timings}
 timing_all <- rbindlist(list(
-  data.table(method = "JML", status = "ok", elapsed_sec = unname(fit_jml_time["elapsed"]), error_message = NA_character_),
-  data.table(method = "LaplaceDirect", status = "ok", elapsed_sec = unname(fit_laplace_time["elapsed"]), error_message = NA_character_),
+  bigirt_fit_status[, .(method, status, elapsed_sec, error_message)],
   mirt_fit_status[, .(method = paste0("mirt_", method), status, elapsed_sec, error_message)]
 ), use.names = TRUE, fill = TRUE)
 
@@ -545,6 +537,6 @@ ggplot(diff_dt, aes(x = factor, y = item, fill = diff)) +
 
 ## 8) Notes
 
-- This version centers the comparison on `marginalApprox = "laplace_direct"`.
+- `bigirt_methods` controls which `bigIRT` estimators run. Leave only `LaplaceDirect` to skip JML, or add `bigirt_methods$JML <- list()` to include it.
 - It tests `mirt` with the methods listed in `mirt_methods` and records timing/status for each.
 - Recovery tables and plots now use `compareIRTmodels()` as the package-level extraction/normalization helper, so truth, `bigIRT`, and `mirt` all flow through one comparison pipeline.
