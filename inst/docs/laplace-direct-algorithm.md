@@ -50,31 +50,57 @@ The direct objective is
  + \log \pi(\psi).
 \]
 
-## Current approximation
+## What is exact and what is approximate
 
-The current implementation recomputes the objective value above at each optimizer
-evaluation, but it does **not** differentiate through the inner person solves.
+The objective stated above is the one the implementation now evaluates. That was
+not true until recently: the kernel accumulated the data log-likelihood, the
+Gaussian constant and the log-determinant, but omitted \(\log p(\hat	heta_i)\)
+-- the ability prior evaluated at the mode. Because \(\hat	heta_i\) moves with
+\(\psi\), that omission was not a constant offset, and it removed the very term
+that makes \(\partial \ell_i/\partial	heta_i\) vanish at the mode. The
+reported value was therefore not the Laplace objective, and finite differences of
+it disagreed with the analytic gradient by a factor that scaled with
+\(d\hat	heta_i/d\psi\). See the `laplace-objective` vignette for the
+diagnosis; the short version is that the gradient was right and the value was
+incomplete.
 
-For item parameters, it now uses:
+For item parameters the gradient is now **exact** for this objective, including
+the implicit dependence of the modes on \(\psi\), obtained with one adjoint
+solve per person rather than one per item parameter. Verified against central
+finite differences with the modes re-solved at every perturbation: correlation
+1.000000, maximum absolute difference 8e-08, with each factor of the implicit
+term also matching individually at ratio 1.0000.
 
-- the exact direct Laplace objective value
-- a mode-adjusted Laplace gradient: the frozen-mode item derivative plus the
-  implicit derivative of the log-determinant through the resolved person mode
-  map, computed with one adjoint solve per person
+Two approximations remain, and they are approximations of substance rather than
+of bookkeeping:
 
-Ability-predictor and correlation derivatives still use their frozen-mode
-approximations, and the curvature is expected-information rather than the
-observed Hessian. Consequently the overall direct optimizer remains
-experimental.
+- The curvature \(H_i\) uses expected (Fisher) information rather than the
+  observed Hessian. For the 2PL these coincide exactly, so the distinction bites
+  only for the 3PL and 4PL.
+- The person modes are solved to a tolerance, not exactly, so the envelope
+  argument holds only to that tolerance.
 
-So the optimizer sees
+Every parameter block now carries its adjoint. Writing \(s_i\) for the score,
+\(H_i\) for the person precision, \(Q\) for the prior precision, \(r_i\) for the
+centred mode and \(g_i = \partial \log|H_i| / \partial\theta\), the mode
+condition \(s_i - Q r_i = 0\) leaves \(\partial L/\partial r_i\) equal to
+\(-g_i/2\) rather than zero, because the log determinant is not part of that
+condition. Differentiating the mode condition and cancelling gives
 
-- `fn`: the direct Laplace value
-- `gr`: a mode-adjusted gradient for item parameters, with remaining
-  global-parameter derivatives still approximate
+\[
+  \frac{\partial L}{\partial \beta} = \sum_i \Big[ s_i - \tfrac{1}{2} Q H_i^{-1} g_i \Big] x_i^{\top},
+  \qquad
+  \frac{\partial L}{\partial \mu} = \sum_i \Big[ Q r_i - \tfrac{1}{2} Q H_i^{-1} g_i \Big],
+\]
 
-This makes the method a practical single-stage approximation rather than an
-exact direct Laplace optimizer.
+the second being the first with the covariate row set to one, since the ability
+mean is the intercept the regression coefficients are measured against. Both
+agree with central finite differences of the objective, across one and two
+scales, one and two predictors, and tight or loose beta priors.
+
+So the optimizer sees a Laplace value and its exact gradient in every block:
+item parameters, item and ability regression coefficients, the ability means,
+and the latent correlations.
 
 ## Algorithm
 
@@ -83,31 +109,72 @@ For each optimizer evaluation at candidate \(\psi\):
 1. Build current row-effective item parameters.
 2. Solve each person mode \(\hat\theta_i(\psi)\).
 3. Compute each person precision \(H_i(\psi)\) and the Laplace objective value.
-4. Build the approximate gradient by treating the resolved person modes as fixed.
-5. Return the direct value plus the approximate gradient to the outer optimizer.
+4. Build the item gradient: the frozen-mode derivative plus the implicit
+   correction through the mode map, which together are exact for the objective
+   in step 3.
+5. Return that value and gradient to the outer optimizer.
 
 The outer optimizer is L-BFGS with warm starts.
 
 ## Interpretation
 
-Relative to `laplace_fast`:
+This is the only Laplace backend. It replaced an alternating one, kept for a
+while under the name `laplace_fast`, which solved the person modes and then
+optimised the item block with those modes held fixed. Head to head on the same
+data, converged to the same objective, the alternating scheme needed about 85
+item evaluations where this one needed 32: it restarted its inner optimiser at
+every outer iteration and lost the accumulated curvature, and it spent the
+extra evaluations refining item parameters against a posterior that was about
+to move. It also paid a posterior refresh each outer iteration, about 16 per
+cent of its runtime, which has no counterpart here.
 
-- `laplace_fast` optimizes a speed-first blockwise surrogate
-- `laplace_direct` optimizes a single direct objective value, but with an
-  approximate gradient
+The premise behind the alternation did not survive measurement either. It
+existed to avoid re-solving the person modes, but with warm starts those solves
+take about 2.2 Newton iterations and accounted for roughly 1 per cent of its
+runtime. It was avoiding a cost that was not there.
 
-So `laplace_direct` is closer to a true one-step marginal optimizer in value,
-but less exact in gradient.
+The one place the alternating backend looked better was parameter recovery on
+weakly identified designs -- 3PL, and sparse response patterns -- where it
+returned lower RMSE despite a lower likelihood. That was early stopping rather
+than a better estimator: driving it to converge harder moved its likelihood up
+to this backend's and its recovery down to match, monotonically and across
+seeds. The overfitting it accidentally protected against is real, but it
+belongs to the priors, not to where an optimiser happens to stall.
 
 ## Status
 
-This path is available as an alternative backend for experimentation and
-comparison. It is useful when you want:
+This is the backend `marginalApprox = "laplace"` selects, and the one the
+legacy names `"laplace_fast"` and `"laplace_direct"` now resolve to.
 
-- a single-stage objective
-- no explicit outer person/item alternation
-- a direct comparison against `laplace_fast`
+The remaining approximation is the curvature: \(H_i\) uses expected (Fisher)
+information rather than the observed Hessian. The two coincide for the 2PL, so
+the distinction bites only for the 3PL and 4PL.
 
-But it should still be treated as approximate: item derivatives include the
-mode adjustment, while some global-parameter derivatives remain frozen-mode and
-the curvature is expected-information rather than observed-information.
+Person and item predictors are both supported. Their gradients were checked
+against central finite differences of the objective: the item beta slots agree
+to about 2e-9, and the ability beta slots to about 1e-8.
+
+## Latent-correlation gradient
+
+The correlation parameters enter through the prior precision \(Q(\rho)\), which
+appears in the prior quadratic, in the prior normalising constant, and inside
+\(H_i = Q + I_i\); the solved mode moves with them as well. Decomposing the
+derivative against finite differences gives four contributions, and the kernel
+originally computed the first three:
+
+1. the prior quadratic, \(-\tfrac12\sum_i r_i^\top (dQ) r_i\);
+2. the prior normaliser, \(\tfrac{N}{2}\operatorname{tr}(Q^{-1} dQ)\);
+3. the log determinants, \(-\tfrac12\sum_i \operatorname{tr}(H_i^{-1} dQ)\);
+4. the adjoint, \(\tfrac12\sum_i g_i^\top H_i^{-1} (dQ) r_i\).
+
+The fourth is linear in \(dQ\), since
+\(g_i^\top \Sigma_i (dQ) r_i = \operatorname{tr}\!\big(dQ\, r_i g_i^\top \Sigma_i\big)\),
+so it is added to the accumulated \(\partial L/\partial Q\) and rides the
+existing chain rule rather than needing one of its own.
+
+Two cautions for anyone checking this numerically. At \(\rho = 0\) the prior log
+determinant is stationary, so terms 2 and 3 both vanish and a gradient missing
+them still looks right; the check has to be run away from zero. And with more
+than one correlation parameter the symmetrisation of \(\partial L/\partial Q\)
+matters: term 4 is the only asymmetric contribution, and `A = A.transpose()`
+aliases in Eigen, so it must go through a temporary.

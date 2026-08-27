@@ -78,7 +78,72 @@ test_that("laplace item objective gradient matches finite differences", {
   expect_equal(obj$grad_loadings[3, 2], fd_grad(3, 2), tolerance = 1e-6)
 })
 
-test_that("laplace_direct gradient differentiates through resolved person modes", {
+test_that("laplace updates supported person-predictor effects", {
+  set.seed(2406)
+  person_preds <- matrix(rnorm(400), ncol = 2,
+    dimnames = list(NULL, c("P1", "P2")))
+  sim <- simIRT(
+    Nsubs = 200, Nitems = 24, NitemsAnswered = 12,
+    personPreds = person_preds,
+    AbilityPredEffects = matrix(c(.4, -.25), nrow = 1),
+    logitCMean = -20, logitCSD = 0
+  )
+  fit <- fitIRT(
+    sim$dat, pl = 2, marginalApprox = "laplace_fast",
+    personPreds = c("P1", "P2"), dropPerfectScores = FALSE,
+    normalise = FALSE, cores = 1, laplaceOuterIter = 16,
+    laplaceItemIter = 3, noptimsteps = 6, verbose = 0
+  )
+
+  ## The coefficients are optimised jointly with the item block now, so there
+  ## is no separate update counter. The sign assertions below are the real
+  ## check: both start at zero, so recovering opposite signs proves they moved.
+
+  expect_true(all(is.finite(fit$pars$Abilitybeta)))
+  expect_gt(fit$pars$Abilitybeta[1, "P1"], 0)
+  expect_lt(fit$pars$Abilitybeta[1, "P2"], 0)
+})
+
+test_that("laplace uses correctly expanded joint covariate rows", {
+  set.seed(20260806)
+  item_x <- matrix(rnorm(32), ncol = 1, dimnames = list(NULL, "item_x"))
+  person_x <- matrix(rnorm(180), ncol = 1, dimnames = list(NULL, "person_x"))
+  sim <- simIRT(
+    Nsubs = 180, Nitems = 32, NitemsAnswered = 16,
+    itemPreds = item_x, personPreds = person_x,
+    BitemPredEffects = matrix(0.55, 1, 1),
+    AbilityPredEffects = matrix(0.45, 1, 1),
+    logitCMean = -20, logitCSD = 0
+  )
+  fit_args <- list(
+    dat = sim$dat, pl = 2, marginalApprox = "laplace_fast",
+    BitemPreds = "item_x", personPreds = "person_x",
+    dropPerfectScores = FALSE, normalise = FALSE, priors = TRUE,
+    ebayes = FALSE, laplaceOuterIter = 12, laplaceItemIter = 3,
+    noptimsteps = 6, verbose = 0, plot = FALSE
+  )
+  fit_one <- do.call(fitIRT, c(fit_args, list(cores = 1L)))
+  context <- bigIRT:::bigIRT_laplace_row_context(fit_one$dat)
+  item_groups <- split(seq_along(context$items), context$items)
+  person_groups <- split(seq_along(context$ids), context$ids)
+  expect_true(all(vapply(item_groups, function(ii)
+    length(unique(context$B_pred[ii, 1])) == 1L, logical(1))))
+  expect_true(all(vapply(person_groups, function(ii)
+    length(unique(context$person_pred[ii, 1])) == 1L, logical(1))))
+  ## Kernel selection is no longer reported; what matters is the coefficients.
+  expect_true(all(is.finite(as.numeric(fit_one$pars$Abilitybeta))))
+  expect_true(all(is.finite(c(fit_one$pars$Bbeta, fit_one$pars$Abilitybeta))))
+  expect_gt(fit_one$pars$Bbeta[1, 1], 0.10)
+  # The native posterior M-step must recover a material positive signal rather
+  # than the previous near-zero response-score update.
+  expect_gt(fit_one$pars$Abilitybeta[1, 1], 0.10)
+
+  fit_many <- do.call(fitIRT, c(fit_args, list(cores = 2L)))
+  expect_equal(unname(fit_many$pars$Bbeta), unname(fit_one$pars$Bbeta), tolerance = 1e-6)
+  expect_equal(unname(fit_many$pars$Abilitybeta), unname(fit_one$pars$Abilitybeta), tolerance = 1e-6)
+})
+
+test_that("laplace gradient differentiates through resolved person modes", {
   set.seed(20260802)
   sim <- simIRT(Nsubs = 40, Nitems = 8, Nscales = 1, NitemsAnswered = 5,
     ASD = 0.2, BSD = 0.8)
@@ -112,7 +177,7 @@ test_that("laplace_direct gradient differentiates through resolved person modes"
   expect_equal(result$approx_grad[index], finite_difference, tolerance = 1e-5)
 })
 
-test_that("laplace_fast returns posterior outputs and finite MIRT parameters", {
+test_that("laplace returns posterior outputs and finite MIRT parameters", {
   set.seed(123)
   sim <- simIRT(
     Nsubs = 120,
@@ -123,7 +188,7 @@ test_that("laplace_fast returns posterior outputs and finite MIRT parameters", {
     loadingSparsity = 0.4
   )
 
-  fit <- fitIRT(
+  fit <- expect_warning(fitIRT(
     sim$dat,
     pl = 2,
     cores = 1,
@@ -136,11 +201,17 @@ test_that("laplace_fast returns posterior outputs and finite MIRT parameters", {
     noptimsteps = 10,
     verbose = 0,
     plot = FALSE
-  )
+  ), "iteration limit")
 
   expect_true(is.list(fit$personPosterior))
   expect_true(all(c("mode", "precision", "precision_chol", "logdet_precision") %in% names(fit$personPosterior)))
   expect_true(is.list(fit$laplaceStatus))
+  expect_s3_class(fit, "bigIRT_fit")
+  expect_true(all(c("strict_convergence", "stable_plateau", "iteration_limit",
+    "person_mode_failures", "numerical_failure", "frozen_effects",
+    "covariance_retained") %in% names(fit$laplaceStatus)))
+  expect_match(paste(capture.output(print(fit)), collapse = "\n"), "Laplace")
+  expect_s3_class(summary(fit), "summary.bigIRT_fit")
   expect_true(is.matrix(fit$pars$A))
   expect_true(all(is.finite(fit$pars$A)))
   expect_true(all(fit$pars$A >= 0))
@@ -150,7 +221,7 @@ test_that("laplace_fast returns posterior outputs and finite MIRT parameters", {
   expect_false("samples" %in% names(fit$personPosterior))
 })
 
-test_that("laplace_fast does not call the legacy JML optimizer", {
+test_that("laplace does not call the legacy JML optimizer", {
   local_mocked_bindings(
     optimIRT = function(...) stop("legacy optimIRT/JML path should not run for laplace_fast"),
     .package = "bigIRT"
@@ -166,7 +237,7 @@ test_that("laplace_fast does not call the legacy JML optimizer", {
     loadingSparsity = 0.5
   )
 
-  fit <- fitIRT(
+  fit <- expect_warning(fitIRT(
     sim$dat,
     pl = 2,
     cores = 1,
@@ -179,13 +250,14 @@ test_that("laplace_fast does not call the legacy JML optimizer", {
     noptimsteps = 3,
     verbose = 0,
     plot = FALSE
-  )
+  ), "iteration limit")
 
   expect_true(is.list(fit$personPosterior))
   expect_identical(fit$laplaceStatus$initialized_from, "prior_anchored")
+  expect_true(isTRUE(fit$laplaceStatus$iteration_limit))
 })
 
-test_that("laplace_direct returns posterior outputs and avoids legacy JML", {
+test_that("laplace returns posterior outputs and avoids legacy JML", {
   local_mocked_bindings(
     optimIRT = function(...) stop("legacy optimIRT/JML path should not run for laplace_direct"),
     .package = "bigIRT"
@@ -224,7 +296,7 @@ test_that("laplace_direct returns posterior outputs and avoids legacy JML", {
   expect_true(isTRUE(fit$laplaceStatus$approximate_gradient))
 })
 
-test_that("laplace_direct final person parameters use the resolved posterior modes", {
+test_that("laplace final person parameters use the resolved posterior modes", {
   set.seed(20260329)
   sim <- bigIRT::simIRT(
     Nsubs = 80,
@@ -254,7 +326,7 @@ test_that("laplace_direct final person parameters use the resolved posterior mod
   expect_gt(sd(as.numeric(fit$pars$Ability)), 0)
 })
 
-test_that("laplace_direct can estimate positive 2D AbilityCorr", {
+test_that("laplace can estimate positive 2D AbilityCorr", {
   set.seed(20260330)
   sim <- make_correlated_mirt_sim(
     AbilityCorr = matrix(c(1, 0.45, 0.45, 1), 2, 2),
@@ -288,7 +360,7 @@ test_that("laplace_direct can estimate positive 2D AbilityCorr", {
   expect_false(isTRUE(all.equal(fit$abilityPrior$corr, diag(2))))
 })
 
-test_that("laplace_direct estimated AbilityCorr is SPD in 3D", {
+test_that("laplace estimated AbilityCorr is SPD in 3D", {
   set.seed(20260331)
   sim <- make_correlated_mirt_sim(
     AbilityCorr = matrix(c(
@@ -326,7 +398,7 @@ test_that("laplace_direct estimated AbilityCorr is SPD in 3D", {
   expect_equal(fit$abilityPrior$corr, t(fit$abilityPrior$corr), tolerance = 1e-8)
 })
 
-test_that("laplace_direct ignores AbilityCorr estimation in 1D and FALSE reproduces default", {
+test_that("laplace ignores AbilityCorr estimation in 1D and FALSE reproduces default", {
   set.seed(20260401)
   sim <- bigIRT::simIRT(
     Nsubs = 120,

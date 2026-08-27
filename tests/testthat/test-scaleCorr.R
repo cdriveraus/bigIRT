@@ -17,12 +17,14 @@ if(identical(Sys.getenv("NOT_CRAN"), "true")& .Machine$sizeof.pointer != 4){
     fit <- fitIRT(dat$dat,cores=1,pl=1,plot=F,verbose=0,priors=T,
       normalise = T,ebayes = T,ebayesmultiplier = 2)
 
-    # cor(fit$personPars[,-1])
-    # cov2cor(fit$pars$AbilityCov)
-    # cor(dat$Ability)
-
+    ## The correlation is not readable off personPars. normalise = TRUE whitens
+    ## the abilities -- normaliseMIRT applies inv_chol of the fitted ability
+    ## covariance and pushes the correlation into the loadings -- so the reported
+    ## abilities have identity covariance by construction and cor(personPars) is
+    ## zero however well the correlation was estimated. The estimate survives in
+    ## pars$AbilityCov, which is what this checks.
     testthat::expect_equivalent(
-      cor(fit$personPars[,-1]),
+      cov2cor(fit$pars$AbilityCov),
       cor(dat$Ability),
       tol=1e-1)
 

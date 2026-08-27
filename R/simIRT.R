@@ -1,5 +1,6 @@
 inv_logit <- function(x){
-  exp(x)/(1 + exp(x))
+  ## Stable against overflow; see note in fitIRT.R.
+  stats::plogis(x)
 }
 
 dfunc <- function(x){

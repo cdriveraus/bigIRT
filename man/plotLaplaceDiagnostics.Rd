@@ -8,7 +8,9 @@ plotLaplaceDiagnostics(fit, logGrad = TRUE, showTiming = TRUE)
 }
 \arguments{
 \item{fit}{A fitted \code{bigIRT} model returned by \code{fitIRT()} with
-\code{marginalApprox="laplace_fast"} and \code{laplaceDiagnostics=TRUE}.}
+either Laplace backend and \code{laplaceDiagnostics=TRUE}. Direct-Laplace
+fits do not have blockwise stability panels; those panels are shown as
+unavailable rather than interpreted as failures.}
 
 \item{logGrad}{Whether to plot the item-step gradient norm on a log10 scale.}
 

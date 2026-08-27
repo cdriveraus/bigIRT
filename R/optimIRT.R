@@ -261,7 +261,7 @@ optimIRT <- function(standata, cores=6,split=TRUE,
           par(mfrow=c(1,1))
           # plot(parm,xlab='param',ylab='par value',col=1:length(parm))
           tmp<-try(plot(tail(1:iter,500), tail(exp(storedLp/standata$Nobs),500),ylab='target',type='l')) #log(1+tail(-storedLp,500)-min(tail(-storedLp,500)))
-          if('try-error' %in% class(tmp) ) browser()
+          if('try-error' %in% class(tmp) ) stop("Unable to evaluate the optimization objective.")
           # plot(g,type='p',col=1:length(parm),ylab='gradient',xlab='param')
         }
       }

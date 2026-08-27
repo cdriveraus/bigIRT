@@ -450,7 +450,7 @@ sgd1 <- function(init,fitfunc,whichignore=c(),nsubsets=1,nsubjects=NA,ndatapoint
         (i %% (nsubsets))==0){
 
       lpdiff <- (subsetlp-max(subsetlpstore[1:((i/nsubsets)-nconvergeiter)]))/nconvergeiter
-      if(is.na(lpdiff)) browser()
+      if(is.na(lpdiff)) stop("Stochastic-gradient objective difference is NA.")
 
       if(i >=(nsubsets*2)){ #then oldsubset exists
 

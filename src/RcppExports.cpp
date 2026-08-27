@@ -12,14 +12,14 @@ Rcpp::Rostream<false>& Rcpp::Rcerr = Rcpp::Rcpp_cerr_get();
 #endif
 
 
-RcppExport SEXP _bigIRT_laplace_corr_grad_cpp_impl(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
+RcppExport SEXP _bigIRT_laplace_ability_beta_mstep_cpp_impl(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
+RcppExport SEXP _bigIRT_laplace_corr_grad_cpp_impl(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
 RcppExport SEXP _bigIRT_laplace_direct_block_fg_cpp_impl(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
-RcppExport SEXP _bigIRT_laplace_direct_objective_cpp_impl(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
-RcppExport SEXP _bigIRT_laplace_item_block_objective_cpp_impl(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
+RcppExport SEXP _bigIRT_laplace_item_block_objective_cpp_impl(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
+RcppExport SEXP _bigIRT_laplace_item_eval_cpp_impl(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
 RcppExport SEXP _bigIRT_laplace_item_objective_cpp_impl(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
-RcppExport SEXP _bigIRT_laplace_materialize_block_cpp_impl(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
+RcppExport SEXP _bigIRT_laplace_item_prepare_cpp_impl(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
 RcppExport SEXP _bigIRT_laplace_person_step_block_cpp_impl(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
-RcppExport SEXP _bigIRT_laplace_person_step_cpp_impl(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
 RcppExport SEXP _bigIRT_person_covariance_cpp_impl(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
 RcppExport SEXP _bigIRT_person_sigma_points_cpp_dense_impl(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
 RcppExport SEXP _bigIRT_person_sigma_points_cpp_impl(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
@@ -27,14 +27,14 @@ RcppExport SEXP _rcpp_module_boot_stan_fit4irt_mod();
 
 static const R_CallMethodDef CallEntries[] = {
     {"_rcpp_module_boot_stan_fit4irt_mod", (DL_FUNC) &_rcpp_module_boot_stan_fit4irt_mod, 0},
-    {"_bigIRT_laplace_corr_grad_cpp_impl",            (DL_FUNC) &_bigIRT_laplace_corr_grad_cpp_impl,             8},
+    {"_bigIRT_laplace_ability_beta_mstep_cpp_impl",   (DL_FUNC) &_bigIRT_laplace_ability_beta_mstep_cpp_impl,    6},
+    {"_bigIRT_laplace_corr_grad_cpp_impl",            (DL_FUNC) &_bigIRT_laplace_corr_grad_cpp_impl,             9},
     {"_bigIRT_laplace_direct_block_fg_cpp_impl",      (DL_FUNC) &_bigIRT_laplace_direct_block_fg_cpp_impl,      40},
-    {"_bigIRT_laplace_direct_objective_cpp_impl",     (DL_FUNC) &_bigIRT_laplace_direct_objective_cpp_impl,     16},
-    {"_bigIRT_laplace_item_block_objective_cpp_impl", (DL_FUNC) &_bigIRT_laplace_item_block_objective_cpp_impl, 31},
+    {"_bigIRT_laplace_item_block_objective_cpp_impl", (DL_FUNC) &_bigIRT_laplace_item_block_objective_cpp_impl, 33},
+    {"_bigIRT_laplace_item_eval_cpp_impl",            (DL_FUNC) &_bigIRT_laplace_item_eval_cpp_impl,            12},
     {"_bigIRT_laplace_item_objective_cpp_impl",       (DL_FUNC) &_bigIRT_laplace_item_objective_cpp_impl,       11},
-    {"_bigIRT_laplace_materialize_block_cpp_impl",    (DL_FUNC) &_bigIRT_laplace_materialize_block_cpp_impl,    33},
+    {"_bigIRT_laplace_item_prepare_cpp_impl",         (DL_FUNC) &_bigIRT_laplace_item_prepare_cpp_impl,         22},
     {"_bigIRT_laplace_person_step_block_cpp_impl",    (DL_FUNC) &_bigIRT_laplace_person_step_block_cpp_impl,    40},
-    {"_bigIRT_laplace_person_step_cpp_impl",          (DL_FUNC) &_bigIRT_laplace_person_step_cpp_impl,          17},
     {"_bigIRT_person_covariance_cpp_impl",            (DL_FUNC) &_bigIRT_person_covariance_cpp_impl,            12},
     {"_bigIRT_person_sigma_points_cpp_dense_impl",    (DL_FUNC) &_bigIRT_person_sigma_points_cpp_dense_impl,    10},
     {"_bigIRT_person_sigma_points_cpp_impl",          (DL_FUNC) &_bigIRT_person_sigma_points_cpp_impl,          12},

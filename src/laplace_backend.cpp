@@ -1,8 +1,56 @@
 #include <RcppEigen.h>
 #include <RcppParallel.h>
 #include <chrono>
+#include <algorithm>
+#include <vector>
+#include <memory>
+#include <cstdlib>
 using Eigen::MatrixXd;
 using Eigen::VectorXd;
+
+// Worker inputs must not retain an R object.  RcppParallel's RVector/RMatrix
+// views are only safe for a narrow set of access patterns and were the source
+// of process-level exits in predictor-bearing fits on Windows.  These compact
+// column-major copies are made once at the .Call boundary and are ordinary C++
+// data thereafter.
+template <typename T>
+// The buffer is shared, not copied. RcppParallel splits the worker body once
+// per stealing thread, and the default member-wise copy duplicated every one of
+// these -- all of them read-only, and several of them sized by the number of
+// observations rather than the number of subjects. On a sparse fit with
+// millions of responses that is hundreds of megabytes per split, for data no
+// split ever writes to. A shared_ptr copy is O(1) and every accessor below is
+// unchanged, so no call site has to know.
+struct BigIRTOwnedVector {
+  std::shared_ptr< std::vector<T> > values;
+  BigIRTOwnedVector() : values(std::make_shared< std::vector<T> >()) {}
+  template <typename V> explicit BigIRTOwnedVector(const V& x)
+      : values(std::make_shared< std::vector<T> >(static_cast<std::size_t>(x.size()))) {
+    std::copy(x.begin(), x.end(), values->begin());
+  }
+  inline int length() const { return static_cast<int>(values->size()); }
+  inline int size() const { return static_cast<int>(values->size()); }
+  inline const T& operator[](const int i) const { return (*values)[static_cast<std::size_t>(i)]; }
+};
+
+template <typename T>
+// Shared for the same reason as BigIRTOwnedVector above.
+struct BigIRTOwnedMatrix {
+  int nr = 0, nc = 0;
+  std::shared_ptr< std::vector<T> > values;
+  BigIRTOwnedMatrix() : values(std::make_shared< std::vector<T> >()) {}
+  template <typename M> explicit BigIRTOwnedMatrix(const M& x)
+      : nr(x.nrow()), nc(x.ncol()),
+        values(std::make_shared< std::vector<T> >(static_cast<std::size_t>(nr) * static_cast<std::size_t>(nc))) {
+    for (int j = 0; j < nc; ++j) for (int i = 0; i < nr; ++i)
+      (*values)[static_cast<std::size_t>(i + nr * j)] = x(i, j);
+  }
+  inline int nrow() const { return nr; }
+  inline int ncol() const { return nc; }
+  inline const T& operator()(const int i, const int j) const {
+    return (*values)[static_cast<std::size_t>(i + nr * j)];
+  }
+};
 
 extern "C" SEXP _bigIRT_laplace_person_step_block_cpp_impl(
     SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP,
@@ -13,7 +61,12 @@ extern "C" SEXP _bigIRT_laplace_item_block_objective_cpp_impl(
     SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP,
     SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP,
     SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP,
-    SEXP);
+    SEXP, SEXP, SEXP);
+
+inline double bigirt_softplus_scalar(const double x) {
+  if (x > 0.0) return x + std::log1p(std::exp(-x));
+  return std::log1p(std::exp(x));
+}
 
 inline double bigirt_stable_inv_logit(const double x) {
   if (x >= 0.0) {
@@ -234,6 +287,7 @@ extern "C" SEXP _bigIRT_laplace_person_step_cpp_impl(
     SEXP tolSEXP,
     SEXP keep_covarianceSEXP,
     SEXP grain_sizeSEXP) {
+  BEGIN_RCPP
 
   Rcpp::IntegerVector id(idSEXP);
   Rcpp::IntegerVector score(scoreSEXP);
@@ -286,6 +340,7 @@ extern "C" SEXP _bigIRT_laplace_person_step_cpp_impl(
   Rcpp::NumericVector logdet_precision(Nsubs);
   Rcpp::IntegerVector niter(Nsubs);
   Rcpp::LogicalVector converged(Nsubs);
+  Rcpp::IntegerVector status_code(Nsubs);
   Rcpp::NumericVector objective(Nsubs);
   Rcpp::NumericVector covariance;
   if (keep_covariance) {
@@ -295,16 +350,16 @@ extern "C" SEXP _bigIRT_laplace_person_step_cpp_impl(
 
   struct BigIRTLaplacePersonWorker : public RcppParallel::Worker {
     const std::vector< std::vector<int> >& obs_by_subj;
-    const Rcpp::IntegerVector& score;
-    const Rcpp::NumericMatrix& theta_init;
-    const Rcpp::NumericMatrix& ability_offset;
-    const Rcpp::NumericVector& b;
-    const Rcpp::NumericVector& c;
-    const Rcpp::NumericVector& d;
-    const Rcpp::NumericMatrix& loadings;
-    const Rcpp::NumericMatrix& prior_mean;
-    const Rcpp::NumericVector& prior_precision;
-    const Rcpp::IntegerMatrix& free_mask;
+    BigIRTOwnedVector<int> score;
+    BigIRTOwnedMatrix<double> theta_init;
+    BigIRTOwnedMatrix<double> ability_offset;
+    BigIRTOwnedVector<double> b;
+    BigIRTOwnedVector<double> c;
+    BigIRTOwnedVector<double> d;
+    BigIRTOwnedMatrix<double> loadings;
+    BigIRTOwnedMatrix<double> prior_mean;
+    BigIRTOwnedVector<double> prior_precision;
+    BigIRTOwnedMatrix<int> free_mask;
     const double jitter;
     const int max_attempts;
     const int max_iter;
@@ -317,6 +372,7 @@ extern "C" SEXP _bigIRT_laplace_person_step_cpp_impl(
     Rcpp::NumericVector& logdet_precision;
     Rcpp::IntegerVector& niter;
     Rcpp::LogicalVector& converged;
+    Rcpp::IntegerVector& status_code;
     Rcpp::NumericVector& objective;
     Rcpp::NumericVector& covariance;
 
@@ -344,6 +400,7 @@ extern "C" SEXP _bigIRT_laplace_person_step_cpp_impl(
       Rcpp::NumericVector& logdet_precision,
       Rcpp::IntegerVector& niter,
       Rcpp::LogicalVector& converged,
+      Rcpp::IntegerVector& status_code,
       Rcpp::NumericVector& objective,
       Rcpp::NumericVector& covariance)
       : obs_by_subj(obs_by_subj), score(score), theta_init(theta_init),
@@ -352,7 +409,7 @@ extern "C" SEXP _bigIRT_laplace_person_step_cpp_impl(
         jitter(jitter), max_attempts(max_attempts), max_iter(max_iter), tol(tol),
         keep_covariance(keep_covariance), K(K), theta_mode(theta_mode),
         precision(precision), precision_chol(precision_chol),
-        logdet_precision(logdet_precision), niter(niter), converged(converged),
+        logdet_precision(logdet_precision), niter(niter), converged(converged), status_code(status_code),
         objective(objective), covariance(covariance) {}
 
     void operator()(std::size_t begin, std::size_t end) {
@@ -361,7 +418,9 @@ extern "C" SEXP _bigIRT_laplace_person_step_cpp_impl(
         const int subj = static_cast<int>(subj_idx);
         VectorXd theta(K);
         VectorXd mu(K);
-        MatrixXd prior_prec = bigirt_matrix_from_array(prior_precision, K, subj);
+        MatrixXd prior_prec = MatrixXd::Zero(K, K);
+        for (int r = 0; r < K; ++r) for (int cc = 0; cc < K; ++cc)
+          prior_prec(r, cc) = prior_precision[r + K * cc + K * K * subj];
         std::vector<int> active;
         active.reserve(K);
         for (int k = 0; k < K; ++k) {
@@ -404,6 +463,7 @@ extern "C" SEXP _bigIRT_laplace_person_step_cpp_impl(
         logpost_and_grad(theta, grad, prec, lp);
 
         bool subj_converged = active.empty();
+        int subj_status = subj_converged ? 0 : 1;
         int used_iter = 0;
         for (int it = 0; it < max_iter && !subj_converged; ++it) {
           used_iter = it + 1;
@@ -412,6 +472,7 @@ extern "C" SEXP _bigIRT_laplace_person_step_cpp_impl(
           gnorm = std::sqrt(gnorm);
           if (gnorm < tol) {
             subj_converged = true;
+            subj_status = 0;
             break;
           }
 
@@ -438,9 +499,7 @@ extern "C" SEXP _bigIRT_laplace_person_step_cpp_impl(
             }
             chol_jitter *= 10.0;
           }
-          if (!success) {
-            Rcpp::stop("Cholesky failed while updating person modes.");
-          }
+          if (!success) { subj_status = 4; break; }
 
           VectorXd step = llt.solve(sub_grad);
           double damping = 1.0;
@@ -461,7 +520,7 @@ extern "C" SEXP _bigIRT_laplace_person_step_cpp_impl(
             }
             damping *= 0.5;
           }
-          if (!accepted) break;
+          if (!accepted) { subj_status = 2; break; }
           theta = theta_try;
           grad = grad_try;
           prec = prec_try;
@@ -469,9 +528,11 @@ extern "C" SEXP _bigIRT_laplace_person_step_cpp_impl(
         }
 
         logpost_and_grad(theta, grad, prec, lp);
+        if (!R_finite(lp) && subj_status < 3) subj_status = 3;
         objective[subj] = lp;
         niter[subj] = used_iter;
         converged[subj] = subj_converged;
+        status_code[subj] = subj_status;
 
         for (int k = 0; k < K; ++k) theta_mode(subj, k) = theta(k);
 
@@ -499,7 +560,11 @@ extern "C" SEXP _bigIRT_laplace_person_step_cpp_impl(
           }
           chol_jitter *= 10.0;
         }
-        if (!success) Rcpp::stop("Cholesky failed while finalizing person precision.");
+        if (!success) {
+          status_code[subj] = 5;
+          prec = MatrixXd::Identity(K, K) / jitter;
+          llt_full.compute(prec);
+        }
 
         MatrixXd L = llt_full.matrixL();
         double logdet = 0.0;
@@ -529,10 +594,9 @@ extern "C" SEXP _bigIRT_laplace_person_step_cpp_impl(
     obs_by_subj, score, theta_init, ability_offset, b, c, d, loadings,
     prior_mean, prior_precision, free_mask, jitter, max_attempts, max_iter,
     tol, keep_covariance, K, theta_mode, precision, precision_chol,
-    logdet_precision, niter, converged, objective, covariance
+    logdet_precision, niter, converged, status_code, objective, covariance
   );
-
-  RcppParallel::parallelFor(static_cast<std::size_t>(0), static_cast<std::size_t>(Nsubs), worker, grain_size);
+  worker(0, static_cast<std::size_t>(Nsubs));
 
   if (keep_covariance) {
     return Rcpp::List::create(
@@ -543,7 +607,8 @@ extern "C" SEXP _bigIRT_laplace_person_step_cpp_impl(
       Rcpp::Named("covariance") = covariance,
       Rcpp::Named("objective") = objective,
       Rcpp::Named("niter") = niter,
-      Rcpp::Named("converged") = converged
+      Rcpp::Named("converged") = converged,
+      Rcpp::Named("status_code") = status_code
     );
   }
 
@@ -554,8 +619,60 @@ extern "C" SEXP _bigIRT_laplace_person_step_cpp_impl(
     Rcpp::Named("logdet_precision") = logdet_precision,
     Rcpp::Named("objective") = objective,
     Rcpp::Named("niter") = niter,
-    Rcpp::Named("converged") = converged
+    Rcpp::Named("converged") = converged,
+    Rcpp::Named("status_code") = status_code
   );
+  END_RCPP
+}
+
+// Native M-step for a Gaussian residual-ability prior.  theta_residual is the
+// posterior mode of u_i in theta_i = X_i beta + u_i.  Regressing u on X gives
+// the coefficient correction that restores E[u | X] = 0 without using an R
+// fitting path.
+extern "C" SEXP _bigIRT_laplace_ability_beta_mstep_cpp_impl(
+    SEXP theta_residualSEXP, SEXP person_predSEXP, SEXP ability_betaSEXP,
+    SEXP free_maskSEXP, SEXP beta_scaleSEXP, SEXP jitterSEXP) {
+  BEGIN_RCPP
+  Rcpp::NumericMatrix residual(theta_residualSEXP);
+  Rcpp::NumericMatrix x(person_predSEXP);
+  Rcpp::NumericMatrix beta(ability_betaSEXP);
+  Rcpp::IntegerMatrix free_mask(free_maskSEXP);
+  const int n = residual.nrow(), k = residual.ncol(), p = x.ncol();
+  if(x.nrow() != n || beta.nrow() != k || beta.ncol() != p ||
+     free_mask.nrow() != n || free_mask.ncol() != k)
+    Rcpp::stop("Unexpected dimensions in Laplace ability-beta M-step.");
+  const double scale = Rcpp::as<double>(beta_scaleSEXP);
+  const double jitter = Rcpp::as<double>(jitterSEXP);
+  Rcpp::NumericMatrix updated = Rcpp::clone(beta);
+  Rcpp::NumericMatrix correction(k, p);
+  double grad_sq = 0.0;
+  for(int factor = 0; factor < k; ++factor) {
+    Eigen::MatrixXd xtx = Eigen::MatrixXd::Zero(p, p);
+    Eigen::VectorXd rhs = Eigen::VectorXd::Zero(p);
+    for(int i = 0; i < n; ++i) {
+      if(free_mask(i, factor) == 0) continue;
+      for(int a = 0; a < p; ++a) {
+        const double xa = x(i, a);
+        rhs(a) += xa * residual(i, factor);
+        for(int b = 0; b < p; ++b) xtx(a, b) += xa * x(i, b);
+      }
+    }
+    grad_sq += rhs.squaredNorm();
+    if(p == 0) continue;
+    xtx.diagonal().array() += 1.0 / (scale * scale) + jitter;
+    Eigen::LDLT<Eigen::MatrixXd> solver(xtx);
+    if(solver.info() != Eigen::Success) Rcpp::stop("Ability-beta M-step normal equations failed.");
+    const Eigen::VectorXd delta = solver.solve(rhs);
+    if(solver.info() != Eigen::Success || !delta.allFinite()) Rcpp::stop("Ability-beta M-step solve failed.");
+    for(int a = 0; a < p; ++a) {
+      correction(factor, a) = delta(a);
+      updated(factor, a) += delta(a);
+    }
+  }
+  return Rcpp::List::create(Rcpp::Named("beta") = updated,
+    Rcpp::Named("correction") = correction,
+    Rcpp::Named("grad_norm") = std::sqrt(grad_sq));
+  END_RCPP
 }
 
 struct BigIRTLaplaceItemObjectiveWorker : public RcppParallel::Worker {
@@ -570,6 +687,7 @@ struct BigIRTLaplaceItemObjectiveWorker : public RcppParallel::Worker {
   const int K;
   const double jitter;
   const int max_attempts;
+  int failure_code;
   RcppParallel::RMatrix<double> grad_loadings;
   RcppParallel::RVector<double> grad_b;
   RcppParallel::RVector<double> grad_c;
@@ -770,35 +888,86 @@ extern "C" SEXP _bigIRT_laplace_item_objective_cpp_impl(
   );
 }
 
+// This is deliberately a plain C++ solver, not an RcppParallel Worker.  It
+// owns its inputs and is invoked serially until a separate no-throw reduction
+// wrapper is introduced.
+// Reduction over people for the frozen-mode item objective and gradient.
+// The worker owns copies of everything it reads, signals failure through
+// failure_code rather than by throwing, and already carries the splitting
+// constructor and join a reduction needs, so it is safe to run in parallel.
+// This is the dominant cost of a fit: L-BFGS evaluates it many times per
+// item block, and while it ran serially the cores argument had almost no
+// effect on total runtime.
+// Order subjects so that consecutive subjects touch overlapping item
+// parameters. The item-block gradient is a sum over subjects, so any
+// permutation leaves the result unchanged to within floating-point
+// reassociation -- which the reduction already incurs whenever the thread
+// count changes. Only locality depends on the order, so nothing has to be
+// undone afterwards.
+//
+// Sparse assessment data is the case this matters for. With items assigned by
+// test form, a chunk of arbitrarily ordered subjects touches nearly the whole
+// bank, so every chunk pays for every item. Grouping subjects by the items
+// they actually answered shrinks that footprint. The signature is a subject's
+// sorted set of item references, compared lexicographically, which puts
+// subjects sitting identical forms adjacent and similar forms nearby. It
+// assumes nothing about the design.
+static std::vector<int> bigIRT_subject_locality_order(
+    const std::vector< std::vector<int> >& obs_by_subj,
+    const Rcpp::IntegerVector& B_ref) {
+  const std::size_t n = obs_by_subj.size();
+  std::vector<int> order(n);
+  for (std::size_t i = 0; i < n; ++i) order[i] = static_cast<int>(i);
+  if (n < 2 || B_ref.size() == 0) return order;
+
+  const int nref = static_cast<int>(B_ref.size());
+  std::vector< std::vector<int> > sig(n);
+  for (std::size_t i = 0; i < n; ++i) {
+    const std::vector<int>& obs = obs_by_subj[i];
+    std::vector<int> k;
+    k.reserve(obs.size());
+    for (std::size_t j = 0; j < obs.size(); ++j) {
+      const int r = obs[j];
+      if (r >= 0 && r < nref) k.push_back(B_ref[r]);
+    }
+    std::sort(k.begin(), k.end());
+    k.erase(std::unique(k.begin(), k.end()), k.end());
+    sig[i].swap(k);
+  }
+  std::sort(order.begin(), order.end(),
+    [&sig](const int a, const int b) { return sig[a] < sig[b]; });
+  return order;
+}
+
 struct BigIRTLaplaceItemBlockWorker : public RcppParallel::Worker {
   const std::vector< std::vector<int> >& obs_by_subj;
-  RcppParallel::RVector<int> score;
-  RcppParallel::RMatrix<double> row_ability;
-  RcppParallel::RMatrix<int> A_ref;
-  RcppParallel::RMatrix<double> A_fixed_value;
-  RcppParallel::RMatrix<int> A_beta_row;
-  RcppParallel::RMatrix<double> A_pred;
-  RcppParallel::RVector<int> B_ref;
-  RcppParallel::RVector<double> B_fixed_value;
-  RcppParallel::RVector<int> B_beta_row;
-  RcppParallel::RMatrix<double> B_pred;
-  RcppParallel::RVector<int> C_ref;
-  RcppParallel::RVector<double> C_fixed_value;
-  RcppParallel::RVector<int> C_beta_row;
-  RcppParallel::RMatrix<double> C_pred;
-  RcppParallel::RVector<int> D_ref;
-  RcppParallel::RVector<double> D_fixed_value;
-  RcppParallel::RVector<int> D_beta_row;
-  RcppParallel::RMatrix<double> D_pred;
-  RcppParallel::RVector<double> invspApars;
-  RcppParallel::RMatrix<double> invspAbeta;
-  RcppParallel::RVector<double> Bpars;
-  RcppParallel::RMatrix<double> Bbeta;
-  RcppParallel::RVector<double> logitCpars;
-  RcppParallel::RMatrix<double> logitCbeta;
-  RcppParallel::RVector<double> logitDpars;
-  RcppParallel::RMatrix<double> logitDbeta;
-  RcppParallel::RVector<double> prior_precision;
+  BigIRTOwnedVector<int> score;
+  BigIRTOwnedMatrix<double> row_ability;
+  BigIRTOwnedMatrix<int> A_ref;
+  BigIRTOwnedMatrix<double> A_fixed_value;
+  BigIRTOwnedMatrix<int> A_beta_row;
+  BigIRTOwnedMatrix<double> A_pred;
+  BigIRTOwnedVector<int> B_ref;
+  BigIRTOwnedVector<double> B_fixed_value;
+  BigIRTOwnedVector<int> B_beta_row;
+  BigIRTOwnedMatrix<double> B_pred;
+  BigIRTOwnedVector<int> C_ref;
+  BigIRTOwnedVector<double> C_fixed_value;
+  BigIRTOwnedVector<int> C_beta_row;
+  BigIRTOwnedMatrix<double> C_pred;
+  BigIRTOwnedVector<int> D_ref;
+  BigIRTOwnedVector<double> D_fixed_value;
+  BigIRTOwnedVector<int> D_beta_row;
+  BigIRTOwnedMatrix<double> D_pred;
+  BigIRTOwnedVector<double> invspApars;
+  BigIRTOwnedMatrix<double> invspAbeta;
+  BigIRTOwnedVector<double> Bpars;
+  BigIRTOwnedMatrix<double> Bbeta;
+  BigIRTOwnedVector<double> logitCpars;
+  BigIRTOwnedMatrix<double> logitCbeta;
+  BigIRTOwnedVector<double> logitDpars;
+  BigIRTOwnedMatrix<double> logitDbeta;
+  BigIRTOwnedVector<double> prior_precision;
   const int K;
   const int nA;
   const int nB;
@@ -814,6 +983,7 @@ struct BigIRTLaplaceItemBlockWorker : public RcppParallel::Worker {
   const int pD;
   const double jitter;
   const int max_attempts;
+  int failure_code;
   double objective;
   std::vector<double> grad_A;
   std::vector<double> grad_B;
@@ -823,6 +993,19 @@ struct BigIRTLaplaceItemBlockWorker : public RcppParallel::Worker {
   std::vector<double> grad_B_beta;
   std::vector<double> grad_C_beta;
   std::vector<double> grad_D_beta;
+  // Borrowed, never owned: shared across every split rather than copied.
+  const std::vector<int>* subject_order = nullptr;
+  // Multiplier on the mode-adjoint correction. 1 reproduces the shipped
+  // behaviour, 0 removes the correction entirely, leaving the frozen-mode
+  // gradient that matches the objective the item optimiser actually evaluates.
+  double adjoint_scale = 1.0;
+  // Weight on the Laplace log-determinant, applied to the objective and to both
+  // of its gradient contributions, so that value and gradient always describe
+  // the same function. 1 is the Laplace objective; 0 drops the Occam term and
+  // leaves the joint posterior; values between damp it. This is the honest
+  // place to put shrinkage, as against the accidental damping that arises from
+  // an under-weighted adjoint alone.
+  double logdet_scale = 1.0;
 
   BigIRTLaplaceItemBlockWorker(
       const std::vector< std::vector<int> >& obs_by_subj,
@@ -867,7 +1050,7 @@ struct BigIRTLaplaceItemBlockWorker : public RcppParallel::Worker {
       nC(logitCpars.length()), nD(logitDpars.length()), nA_beta_row(invspAbeta.nrow()),
       nB_beta_row(Bbeta.nrow()), nC_beta_row(logitCbeta.nrow()), nD_beta_row(logitDbeta.nrow()),
       pA(A_pred.ncol()), pB(B_pred.ncol()), pC(C_pred.ncol()), pD(D_pred.ncol()),
-      jitter(jitter), max_attempts(max_attempts), objective(0.0),
+      jitter(jitter), max_attempts(max_attempts), failure_code(0), objective(0.0),
       grad_A(static_cast<std::size_t>(std::max(0, nA)), 0.0),
       grad_B(static_cast<std::size_t>(std::max(0, nB)), 0.0),
       grad_C(static_cast<std::size_t>(std::max(0, nC)), 0.0),
@@ -888,7 +1071,7 @@ struct BigIRTLaplaceItemBlockWorker : public RcppParallel::Worker {
       prior_precision(other.prior_precision), K(other.K), nA(other.nA), nB(other.nB),
       nC(other.nC), nD(other.nD), nA_beta_row(other.nA_beta_row), nB_beta_row(other.nB_beta_row),
       nC_beta_row(other.nC_beta_row), nD_beta_row(other.nD_beta_row), pA(other.pA), pB(other.pB),
-      pC(other.pC), pD(other.pD), jitter(other.jitter), max_attempts(other.max_attempts),
+      pC(other.pC), pD(other.pD), jitter(other.jitter), max_attempts(other.max_attempts), failure_code(0),
       objective(0.0), grad_A(static_cast<std::size_t>(std::max(0, other.nA)), 0.0),
       grad_B(static_cast<std::size_t>(std::max(0, other.nB)), 0.0),
       grad_C(static_cast<std::size_t>(std::max(0, other.nC)), 0.0),
@@ -896,15 +1079,17 @@ struct BigIRTLaplaceItemBlockWorker : public RcppParallel::Worker {
       grad_A_beta(static_cast<std::size_t>(std::max(0, other.nA_beta_row * other.pA)), 0.0),
       grad_B_beta(static_cast<std::size_t>(std::max(0, other.nB_beta_row * other.pB)), 0.0),
       grad_C_beta(static_cast<std::size_t>(std::max(0, other.nC_beta_row * other.pC)), 0.0),
-      grad_D_beta(static_cast<std::size_t>(std::max(0, other.nD_beta_row * other.pD)), 0.0) {}
+      grad_D_beta(static_cast<std::size_t>(std::max(0, other.nD_beta_row * other.pD)), 0.0),
+      subject_order(other.subject_order), adjoint_scale(other.adjoint_scale),
+      logdet_scale(other.logdet_scale) {}
 
   inline double softplus(const double x) const {
     if (x > 0.0) return x + std::log1p(std::exp(-x));
     return std::log1p(std::exp(x));
   }
 
-  inline double add_beta_term(const int row_idx, const RcppParallel::RMatrix<double>& pred,
-    const RcppParallel::RMatrix<double>& beta, const int beta_row) const {
+  inline double add_beta_term(const int row_idx, const BigIRTOwnedMatrix<double>& pred,
+    const BigIRTOwnedMatrix<double>& beta, const int beta_row) const {
     if (beta_row <= 0 || pred.ncol() == 0 || beta.nrow() == 0) return 0.0;
     const int brow = beta_row - 1;
     double out = 0.0;
@@ -913,7 +1098,7 @@ struct BigIRTLaplaceItemBlockWorker : public RcppParallel::Worker {
   }
 
   inline void add_beta_grad(std::vector<double>& grad_beta, const int nrow_beta, const int p,
-    const RcppParallel::RMatrix<double>& pred, const int row_idx, const int beta_row, const double value) {
+    const BigIRTOwnedMatrix<double>& pred, const int row_idx, const int beta_row, const double value) {
     if (beta_row <= 0 || p == 0 || nrow_beta <= 0) return;
     const int brow = beta_row - 1;
     for (int j = 0; j < p; ++j) {
@@ -923,7 +1108,9 @@ struct BigIRTLaplaceItemBlockWorker : public RcppParallel::Worker {
 
   void operator()(std::size_t begin, std::size_t end) {
     const MatrixXd eye = MatrixXd::Identity(K, K);
-    for (std::size_t subj = begin; subj < end; ++subj) {
+    for (std::size_t s = begin; s < end; ++s) {
+      const std::size_t subj = subject_order
+        ? static_cast<std::size_t>((*subject_order)[s]) : s;
       MatrixXd Q = MatrixXd::Zero(K, K);
       for (int r = 0; r < K; ++r) {
         for (int cidx = 0; cidx < K; ++cidx) {
@@ -941,14 +1128,17 @@ struct BigIRTLaplaceItemBlockWorker : public RcppParallel::Worker {
 
       for (std::size_t oi = 0; oi < obs_idx.size(); ++oi) {
         const int obs = obs_idx[oi];
+        const int b_beta_idx = B_ref[obs] > 0 ? (nB_beta_row == 1 ? 1 : B_ref[obs]) : 0;
+        const int c_beta_idx = C_ref[obs] > 0 ? (nC_beta_row == 1 ? 1 : C_ref[obs]) : 0;
+        const int d_beta_idx = D_ref[obs] > 0 ? (nD_beta_row == 1 ? 1 : D_ref[obs]) : 0;
         double b_row = B_fixed_value[obs];
         if (B_ref[obs] > 0) {
-          b_row = Bpars[B_ref[obs] - 1] + add_beta_term(obs, B_pred, Bbeta, B_beta_row[obs]);
+          b_row = Bpars[B_ref[obs] - 1] + add_beta_term(obs, B_pred, Bbeta, b_beta_idx);
         }
 
         double c_row = C_fixed_value[obs];
         if (C_ref[obs] > 0) {
-          const double raw_c = logitCpars[C_ref[obs] - 1] + add_beta_term(obs, C_pred, logitCbeta, C_beta_row[obs]);
+          const double raw_c = logitCpars[C_ref[obs] - 1] + add_beta_term(obs, C_pred, logitCbeta, c_beta_idx);
           const double sig_c = bigirt_stable_inv_logit(raw_c);
           c_row = 0.5 * sig_c;
           row_c_mult[oi] = 0.5 * sig_c * (1.0 - sig_c);
@@ -956,7 +1146,7 @@ struct BigIRTLaplaceItemBlockWorker : public RcppParallel::Worker {
 
         double d_row = D_fixed_value[obs];
         if (D_ref[obs] > 0) {
-          const double raw_d = logitDpars[D_ref[obs] - 1] + add_beta_term(obs, D_pred, logitDbeta, D_beta_row[obs]);
+          const double raw_d = logitDpars[D_ref[obs] - 1] + add_beta_term(obs, D_pred, logitDbeta, d_beta_idx);
           const double sig_d = bigirt_stable_inv_logit(raw_d);
           d_row = 0.5 * sig_d + 0.5;
           row_d_mult[oi] = 0.5 * sig_d * (1.0 - sig_d);
@@ -966,7 +1156,8 @@ struct BigIRTLaplaceItemBlockWorker : public RcppParallel::Worker {
         for (int k = 0; k < K; ++k) {
           double a_val = A_fixed_value(obs, k);
           if (A_ref(obs, k) > 0) {
-            const double raw_a = invspApars[A_ref(obs, k) - 1] + add_beta_term(obs, A_pred, invspAbeta, A_beta_row(obs, k));
+            const int a_beta_idx = nA_beta_row == 1 ? 1 : A_ref(obs, k);
+            const double raw_a = invspApars[A_ref(obs, k) - 1] + add_beta_term(obs, A_pred, invspAbeta, a_beta_idx);
             const double sig_a = bigirt_stable_inv_logit(raw_a);
             a_val = softplus(raw_a);
             row_a_mult[oi](k) = sig_a;
@@ -1003,13 +1194,14 @@ struct BigIRTLaplaceItemBlockWorker : public RcppParallel::Worker {
         }
         chol_jitter *= 10.0;
       }
-      if (!success) Rcpp::stop("Cholesky failed while evaluating Laplace block objective.");
+      if (!success) { failure_code = 1; return; }
 
       MatrixXd Sigma = llt.solve(eye);
       MatrixXd L = llt.matrixL();
       double logdet = 0.0;
       for (int k = 0; k < K; ++k) logdet += 2.0 * std::log(std::max(L(k, k), 1e-12));
-      objective += loglik + 0.5 * static_cast<double>(K) * std::log(2.0 * M_PI) - 0.5 * logdet;
+      objective += loglik + 0.5 * static_cast<double>(K) * std::log(2.0 * M_PI)
+        - logdet_scale * 0.5 * logdet;
 
       // The direct optimizer differentiates a Laplace objective whose modes
       // depend on item parameters.  The original frozen-mode gradient omitted
@@ -1024,10 +1216,15 @@ struct BigIRTLaplaceItemBlockWorker : public RcppParallel::Worker {
         const double aSa = a.dot(Sa);
         for (int k = 0; k < K; ++k) trace_by_theta(k) += row_terms[oi].dw_deta * a(k) * aSa;
       }
-      const VectorXd mode_adjoint = Sigma * trace_by_theta;
+      // Scaling here carries logdet_scale into every adjoint term at once,
+      // since they all reach the gradient through mode_adjoint or ua.
+      const VectorXd mode_adjoint = (adjoint_scale * logdet_scale) * (Sigma * trace_by_theta);
 
       for (std::size_t oi = 0; oi < obs_idx.size(); ++oi) {
         const int obs = obs_idx[oi];
+        const int b_beta_idx = B_ref[obs] > 0 ? (nB_beta_row == 1 ? 1 : B_ref[obs]) : 0;
+        const int c_beta_idx = C_ref[obs] > 0 ? (nC_beta_row == 1 ? 1 : C_ref[obs]) : 0;
+        const int d_beta_idx = D_ref[obs] > 0 ? (nD_beta_row == 1 ? 1 : D_ref[obs]) : 0;
         const VectorXd& a = row_a[oi];
         VectorXd z(K);
         for (int k = 0; k < K; ++k) z(k) = row_ability(obs, k);
@@ -1038,32 +1235,34 @@ struct BigIRTLaplaceItemBlockWorker : public RcppParallel::Worker {
 
         for (int k = 0; k < K; ++k) {
           const double g_load = rt.grad_eta * z(k) -
-            0.5 * (rt.dw_deta * z(k) * aSa + 2.0 * rt.w * Sa(k)) -
+            logdet_scale * 0.5 * (rt.dw_deta * z(k) * aSa + 2.0 * rt.w * Sa(k)) -
             0.5 * (mode_adjoint(k) * rt.grad_eta + ua * rt.dgrad_eta_deta * z(k));
           const double g_raw = g_load * row_a_mult[oi](k);
           if (A_ref(obs, k) > 0) grad_A[static_cast<std::size_t>(A_ref(obs, k) - 1)] += g_raw;
-          add_beta_grad(grad_A_beta, nA_beta_row, pA, A_pred, obs, A_beta_row(obs, k), g_raw);
+          const int a_beta_idx = A_ref(obs, k) > 0 ? (nA_beta_row == 1 ? 1 : A_ref(obs, k)) : 0;
+          add_beta_grad(grad_A_beta, nA_beta_row, pA, A_pred, obs, a_beta_idx, g_raw);
         }
 
-        const double g_b = -rt.grad_eta + 0.5 * rt.dw_deta * aSa +
+        const double g_b = -rt.grad_eta + logdet_scale * 0.5 * rt.dw_deta * aSa +
           0.5 * ua * rt.dgrad_eta_deta;
         if (B_ref[obs] > 0) grad_B[static_cast<std::size_t>(B_ref[obs] - 1)] += g_b;
-        add_beta_grad(grad_B_beta, nB_beta_row, pB, B_pred, obs, B_beta_row[obs], g_b);
+        add_beta_grad(grad_B_beta, nB_beta_row, pB, B_pred, obs, b_beta_idx, g_b);
 
-        const double g_c_raw = (rt.grad_c - 0.5 * rt.dw_dc * aSa -
+        const double g_c_raw = (rt.grad_c - logdet_scale * 0.5 * rt.dw_dc * aSa -
           0.5 * ua * rt.dgrad_eta_dc) * row_c_mult[oi];
         if (C_ref[obs] > 0) grad_C[static_cast<std::size_t>(C_ref[obs] - 1)] += g_c_raw;
-        add_beta_grad(grad_C_beta, nC_beta_row, pC, C_pred, obs, C_beta_row[obs], g_c_raw);
+        add_beta_grad(grad_C_beta, nC_beta_row, pC, C_pred, obs, c_beta_idx, g_c_raw);
 
-        const double g_d_raw = (rt.grad_d - 0.5 * rt.dw_dd * aSa -
+        const double g_d_raw = (rt.grad_d - logdet_scale * 0.5 * rt.dw_dd * aSa -
           0.5 * ua * rt.dgrad_eta_dd) * row_d_mult[oi];
         if (D_ref[obs] > 0) grad_D[static_cast<std::size_t>(D_ref[obs] - 1)] += g_d_raw;
-        add_beta_grad(grad_D_beta, nD_beta_row, pD, D_pred, obs, D_beta_row[obs], g_d_raw);
+        add_beta_grad(grad_D_beta, nD_beta_row, pD, D_pred, obs, d_beta_idx, g_d_raw);
       }
     }
   }
 
   void join(const BigIRTLaplaceItemBlockWorker& rhs) {
+    if (rhs.failure_code != 0) failure_code = rhs.failure_code;
     objective += rhs.objective;
     for (std::size_t i = 0; i < grad_A.size(); ++i) grad_A[i] += rhs.grad_A[i];
     for (std::size_t i = 0; i < grad_B.size(); ++i) grad_B[i] += rhs.grad_B[i];
@@ -1075,6 +1274,155 @@ struct BigIRTLaplaceItemBlockWorker : public RcppParallel::Worker {
     for (std::size_t i = 0; i < grad_D_beta.size(); ++i) grad_D_beta[i] += rhs.grad_D_beta[i];
   }
 };
+
+// Persistent data for repeated item objective evaluations.
+//
+// The item line search evaluates the objective about eleven times per outer
+// iteration, and every one of those calls previously re-marshalled all the
+// per-response arrays from R: id, score, row_ability, and the ref/fixed/pred
+// triples for A, B, C and D. Those are data, not parameters -- they do not
+// change while the item block is being optimised -- so the marshalling was
+// repeated for nothing, and on a fit with millions of responses it dominated
+// the R-level share of the profile.
+//
+// Holding them in one object behind an external pointer means they are
+// converted once per item step. Each evaluation then passes only the item
+// parameter vectors, which are small. The Rcpp vector types preserve their
+// underlying SEXPs for as long as this object lives, so the data stay valid
+// across calls without further copying.
+struct BigIRTItemPrepared {
+  Rcpp::IntegerVector id, score;
+  Rcpp::NumericMatrix row_ability;
+  Rcpp::IntegerMatrix A_ref, A_beta_row;
+  Rcpp::NumericMatrix A_fixed_value, A_pred;
+  Rcpp::IntegerVector B_ref, B_beta_row, C_ref, C_beta_row, D_ref, D_beta_row;
+  Rcpp::NumericVector B_fixed_value, C_fixed_value, D_fixed_value;
+  Rcpp::NumericMatrix B_pred, C_pred, D_pred;
+  Rcpp::NumericVector prior_precision;
+  int K = 0, Nsubs = 0, max_attempts = 0;
+  double jitter = 0.0;
+  std::vector< std::vector<int> > obs_by_subj;
+  std::vector<int> subject_order;
+};
+
+extern "C" SEXP _bigIRT_laplace_item_prepare_cpp_impl(
+    SEXP idSEXP, SEXP scoreSEXP, SEXP row_abilitySEXP,
+    SEXP A_refSEXP, SEXP A_fixed_valueSEXP, SEXP A_beta_rowSEXP, SEXP A_predSEXP,
+    SEXP B_refSEXP, SEXP B_fixed_valueSEXP, SEXP B_beta_rowSEXP, SEXP B_predSEXP,
+    SEXP C_refSEXP, SEXP C_fixed_valueSEXP, SEXP C_beta_rowSEXP, SEXP C_predSEXP,
+    SEXP D_refSEXP, SEXP D_fixed_valueSEXP, SEXP D_beta_rowSEXP, SEXP D_predSEXP,
+    SEXP prior_precisionSEXP, SEXP jitterSEXP, SEXP max_attemptsSEXP) {
+  BEGIN_RCPP
+  BigIRTItemPrepared* d = new BigIRTItemPrepared();
+  d->id = Rcpp::IntegerVector(idSEXP);
+  d->score = Rcpp::IntegerVector(scoreSEXP);
+  d->row_ability = Rcpp::NumericMatrix(row_abilitySEXP);
+  d->A_ref = Rcpp::IntegerMatrix(A_refSEXP);
+  d->A_fixed_value = Rcpp::NumericMatrix(A_fixed_valueSEXP);
+  d->A_beta_row = Rcpp::IntegerMatrix(A_beta_rowSEXP);
+  d->A_pred = Rcpp::NumericMatrix(A_predSEXP);
+  d->B_ref = Rcpp::IntegerVector(B_refSEXP);
+  d->B_fixed_value = Rcpp::NumericVector(B_fixed_valueSEXP);
+  d->B_beta_row = Rcpp::IntegerVector(B_beta_rowSEXP);
+  d->B_pred = Rcpp::NumericMatrix(B_predSEXP);
+  d->C_ref = Rcpp::IntegerVector(C_refSEXP);
+  d->C_fixed_value = Rcpp::NumericVector(C_fixed_valueSEXP);
+  d->C_beta_row = Rcpp::IntegerVector(C_beta_rowSEXP);
+  d->C_pred = Rcpp::NumericMatrix(C_predSEXP);
+  d->D_ref = Rcpp::IntegerVector(D_refSEXP);
+  d->D_fixed_value = Rcpp::NumericVector(D_fixed_valueSEXP);
+  d->D_beta_row = Rcpp::IntegerVector(D_beta_rowSEXP);
+  d->D_pred = Rcpp::NumericMatrix(D_predSEXP);
+  d->prior_precision = Rcpp::NumericVector(prior_precisionSEXP);
+  d->jitter = Rcpp::as<double>(jitterSEXP);
+  d->max_attempts = Rcpp::as<int>(max_attemptsSEXP);
+  d->K = d->row_ability.ncol();
+  d->Nsubs = Rcpp::as<Rcpp::IntegerVector>(d->prior_precision.attr("dim"))[2];
+
+  const int Nobs = d->id.size();
+  d->obs_by_subj.assign(static_cast<std::size_t>(d->Nsubs), std::vector<int>());
+  for (int obs = 0; obs < Nobs; ++obs) {
+    const int subj = d->id[obs] - 1;
+    if (subj < 0 || subj >= d->Nsubs) {
+      delete d;
+      Rcpp::stop("id must be coded from 1 to Nsubs.");
+    }
+    d->obs_by_subj[static_cast<std::size_t>(subj)].push_back(obs);
+  }
+  // Natural subject order by default.
+  //
+  // Grouping subjects by the items they answered was an attempt to shrink the
+  // slice of the item bank each chunk touches. Measured, it costs 8 to 18 per
+  // cent and lowers the speedup on 16 cores from 2.84x to 2.67x, so it is off.
+  // The reasoning behind it was wrong: the item parameter arrays are a couple
+  // of thousand doubles and already sit in cache, while permuting subjects
+  // destroys sequential access to the per-observation arrays, which have a row
+  // per response and are what actually loads the memory system. It optimised
+  // locality on the small arrays at the expense of the large ones.
+  //
+  // Set BIGIRT_LOCALITY_ORDER to re-enable it, for a design where the item bank
+  // is large enough that the trade might reverse.
+  if (std::getenv("BIGIRT_LOCALITY_ORDER") != nullptr) {
+    d->subject_order = bigIRT_subject_locality_order(d->obs_by_subj, d->B_ref);
+  } else {
+    d->subject_order.resize(d->obs_by_subj.size());
+    for (std::size_t z = 0; z < d->subject_order.size(); ++z)
+      d->subject_order[z] = static_cast<int>(z);
+  }
+
+  Rcpp::XPtr<BigIRTItemPrepared> ptr(d, true);
+  return ptr;
+  END_RCPP
+}
+
+extern "C" SEXP _bigIRT_laplace_item_eval_cpp_impl(
+    SEXP ptrSEXP,
+    SEXP invspAparsSEXP, SEXP invspAbetaSEXP, SEXP BparsSEXP, SEXP BbetaSEXP,
+    SEXP logitCparsSEXP, SEXP logitCbetaSEXP, SEXP logitDparsSEXP, SEXP logitDbetaSEXP,
+    SEXP adjoint_scaleSEXP, SEXP logdet_scaleSEXP, SEXP grain_sizeSEXP) {
+  BEGIN_RCPP
+  Rcpp::XPtr<BigIRTItemPrepared> ptr(ptrSEXP);
+  BigIRTItemPrepared& d = *ptr;
+
+  Rcpp::NumericVector invspApars(invspAparsSEXP);
+  Rcpp::NumericMatrix invspAbeta(invspAbetaSEXP);
+  Rcpp::NumericVector Bpars(BparsSEXP);
+  Rcpp::NumericMatrix Bbeta(BbetaSEXP);
+  Rcpp::NumericVector logitCpars(logitCparsSEXP);
+  Rcpp::NumericMatrix logitCbeta(logitCbetaSEXP);
+  Rcpp::NumericVector logitDpars(logitDparsSEXP);
+  Rcpp::NumericMatrix logitDbeta(logitDbetaSEXP);
+
+  BigIRTLaplaceItemBlockWorker worker(
+    d.obs_by_subj, d.score, d.row_ability, d.A_ref, d.A_fixed_value, d.A_beta_row, d.A_pred,
+    d.B_ref, d.B_fixed_value, d.B_beta_row, d.B_pred,
+    d.C_ref, d.C_fixed_value, d.C_beta_row, d.C_pred,
+    d.D_ref, d.D_fixed_value, d.D_beta_row, d.D_pred,
+    invspApars, invspAbeta, Bpars, Bbeta, logitCpars, logitCbeta, logitDpars, logitDbeta,
+    d.prior_precision, d.K, d.jitter, d.max_attempts
+  );
+  worker.subject_order = &d.subject_order;
+  worker.adjoint_scale = Rcpp::as<double>(adjoint_scaleSEXP);
+  worker.logdet_scale = Rcpp::as<double>(logdet_scaleSEXP);
+
+  const std::size_t grain_size = static_cast<std::size_t>(Rcpp::as<int>(grain_sizeSEXP));
+  RcppParallel::parallelReduce(static_cast<std::size_t>(0),
+    static_cast<std::size_t>(d.Nsubs), worker, grain_size);
+  if (worker.failure_code != 0)
+    Rcpp::stop("Laplace block objective failed to factor a person precision matrix.");
+
+  return Rcpp::List::create(
+    Rcpp::Named("objective") = worker.objective,
+    Rcpp::Named("grad_A") = Rcpp::NumericVector(worker.grad_A.begin(), worker.grad_A.end()),
+    Rcpp::Named("grad_B") = Rcpp::NumericVector(worker.grad_B.begin(), worker.grad_B.end()),
+    Rcpp::Named("grad_C") = Rcpp::NumericVector(worker.grad_C.begin(), worker.grad_C.end()),
+    Rcpp::Named("grad_D") = Rcpp::NumericVector(worker.grad_D.begin(), worker.grad_D.end()),
+    Rcpp::Named("grad_A_beta") = Rcpp::NumericVector(worker.grad_A_beta.begin(), worker.grad_A_beta.end()),
+    Rcpp::Named("grad_B_beta") = Rcpp::NumericVector(worker.grad_B_beta.begin(), worker.grad_B_beta.end()),
+    Rcpp::Named("grad_C_beta") = Rcpp::NumericVector(worker.grad_C_beta.begin(), worker.grad_C_beta.end()),
+    Rcpp::Named("grad_D_beta") = Rcpp::NumericVector(worker.grad_D_beta.begin(), worker.grad_D_beta.end()));
+  END_RCPP
+}
 
 extern "C" SEXP _bigIRT_laplace_item_block_objective_cpp_impl(
     SEXP idSEXP,
@@ -1107,7 +1455,10 @@ extern "C" SEXP _bigIRT_laplace_item_block_objective_cpp_impl(
     SEXP prior_precisionSEXP,
     SEXP jitterSEXP,
     SEXP max_attemptsSEXP,
+    SEXP adjoint_scaleSEXP,
+    SEXP logdet_scaleSEXP,
     SEXP grain_sizeSEXP) {
+  BEGIN_RCPP
 
   Rcpp::IntegerVector id(idSEXP);
   Rcpp::IntegerVector score(scoreSEXP);
@@ -1169,7 +1520,27 @@ extern "C" SEXP _bigIRT_laplace_item_block_objective_cpp_impl(
     prior_precision, K, jitter, max_attempts
   );
 
-  RcppParallel::parallelReduce(static_cast<std::size_t>(0), static_cast<std::size_t>(Nsubs), worker, grain_size);
+  // Walk subjects in locality order rather than input order. This changes only
+  // which subjects land in the same chunk, not the sum they contribute to.
+  // Off by default; see the note in the prepare path.
+  std::vector<int> subject_order;
+  if (std::getenv("BIGIRT_LOCALITY_ORDER") != nullptr) {
+    subject_order = bigIRT_subject_locality_order(obs_by_subj, B_ref);
+  } else {
+    subject_order.resize(obs_by_subj.size());
+    for (std::size_t z = 0; z < subject_order.size(); ++z)
+      subject_order[z] = static_cast<int>(z);
+  }
+  worker.subject_order = &subject_order;
+  worker.adjoint_scale = Rcpp::as<double>(adjoint_scaleSEXP);
+  worker.logdet_scale = Rcpp::as<double>(logdet_scaleSEXP);
+
+  // The kernel is free of R access and reports failure through failure_code,
+  // so the reduction is safe; the failure check stays on the calling thread.
+  RcppParallel::parallelReduce(static_cast<std::size_t>(0),
+    static_cast<std::size_t>(Nsubs), worker, grain_size);
+  if (worker.failure_code != 0)
+    Rcpp::stop("Laplace block objective failed to factor a person precision matrix.");
 
   Rcpp::NumericVector grad_A(worker.grad_A.begin(), worker.grad_A.end());
   Rcpp::NumericVector grad_B(worker.grad_B.begin(), worker.grad_B.end());
@@ -1195,6 +1566,7 @@ extern "C" SEXP _bigIRT_laplace_item_block_objective_cpp_impl(
     Rcpp::Named("grad_C_beta") = grad_C_beta,
     Rcpp::Named("grad_D_beta") = grad_D_beta
   );
+  END_RCPP
 }
 
 extern "C" SEXP _bigIRT_laplace_person_step_block_cpp_impl(
@@ -1238,6 +1610,7 @@ extern "C" SEXP _bigIRT_laplace_person_step_block_cpp_impl(
     SEXP tolSEXP,
     SEXP keep_covarianceSEXP,
     SEXP grain_sizeSEXP) {
+  BEGIN_RCPP
 
   Rcpp::IntegerVector id(idSEXP);
   Rcpp::IntegerVector score(scoreSEXP);
@@ -1305,6 +1678,7 @@ extern "C" SEXP _bigIRT_laplace_person_step_block_cpp_impl(
   Rcpp::NumericVector logdet_precision(Nsubs);
   Rcpp::IntegerVector niter(Nsubs);
   Rcpp::LogicalVector converged(Nsubs);
+  Rcpp::IntegerVector status_code(Nsubs);
   Rcpp::NumericVector objective(Nsubs);
   Rcpp::NumericVector covariance;
   if (keep_covariance) {
@@ -1359,6 +1733,7 @@ extern "C" SEXP _bigIRT_laplace_person_step_block_cpp_impl(
     RcppParallel::RVector<double> logdet_precision;
     RcppParallel::RVector<int> niter;
     RcppParallel::RVector<int> converged;
+    RcppParallel::RVector<int> status_code;
     RcppParallel::RVector<double> objective;
     RcppParallel::RVector<double> covariance;
 
@@ -1409,6 +1784,7 @@ extern "C" SEXP _bigIRT_laplace_person_step_block_cpp_impl(
       Rcpp::NumericVector logdet_precision,
       Rcpp::IntegerVector niter,
       Rcpp::LogicalVector converged,
+      Rcpp::IntegerVector status_code,
       Rcpp::NumericVector objective,
       Rcpp::NumericVector covariance)
       : obs_by_subj(obs_by_subj), score(score), theta_init(theta_init), person_pred(person_pred),
@@ -1424,6 +1800,7 @@ extern "C" SEXP _bigIRT_laplace_person_step_block_cpp_impl(
         max_attempts(max_attempts), max_iter(max_iter), tol(tol), keep_covariance(keep_covariance),
         theta_mode(theta_mode), precision(precision), precision_chol(precision_chol),
         logdet_precision(logdet_precision), niter(niter), converged(converged),
+        status_code(status_code),
         objective(objective), covariance(covariance) {}
 
     inline double softplus(const double x) const {
@@ -1474,24 +1851,36 @@ extern "C" SEXP _bigIRT_laplace_person_step_block_cpp_impl(
 
             double a_val = A_fixed_value(obs, k);
             if (A_ref(obs, k) > 0) {
-              const double raw_a = invspApars[A_ref(obs, k) - 1] + add_beta_term(obs, A_pred, invspAbeta, A_beta_row(obs, k));
+              // The beta-row index is not per response. With a single shared
+              // effect the vector holds one element, so indexing it by the
+              // response number reads far past its end; with item-specific
+              // effects the row is chosen by the item. The item kernel already
+              // guards this way -- this worker did not, which is why it
+              // segfaulted whenever item covariates were present.
+              const int a_beta_idx = (invspAbeta.nrow() == 1) ? 1 : A_ref(obs, k);
+              const double raw_a = invspApars[A_ref(obs, k) - 1] + add_beta_term(obs, A_pred, invspAbeta, a_beta_idx);
               a_val = softplus(raw_a);
             }
             loadings[oi](k) = a_val;
           }
 
           b_row[oi] = B_fixed_value[obs];
-          if (B_ref[obs] > 0) b_row[oi] = Bpars[B_ref[obs] - 1] + add_beta_term(obs, B_pred, Bbeta, B_beta_row[obs]);
+          if (B_ref[obs] > 0) {
+            const int b_beta_idx = (Bbeta.nrow() == 1) ? 1 : B_ref[obs];
+            b_row[oi] = Bpars[B_ref[obs] - 1] + add_beta_term(obs, B_pred, Bbeta, b_beta_idx);
+          }
 
           c_row[oi] = C_fixed_value[obs];
           if (C_ref[obs] > 0) {
-            const double raw_c = logitCpars[C_ref[obs] - 1] + add_beta_term(obs, C_pred, logitCbeta, C_beta_row[obs]);
+            const int c_beta_idx = (logitCbeta.nrow() == 1) ? 1 : C_ref[obs];
+            const double raw_c = logitCpars[C_ref[obs] - 1] + add_beta_term(obs, C_pred, logitCbeta, c_beta_idx);
             c_row[oi] = 0.5 * bigirt_stable_inv_logit(raw_c);
           }
 
           d_row[oi] = D_fixed_value[obs];
           if (D_ref[obs] > 0) {
-            const double raw_d = logitDpars[D_ref[obs] - 1] + add_beta_term(obs, D_pred, logitDbeta, D_beta_row[obs]);
+            const int d_beta_idx = (logitDbeta.nrow() == 1) ? 1 : D_ref[obs];
+            const double raw_d = logitDpars[D_ref[obs] - 1] + add_beta_term(obs, D_pred, logitDbeta, d_beta_idx);
             d_row[oi] = 0.5 * bigirt_stable_inv_logit(raw_d) + 0.5;
           }
         }
@@ -1528,6 +1917,12 @@ extern "C" SEXP _bigIRT_laplace_person_step_block_cpp_impl(
         logpost_and_grad(theta, grad, prec, lp);
 
         bool subj_converged = active.empty();
+        // Status codes match the serial kernel: 0 resolved, 1 not converged,
+        // 2 no acceptable step, 4 factorisation failed. Without them the R
+        // wrapper derived converged from a field this kernel never returned,
+        // replacing it with an empty vector; the convergence fraction became
+        // NaN and the outer loop then ran to its iteration limit.
+        int subj_status = subj_converged ? 0 : 1;
         int used_iter = 0;
         for (int it = 0; it < max_iter && !subj_converged; ++it) {
           used_iter = it + 1;
@@ -1560,7 +1955,9 @@ extern "C" SEXP _bigIRT_laplace_person_step_block_cpp_impl(
             }
             chol_jitter *= 10.0;
           }
-          if (!success) Rcpp::stop("Cholesky failed while updating person modes.");
+          // Rcpp::stop here would longjmp out of a worker thread, which is
+          // undefined behaviour. Record it instead, as the serial kernel does.
+          if (!success) { subj_status = 4; break; }
 
           VectorXd step = llt.solve(sub_grad);
           double damping = 1.0;
@@ -1579,7 +1976,7 @@ extern "C" SEXP _bigIRT_laplace_person_step_block_cpp_impl(
             }
             damping *= 0.5;
           }
-          if (!accepted) break;
+          if (!accepted) { subj_status = 2; break; }
           theta = theta_try;
           grad = grad_try;
           prec = prec_try;
@@ -1588,7 +1985,9 @@ extern "C" SEXP _bigIRT_laplace_person_step_block_cpp_impl(
 
         logpost_and_grad(theta, grad, prec, lp);
         objective[subj] = lp;
+        if (subj_converged && subj_status == 1) subj_status = 0;
         niter[subj] = used_iter;
+        status_code[subj] = subj_status;
         converged[subj] = subj_converged ? 1 : 0;
 
         for (int k = 0; k < K; ++k) theta_mode(subj, k) = theta(k);
@@ -1649,9 +2048,15 @@ extern "C" SEXP _bigIRT_laplace_person_step_block_cpp_impl(
     D_ref, D_fixed_value, D_beta_row, D_pred,
     Abilitybeta, invspApars, invspAbeta, Bpars, Bbeta, logitCpars, logitCbeta, logitDpars, logitDbeta,
     prior_mean, prior_precision, free_mask, K, jitter, max_attempts, max_iter, tol,
-    keep_covariance, theta_mode, precision, precision_chol, logdet_precision, niter, converged, objective, covariance
+    keep_covariance, theta_mode, precision, precision_chol, logdet_precision, niter, converged, status_code, objective, covariance
   );
-  RcppParallel::parallelFor(static_cast<std::size_t>(0), static_cast<std::size_t>(Nsubs), worker, grain_size);
+  const bool has_item_predictors =
+    A_pred.ncol() > 0 || B_pred.ncol() > 0 || C_pred.ncol() > 0 || D_pred.ncol() > 0;
+  if (has_item_predictors) {
+    worker(0, static_cast<std::size_t>(Nsubs));
+  } else {
+    RcppParallel::parallelFor(static_cast<std::size_t>(0), static_cast<std::size_t>(Nsubs), worker, grain_size);
+  }
 
   if (keep_covariance) {
     return Rcpp::List::create(
@@ -1662,7 +2067,8 @@ extern "C" SEXP _bigIRT_laplace_person_step_block_cpp_impl(
       Rcpp::Named("covariance") = covariance,
       Rcpp::Named("objective") = objective,
       Rcpp::Named("niter") = niter,
-      Rcpp::Named("converged") = converged
+      Rcpp::Named("converged") = converged,
+      Rcpp::Named("status_code") = status_code
     );
   }
 
@@ -1673,8 +2079,10 @@ extern "C" SEXP _bigIRT_laplace_person_step_block_cpp_impl(
       Rcpp::Named("logdet_precision") = logdet_precision,
       Rcpp::Named("objective") = objective,
       Rcpp::Named("niter") = niter,
-      Rcpp::Named("converged") = converged
+      Rcpp::Named("converged") = converged,
+      Rcpp::Named("status_code") = status_code
     );
+  END_RCPP
 }
 
 extern "C" SEXP _bigIRT_laplace_materialize_block_cpp_impl(
@@ -1711,6 +2119,7 @@ extern "C" SEXP _bigIRT_laplace_materialize_block_cpp_impl(
     SEXP logitCbetaSEXP,
     SEXP logitDparsSEXP,
     SEXP logitDbetaSEXP) {
+  BEGIN_RCPP
 
   Rcpp::IntegerVector item(itemSEXP);
   Rcpp::IntegerVector id(idSEXP);
@@ -1885,6 +2294,7 @@ extern "C" SEXP _bigIRT_laplace_materialize_block_cpp_impl(
     Rcpp::Named("p") = p_obs,
     Rcpp::Named("pcorrect") = pcorrect
   );
+  END_RCPP
 }
 
 extern "C" SEXP _bigIRT_laplace_item_objective_fixed_cov_cpp_impl(
@@ -2044,6 +2454,11 @@ extern "C" SEXP _bigIRT_laplace_direct_block_fg_cpp_impl(
   RcppParallel::parallelFor(static_cast<std::size_t>(0), static_cast<std::size_t>(Nobs), row_worker, grain_size);
   const auto t2_row = Clock::now();
 
+  // The direct path wants the mode-adjoint correction at full weight; the
+  // scale exists so the blockwise path can be run with it disabled for
+  // comparison.
+  Rcpp::NumericVector adjoint_scale_holder = Rcpp::NumericVector::create(1.0);
+  Rcpp::NumericVector logdet_scale_holder = Rcpp::NumericVector::create(1.0);
   Rcpp::List item_fg = Rcpp::as<Rcpp::List>(_bigIRT_laplace_item_block_objective_cpp_impl(
     idSEXP, scoreSEXP, row_ability,
     A_refSEXP, A_fixed_valueSEXP, A_beta_rowSEXP, A_predSEXP,
@@ -2052,7 +2467,8 @@ extern "C" SEXP _bigIRT_laplace_direct_block_fg_cpp_impl(
     D_refSEXP, D_fixed_valueSEXP, D_beta_rowSEXP, D_predSEXP,
     invspAparsSEXP, invspAbetaSEXP, BparsSEXP, BbetaSEXP,
     logitCparsSEXP, logitCbetaSEXP, logitDparsSEXP, logitDbetaSEXP,
-    prior_precisionSEXP, jitterSEXP, max_attemptsSEXP, grain_sizeSEXP
+    prior_precisionSEXP, jitterSEXP, max_attemptsSEXP,
+    adjoint_scale_holder, logdet_scale_holder, grain_sizeSEXP
   ));
   const auto t3_item = Clock::now();
 
@@ -2350,6 +2766,7 @@ extern "C" SEXP _bigIRT_laplace_corr_grad_cpp_impl(
     SEXP prior_meanSEXP,
     SEXP ability_sdSEXP,
     SEXP corr_parSEXP,
+    SEXP logdet_slopeSEXP,
     SEXP corr_paramizationSEXP,
     SEXP jitterSEXP) {
 
@@ -2359,6 +2776,7 @@ extern "C" SEXP _bigIRT_laplace_corr_grad_cpp_impl(
   Rcpp::NumericVector prior_mean(prior_meanSEXP);
   Rcpp::NumericVector ability_sd(ability_sdSEXP);
   Rcpp::NumericVector corr_par(corr_parSEXP);
+  Rcpp::NumericMatrix logdet_slope(logdet_slopeSEXP);
   const int corr_paramization = Rcpp::as<int>(corr_paramizationSEXP);
   const double jitter = Rcpp::as<double>(jitterSEXP);
 
@@ -2384,8 +2802,29 @@ extern "C" SEXP _bigIRT_laplace_corr_grad_cpp_impl(
     MatrixXd Sigma_j = bigirt_matrix_from_array(covariance, K, subj);
     GQ -= 0.5 * (x * x.transpose());
     GQ -= 0.5 * Sigma_j;
+    // Adjoint. The mode moves with the correlation parameters, and the log
+    // determinant is not part of the mode condition, so dL/dtheta_i is -g_i/2
+    // rather than zero. Differentiating the mode condition gives
+    // dtheta_i/drho = -H_i^-1 (dQ/drho) r_i, and the resulting contribution
+    // g_i' Sigma_i dQ r_i is linear in dQ, so it enters here as
+    // (1/2) r_i g_i' Sigma_i and rides the existing chain rule. Without it the
+    // gradient ran about four per cent short against finite differences.
+    if (logdet_slope.nrow() == Nsubs && logdet_slope.ncol() == K) {
+      VectorXd gvec(K);
+      for (int k = 0; k < K; ++k) gvec(k) = logdet_slope(subj, k);
+      GQ += 0.5 * (x * (Sigma_j * gvec).transpose());
+    }
   }
-  GQ = 0.5 * (GQ + GQ.transpose());
+  // Symmetrise through a temporary. Eigen aliases on A = A.transpose(): the
+  // assignment overwrites entries that the transpose still has to read, so the
+  // result is not the symmetric part. It was harmless while every contribution
+  // to GQ was symmetric already -- Qinv, x x' and Sigma_j all are, and for a
+  // symmetric matrix the operation is the identity whatever order it runs in.
+  // It only became visible once the asymmetric adjoint term above joined them.
+  {
+    MatrixXd GQ_sym = 0.5 * (GQ + GQ.transpose());
+    GQ = GQ_sym;
+  }
 
   Rcpp::NumericVector grad(corr_par.size());
   if (corr_paramization == 1) {

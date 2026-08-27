@@ -62,7 +62,9 @@ if(identical(Sys.getenv("NOT_CRAN"), "true")){
     scale <- 1.8
     Ability_alt <- matrix((Ability - shift) / scale, ncol = 1)
     A_alt <- matrix(A * scale, ncol = 1)
-    B_alt <- (B - shift) / scale
+    ## theta = scale * theta_alt + shift, hence preserve
+    ## A * theta - B with A_alt = A * scale and B_alt = B - A * shift.
+    B_alt <- B - A * shift
 
     alt_norm <- normaliseMIRT(
       B = B_alt,
@@ -79,6 +81,17 @@ if(identical(Sys.getenv("NOT_CRAN"), "true")){
     expect_equal(alt_norm$B, ref_norm$B, tolerance = 1e-8, scale = 1)
     expect_equal(alt_norm$Ability, ref_norm$Ability, tolerance = 1e-8, scale = 1)
     expect_equal(p_alt, p_ref, tolerance = 1e-8, scale = 1)
+  })
+
+  test_that("normaliseIRT preserves 1D response curves with unequal discriminations", {
+    Ability <- c(-1.3, -0.2, 0.4, 1.1)
+    A <- c(0.45, 0.9, 1.7)
+    B <- c(-0.6, 0.25, 1.1)
+    before <- IRTcurve(A=A, B=B, theta=Ability, plot=FALSE)
+    after <- normaliseIRT(B=B, Ability=Ability, A=A, normaliseScale=1.3,
+      normaliseMean=-0.2, robust=FALSE)
+    after_curve <- IRTcurve(A=after$A, B=after$B, theta=after$Ability, plot=FALSE)
+    expect_equal(after_curve, before, tolerance=1e-10, scale=1)
   })
 
   test_that("3D 4PL response curves are invariant to normaliseMIRT for bigIRT and mirt", {

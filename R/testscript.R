@@ -161,7 +161,7 @@ testscript <- function(){
       record #return
     } #end sim future
   }#end sim loop
-  browser()
+  stop("Development test script encountered an unexpected state.")
   record <- value(record)
   print(Sys.time()-a)
 

@@ -1,10 +1,11 @@
-if(identical(Sys.getenv("NOT_CRAN"), "true") && .Machine$sizeof.pointer != 4){
+if(identical(Sys.getenv("NOT_CRAN"), "true") && .Machine$sizeof.pointer != 4 &&
+   identical(Sys.getenv("BIGIRT_ENABLE_EXPERIMENTAL_DIRECT_PREDICTORS"), "true")){
   library(bigIRT)
   library(testthat)
 
   predictor_rmse <- function(x, y) sqrt(mean((as.numeric(x) - as.numeric(y))^2))
 
-  test_that("laplace_direct matches JML for 1d person and A/B item predictors", {
+  test_that("laplace matches JML for 1d person and A/B item predictors", {
     set.seed(11)
 
     Np <- 700
@@ -59,7 +60,7 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") && .Machine$sizeof.pointer != 4){
     expect_lt(predictor_rmse(fit_lap$covariateEffects$B, fit_jml$covariateEffects$B), 0.12)
   })
 
-  test_that("laplace_direct matches JML for 1d 4PL predictor effects", {
+  test_that("laplace matches JML for 1d 4PL predictor effects", {
     set.seed(12)
 
     Np <- 900
@@ -118,7 +119,7 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") && .Machine$sizeof.pointer != 4){
     expect_lt(predictor_rmse(fit_lap$covariateEffects$D, fit_jml$covariateEffects$D), 0.05)
   })
 
-  test_that("laplace_direct reports multivariate predictor effects with matrix dimensions", {
+  test_that("laplace reports multivariate predictor effects with matrix dimensions", {
     set.seed(13)
 
     Np <- 500

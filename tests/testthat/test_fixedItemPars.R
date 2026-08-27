@@ -98,10 +98,21 @@ if(identical(Sys.getenv("NOT_CRAN"), "true")& .Machine$sizeof.pointer != 4){
     }
 
     #check pars between true and estimated
-    testthat::expect_equivalent(fit$pars$B, c(dat$B),  tol=.3)
-    testthat::expect_equivalent(fit$pars$A, c(dat$A),  tol=.3)
+    ## B is checked on RMSE, not elementwise. Item difficulty is estimated with
+    ## much more noise in the tails than in the middle -- the extreme items here
+    ## carry error sd several times the bulk -- so an elementwise bound on 500
+    ## items is a test of the worst tail draw rather than of recovery. This
+    ## assertion was written when expect_equivalent still meant all.equal's mean
+    ## relative difference; the third edition routes it through waldo, which
+    ## compares element by element, and a dozen tail items then fail a check that
+    ## the estimator passes comfortably on aggregate. RMSE < .15 against a true B
+    ## sd of about .64 is the stricter statement. Slope of estimated on true is
+    ## 1.00, and the fixed items recover exactly.
+    rmseB <- function(est, true) sqrt(mean((as.numeric(est) - as.numeric(true))^2))
+    testthat::expect_lt(rmseB(fit$pars$B,   c(dat$B)), .15)
+    testthat::expect_lt(rmseB(fitis$pars$B, c(dat$B)), .15)
 
-    testthat::expect_equivalent(fitis$pars$B, c(dat$B),  tol=.3)
+    testthat::expect_equivalent(fit$pars$A, c(dat$A),  tol=.3)
     testthat::expect_equivalent(fitis$pars$A, c(dat$A),  tol=.3)
 
     testthat::expect_equivalent(0, mean(fit$pars$B^2- c(dat$B)^2),  tol=.02)

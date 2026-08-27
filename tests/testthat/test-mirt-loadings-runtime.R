@@ -138,7 +138,15 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     expect_true(!is.null(fit$rowEffective))
     expect_equal(length(fit$rowEffective$b), fit$dat$Nobs)
     expect_equal(dim(fit$rowEffective$loadings), c(fit$dat$Nobs, fit$dat$Nscales))
-    expect_true(is.matrix(fit$personPosterior$precision))
+    ## Person precision is stored one K by K block per subject, so for a
+    ## two-dimensional fit it is a 2 x 2 x Nsubs array and is.matrix is FALSE.
+    ## That is the shape the rest of the package relies on -- the normalisation
+    ## step rotates it as precision[,,ii], and precision_chol and
+    ## logdet_precision are indexed to match -- so the dimensions are asserted
+    ## directly rather than through is.matrix, which only held back when a
+    ## single dimension collapsed the array to two.
+    expect_equal(dim(fit$personPosterior$precision),
+                 c(fit$dat$Nscales, fit$dat$Nscales, fit$dat$Nsubs))
     expect_true(is.array(fit$personPosterior$covariance) || is.null(fit$personPosterior$covariance))
   })
 }

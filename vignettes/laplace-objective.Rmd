@@ -1,0 +1,777 @@
+---
+title: "The Laplace objective and its gradient in bigIRT"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{The Laplace objective and its gradient in bigIRT}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+This note derives the objective that `marginalApprox = "laplace"` optimises,
+states its exact gradient, and records how each block of that gradient was
+verified against central finite differences. (`"laplace_fast"` and
+`"laplace_direct"` are accepted as names for the same backend; they were once
+two implementations, and the alternating one was withdrawn after it proved
+slower for the same answer.) It also records a defect that stood in the
+objective for some time, what it looked like from the outside, and why the
+diagnosis that first suggested itself was wrong. It is written for someone
+changing this code, not for someone using the package.
+
+# Purpose
+
+This note describes the mathematics behind the current `bigIRT` `marginalApprox = "laplace_direct"` approach for binary 4PL IRT. It focuses on:
+
+-   the statistical model,
+-   the direct Laplace objective,
+-   the approximate gradient currently used,
+-   why this is a reasonable approximation in some settings,
+-   and alternative approaches that could be taken instead.
+
+The goal is to describe the method actually implemented in `bigIRT`, not an idealized future version.
+
+# 4PL MIRT model
+
+## Observation model
+
+For person $i$, item $j$, and binary response $y_{ij} \in \{0,1\}$,
+
+$$
+\Pr(Y_{ij} = 1 \mid \theta_i, \psi_j)
+=
+c_j + (d_j - c_j)\,\sigma(\eta_{ij}),
+$$
+
+where
+
+$$
+\eta_{ij} = a_j^\top \theta_i - b_j,
+\qquad
+\sigma(x) = \frac{1}{1 + e^{-x}}.
+$$
+
+Here:
+
+-   $a_j \in \mathbb{R}^K$ is the item loading/discrimination vector,
+-   $b_j$ is the item difficulty/intercept,
+-   $c_j$ is the lower asymptote,
+-   $d_j$ is the upper asymptote.
+
+The conditional log-likelihood contribution is
+
+$$
+\ell_{ij}(\theta_i,\psi_j)
+=
+y_{ij}\log p_{ij} + (1-y_{ij})\log(1-p_{ij}),
+$$
+
+with
+
+$$
+p_{ij} = c_j + (d_j-c_j)\sigma(\eta_{ij}).
+$$
+
+## Parameterization used in `bigIRT`
+
+`bigIRT` uses unconstrained raw parameters and transforms them into constrained item parameters:
+
+$$
+a_{jk} = \operatorname{softplus}(\alpha_{jk}) = \log(1+e^{\alpha_{jk}}),
+$$
+
+$$
+c_j = \tfrac12 \sigma(\gamma_j),
+$$
+
+$$
+d_j = \tfrac12 \sigma(\delta_j) + \tfrac12.
+$$
+
+So the constrained ranges are:
+
+-   $a_{jk} > 0$,
+-   $0 < c_j < 0.5$,
+-   $0.5 < d_j < 1$.
+
+This is a deliberate identification and stability choice, not a universal requirement of 4PL IRT.
+
+## Latent distribution
+
+The latent ability vector is modeled as multivariate normal:
+
+$$
+\theta_i \sim \mathcal{N}(\mu, \Sigma),
+$$
+
+with precision matrix
+
+$$
+Q = \Sigma^{-1}.
+$$
+
+In the current `laplace_direct` path:
+
+-   $\mu$ may be fixed or estimated,
+-   marginal latent standard deviations are typically fixed,
+-   the latent correlation matrix may optionally be estimated,
+-   item parameters and selected latent-distribution parameters are optimized jointly.
+
+# Marginal likelihood target
+
+## Exact marginal likelihood
+
+The ideal marginal log-likelihood is
+
+$$
+\log L(\psi)
+=
+\sum_{i=1}^N
+\log
+\int
+\exp\left(
+\sum_{j \in \mathcal{J}_i} \ell_{ij}(\theta_i,\psi_j)
+\right)
+\phi(\theta_i;\mu,\Sigma)\,d\theta_i.
+$$
+
+This is a $K$-dimensional integral for each person. For multidimensional 4PL IRT, direct integration becomes expensive quickly.
+
+## Why Laplace
+
+Laplace approximation replaces each person integral by a local Gaussian approximation around that person’s posterior mode. The computational burden is shifted from high-dimensional quadrature to repeated:
+
+-   posterior mode solves,
+-   Hessian evaluations,
+-   and log-determinant calculations.
+
+That tradeoff is often attractive in large-data IRT.
+
+# Per-person posterior approximation
+
+For fixed global parameters $\psi$, define the person-specific log posterior
+
+$$
+f_i(\theta_i;\psi)
+=
+\sum_{j \in \mathcal{J}_i} \ell_{ij}(\theta_i,\psi_j)
+- \frac12(\theta_i-\mu)^\top Q(\theta_i-\mu)
++ \frac12 \log|Q|
+- \frac{K}{2}\log(2\pi).
+$$
+
+The mode is
+
+$$
+\hat\theta_i(\psi) = \arg\max_{\theta_i} f_i(\theta_i;\psi).
+$$
+
+The negative Hessian at the mode is
+
+$$
+H_i(\psi)
+=
+-\nabla_{\theta_i}^2 f_i(\hat\theta_i(\psi);\psi).
+$$
+
+The Laplace approximation to the person integral is
+
+$$
+\log \int e^{f_i(\theta_i;\psi)}\,d\theta_i
+\approx
+f_i(\hat\theta_i;\psi)
++ \frac{K}{2}\log(2\pi)
+- \frac12 \log|H_i(\psi)|.
+$$
+
+# Direct Laplace objective used in `bigIRT`
+
+The current `laplace_direct` target is
+
+$$
+\tilde L(\psi)
+=
+\sum_{i=1}^N
+\left[
+f_i(\hat\theta_i(\psi);\psi)
++ \frac{K}{2}\log(2\pi)
+- \frac12 \log|H_i(\psi)|
+\right]
++ \log p(\psi),
+$$
+
+where $\log p(\psi)$ collects optional priors and hyperpriors on:
+
+-   raw item parameters,
+-   item mean parameters,
+-   item covariate effects,
+-   latent means,
+-   and optionally latent correlation parameters.
+
+Operationally, each evaluation of $\tilde L(\psi)$ does:
+
+1.  unpack the raw optimizer vector,
+2.  transform raw parameters into constrained $a,b,c,d$,
+3.  construct the latent prior precision,
+4.  solve all person posterior modes,
+5.  compute all person Hessians,
+6.  evaluate the Laplace objective,
+7.  compute an approximate gradient.
+
+# Value versus gradient
+
+## Direct value
+
+The value used by `laplace_direct` is a direct Laplace value at the current parameter vector:
+
+-   person modes are re-solved at the current $\psi$,
+-   Hessians are re-solved at the current $\psi$,
+-   the log-determinant penalty is re-evaluated at the current $\psi$.
+
+So the value is not a frozen surrogate.
+
+## Approximate gradient
+
+The exact derivative would be
+
+$$
+\frac{d}{d\psi}\tilde L(\psi),
+$$
+
+which includes implicit derivatives through:
+
+-   $\hat\theta_i(\psi)$,
+-   $H_i(\psi)$,
+-   and any latent covariance parameterization.
+
+That full derivative is substantially harder to derive and implement.
+
+Instead, `laplace_direct` uses a frozen-posterior gradient:
+
+-   re-solve $\hat\theta_i$ and $H_i$ at the current $\psi$,
+-   then differentiate with respect to $\psi$ while treating those resolved person summaries as fixed.
+
+This is not the exact gradient of the direct Laplace objective, but it is a structured approximation rather than an unrelated proxy.
+
+# Item-side frozen-posterior gradient
+
+For fixed $\hat\theta_i$ and $H_i$, the item-side gradient is approximated by
+
+$$
+\frac{\partial \tilde L}{\partial \psi_j}
+\approx
+\sum_i
+\left[
+\frac{\partial \ell_{ij}(\hat\theta_i,\psi_j)}{\partial \psi_j}
+- \frac12 \operatorname{tr}\left(H_i^{-1}\frac{\partial H_i}{\partial \psi_j}\right)
+\right]
++ \frac{\partial \log p(\psi)}{\partial \psi_j}.
+$$
+
+The two key pieces are:
+
+1.  the conditional likelihood gradient evaluated at the resolved person modes,
+2.  the Laplace curvature correction
+
+$$
+- \frac12 \operatorname{tr}\left(H_i^{-1}\frac{\partial H_i}{\partial \psi_j}\right).
+$$
+
+This correction accounts for how the local curvature of the person posterior changes with the item parameters.
+
+## Why this can be reasonable
+
+At the mode, envelope-theorem logic helps: for the joint log-posterior term, the derivative through $\hat\theta_i(\psi)$ is less problematic than it first appears because the first derivative with respect to $\theta_i$ vanishes at the optimum.
+
+The remaining mismatch is mainly tied to the Hessian term and the fact that the direct gradient is not fully differentiated through the inner solve.
+
+# Ability mean gradient
+
+If the latent mean $\mu$ is estimated, then conditional on the resolved posterior modes the frozen-posterior gradient is straightforward.
+
+The prior contribution involves
+
+$$
+-\frac12(\hat\theta_i - \mu)^\top Q(\hat\theta_i-\mu),
+$$
+
+so the approximate gradient with respect to $\mu$ is
+
+$$
+\frac{\partial \tilde L}{\partial \mu}
+\approx
+\sum_i Q(\hat\theta_i - \mu)
++ \frac{\partial \log p(\mu)}{\partial \mu}.
+$$
+
+This is implemented in the direct path.
+
+# Ability correlation gradient
+
+When latent correlations are estimated, the same approximation principle is used:
+
+-   re-solve person modes and Hessians under the current latent correlation structure,
+-   then differentiate the direct Laplace target with respect to the correlation parameters while holding the resolved posterior summaries fixed.
+
+This requires:
+
+1.  a valid parameterization of the correlation matrix,
+2.  the prior quadratic contribution,
+3.  the prior normalizing constant contribution,
+4.  the Hessian contribution.
+
+The prior normalizing constant matters here because once the latent correlation matrix is estimated, it is no longer a removable constant.
+
+# Why optimize in one direct stage?
+
+The main attraction of `laplace_direct` is that it avoids the explicit outer EM-style loop. There is:
+
+-   one parameter vector,
+-   one optimizer,
+-   one direct Laplace value.
+
+Relative to a two-step Laplace EM method, that has practical advantages.
+
+## Advantages
+
+-   Simpler top-level optimization flow.
+-   No repeated frozen-surrogate outer cycle.
+-   Good use of warm starts for person modes.
+-   Often fewer large-scale coordination steps.
+-   Easier profiling of the direct target.
+
+## Disadvantages
+
+-   The gradient is approximate rather than exact.
+-   Every objective evaluation is expensive because person modes must be re-solved.
+-   Line search can still be costly if not controlled carefully.
+-   The method is less theoretically clean than a surrogate-based blockwise scheme.
+
+# Current algorithm in words
+
+One optimizer evaluation in the current implementation consists of:
+
+1.  unpack the raw parameter vector,
+2.  transform raw parameters to constrained $a,b,c,d$,
+3.  build latent prior precision $Q$,
+4.  for each person:
+    -   solve the posterior mode $\hat\theta_i$,
+    -   compute the Hessian $H_i$,
+    -   optionally compute the covariance $H_i^{-1}$,
+5.  build the direct Laplace value,
+6.  build the frozen-posterior approximate gradient,
+7.  return $(f,g)$ to the outer optimizer.
+
+The outer optimizer is a quasi-Newton method applied to this expensive approximate-gradient target.
+
+# Identification
+
+The direct Laplace approximation does not remove the ordinary identification issues of MIRT. One still needs to identify:
+
+-   latent location,
+-   latent scale,
+-   latent orientation.
+
+For confirmatory MIRT, the most sensible strategy is usually:
+
+-   fix latent means to zero unless there is a strong reason not to,
+-   fix latent marginal standard deviations to one,
+-   estimate latent correlations if needed,
+-   use a confirmatory loading structure with enough zero constraints to define factor meaning.
+
+This is a good match for the current `laplace_direct` architecture because estimating full covariance structure is much more delicate than estimating correlations with fixed marginal scales.
+
+# Why the approximation can still work well
+
+Even though the gradient is not exact, the approach can work well empirically for several reasons.
+
+## 1. The value tracks the intended target
+
+The objective value is recomputed using the current person modes and Hessians rather than a stale surrogate.
+
+## 2. The frozen-posterior gradient is locally sensible
+
+At the person mode, the first-order condition removes part of the implicit-derivative burden.
+
+## 3. Warm starts help
+
+Nearby optimizer iterates usually imply nearby person posterior modes, so the inner Newton solves can become quite cheap.
+
+## 4. Large-data settings help the local Gaussian approximation
+
+When each person has enough information, the posterior becomes more concentrated and the Laplace approximation becomes more accurate.
+
+# Important limitations
+
+## Approximate direct gradient
+
+The main limitation is still that the gradient is not the exact derivative of the direct Laplace objective.
+
+## Sensitivity of $c$ and $d$
+
+Guessing and slipping parameters are often weakly identified and especially sensitive to how latent tails are represented. Approximation error can distort them more than it distorts $a$ or $b$.
+
+## Dependence on latent-distribution specification
+
+The Laplace target depends on the assumed latent distribution. Mis-specification of latent scales or correlations can feed back into item estimates.
+
+## Expensive evaluations
+
+The direct path simplifies outer-loop structure but makes each optimizer evaluation expensive.
+
+# Alternative approaches
+
+## 1. Two-step Laplace EM
+
+Repeat:
+
+1.  solve person modes and Hessians at fixed item parameters,
+2.  optimize item/global parameters with person summaries frozen.
+
+### Pros
+
+-   Cleaner blockwise surrogate interpretation,
+-   matched item-step gradient for the surrogate,
+-   easier convergence interpretation.
+
+### Cons
+
+-   requires an outer loop,
+-   repeatedly restarts the item optimizer,
+-   follows a surrogate sequence rather than the direct target.
+
+## 2. Exact direct Laplace gradient via implicit differentiation
+
+Differentiate through
+
+$$
+\psi \mapsto \hat\theta_i(\psi),
+\qquad
+\psi \mapsto H_i(\psi),
+$$
+
+using the implicit function theorem and exact derivative identities.
+
+### Pros
+
+-   Most principled direct Laplace method,
+-   value and gradient are fully matched.
+
+### Cons
+
+-   substantially more complex,
+-   easy to implement incorrectly,
+-   materially heavier computationally.
+
+## 3. Adaptive quadrature
+
+Approximate the marginal integral directly using adaptive quadrature.
+
+### Pros
+
+-   More faithful to the exact marginal likelihood than plain Laplace.
+
+### Cons
+
+-   Scales poorly as $K$ grows,
+-   quickly becomes impractical for large MIRT.
+
+## 4. MHRM and related stochastic marginal methods
+
+Use stochastic approximation or Monte Carlo methods for the marginal likelihood.
+
+### Pros
+
+-   Often more scalable than quadrature in moderate or high dimension,
+-   widely used in complex MIRT settings.
+
+### Cons
+
+-   introduces Monte Carlo noise,
+-   requires tuning,
+-   can make diagnostics harder.
+
+## 5. Variational approximations
+
+Replace each person posterior with a tractable approximating family and optimize an ELBO.
+
+### Pros
+
+-   can be very fast,
+-   fits naturally into autodiff frameworks.
+
+### Cons
+
+-   changes the target from marginal likelihood to a variational objective,
+-   can introduce hard-to-characterize bias.
+
+## 6. JML / conditional optimization
+
+Treat person abilities as ordinary parameters rather than integrating them out.
+
+### Pros
+
+-   conceptually simple,
+-   sometimes computationally convenient.
+
+### Cons
+
+-   incidental-parameter problems,
+-   weaker uncertainty handling,
+-   less faithful to marginal-likelihood inference.
+
+# When `laplace_direct` is attractive
+
+It is especially attractive when:
+
+-   the dataset is large,
+-   quadrature is too expensive,
+-   a direct marginal target is still desired,
+-   warm-started person solves are cheap enough,
+-   and a practical approximation is preferable to a more exact but much slower method.
+
+# When another method may be preferable
+
+Another method may be preferable when:
+
+-   exactness of the gradient is critical,
+-   asymptote parameters are central inferential targets,
+-   latent dimensionality is low enough that better integration is feasible,
+-   or a fully coherent EM/blockwise optimization scheme is preferred.
+
+# Summary
+
+The current `bigIRT` `laplace_direct` method can be summarized as follows:
+
+-   It optimizes a **direct Laplace approximation** to the marginal likelihood for binary 4PL IRT.
+-   At each optimizer evaluation it **re-solves person posterior modes and Hessians**.
+-   It uses an **approximate frozen-posterior gradient** rather than the exact direct gradient.
+-   This makes it more direct than a frozen-surrogate EM step, but much cheaper than a full exact direct-gradient implementation.
+
+Its main strength is that the value stays close to the intended direct Laplace target.
+
+Its main weakness is that the gradient is only approximate.
+
+In many large-data settings that is a useful compromise, but it should be understood as an approximation strategy rather than an exact optimizer for the direct Laplace objective.
+
+# Measured behaviour of the frozen-posterior gradient
+
+The approximation argued for above was checked against central finite
+differences, re-solving the person modes at every perturbed parameter value so
+that the comparison is against the total derivative rather than the frozen
+partial. Step sizes of 1e-3, 1e-4 and 1e-5 agree to seven significant figures,
+so what follows is not finite-difference noise.
+
+Splitting the analytic item gradient into its two halves, using the
+`laplaceAdjointScale` argument to switch the mode-adjoint term off:
+
+-   **The explicit half is exact.** With the correction disabled the analytic
+    gradient matches the finite difference of the frozen objective to a
+    correlation of 1.00000000 and a maximum absolute error of 4e-07.
+-   **The mode-adjoint half has the right shape but the wrong size.** It
+    correlates 0.99 with the true implicit term and is roughly 8.4 times too
+    small. A single least-squares scale raises the correlation of the full
+    gradient with the true derivative from 0.26 to 0.99, but leaves a maximum
+    relative error of 24 per cent and a per-parameter ratio with standard
+    deviation 4.8, so the defect is predominantly a scale error with secondary
+    structure.
+
+The section above argues that the omitted implicit derivative is small because
+the first derivative with respect to $\theta_i$ vanishes at the mode. That is
+correct for the conditional log-likelihood term and false for the
+log-determinant term: $\partial(-\tfrac12\log|H_i|)/\partial\theta_i$ does not
+vanish at the mode. The residual described there as "mainly tied to the Hessian
+term" is not a small leftover; it is about nine times the correction that is
+actually retained.
+
+## What the weight is actually worth
+
+An initial four-seed check suggested that correcting the weight degrades
+recovery outright. That was over-read from too narrow a design, and on two
+counts. Discrimination RMSE was the arbiter, but with tightly clustered
+generating discriminations the prior biases them, so that statistic mixes bias
+with variance -- and intercept RMSE moved the opposite way, which the same check
+recorded and passed over.
+
+A paired factorial study settles it: 2PL/3PL/4PL, 150 and 450 responses per
+item, one and three dimensions, weights 0, 1, 3, 8.4 and 20, 25 replications,
+1,500 fits. Within a replication every weight sees the identical data set --
+the seed keys on the generating factors and excludes the weight -- so contrasts
+are paired rather than differences of independent means. Held-out log loss is
+the primary outcome because it needs no reference parameters; item-curve RMSE is
+reported because it is invariant to how a fit divides a curve between
+discrimination and intercept; per-parameter bias and the ratio
+$\mathrm{sd}(\hat a)/\mathrm{sd}(a)$ are reported separately rather than
+folded into one number.
+
+| weight | held-out loss | curve RMSE | sd ratio | median s | strict |
+|---|---|---|---|---|---|
+| 0 | .58766 | .07173 | 1.144 | 3.3 | .23 |
+| 1 (shipped) | .58718 | **.06828** | 1.059 | **3.2** | **.28** |
+| 3 | **.58699** | .07093 | **0.977** | 3.3 | .15 |
+| 8.4 (near-correct) | .58734 | .07777 | 0.897 | 4.2 | .18 |
+| 20 | .58848 | .09521 | 0.628 | 4.5 | .02 |
+
+Three things follow.
+
+The correction earns its place: weight 0 is among the worst on every outcome,
+so the term the design note originally omitted altogether is doing real work.
+
+Full correction is not better. Weight 8.4, which makes the gradient 0.99
+correlated with the true derivative, is not best on any outcome and is beaten by
+both 1 and 3 on held-out loss. Weight 20 is clearly worse throughout and reaches
+strict convergence in 2 per cent of fits against 28 per cent at the shipped
+weight.
+
+The best weight depends on the model, and no single value wins. Weight 3
+improves held-out loss for the 2PL ($t=-6.3$) and the 4PL ($t=-4.6$) and gives
+almost exactly calibrated discrimination spread; weight 1 is best for the 3PL,
+where raising the weight hurts sharply ($t=17.9$ at weight 20). Curve RMSE
+favours the low weights nearly everywhere.
+
+Against all of this, the effects are small. Held-out loss varies between .562
+and .612 across the design cells, while the entire span across weights is about
+.0015. The gradient defect is large as a defect and second-order in its
+consequences, which is why the shipped default is kept: it is never badly wrong,
+it is best for the 3PL, it is the fastest, and it reaches strict convergence most
+often. The reason to record all this is not that the weight should be retuned
+but that the item step should stop being described as optimising the Laplace
+marginal likelihood. It optimises a damped surrogate, and the convergence
+diagnostics report convergence of that surrogate.
+
+# Why the near-correct weight loses, and what cannot fix it
+
+Two studies answer this, and both refuted the explanation I expected.
+
+## It is not the quality of the Gaussian approximation
+
+The obvious suspect was that the Laplace approximation is poor when a person has
+answered few items, so that its log-determinant is misestimated and the correct
+gradient faithfully optimises a biased objective. Holding responses per item at
+300 and varying responses per person from 10 to 160 (450 fits, paired seeds)
+falsifies it. The near-correct weight does *best* at the lowest exposure --
+paired $t=-8.2$ at ten responses per person, winning 97 per cent of comparisons
+-- and the ordering does not reverse as exposure rises. If approximation quality
+were the mechanism, the sign would have gone the other way.
+
+## It is a bias-variance trade, concentrated where identification is weak
+
+For the 3PL, the weight that gives essentially unbiased and correctly dispersed
+discriminations is weight 3 (bias $-0.006$, $\mathrm{sd}$ ratio $0.993$), and it
+has *worse* curve RMSE and held-out loss than the shipped weight 1, whose
+estimates are biased (+0.088) and over-dispersed (1.078). Unbiased but noisier
+loses to biased but shrunk on squared-error criteria.
+
+Where the near-correct weight loses tracks identification: 3PL $t=9.1$, 4PL in
+one dimension $t=3.4$, 2PL $t\approx0$, and 4PL in three dimensions it actually
+wins. The 3PL is the least identified of the three and gains most from
+shrinkage.
+
+## Scaling the log-determinant cannot substitute for it
+
+If the under-weighted adjoint is doing the work of a regulariser, the consistent
+way to get the same effect is to damp the log-determinant in the objective and
+in both of its gradient contributions -- one coherent objective
+$f - \lambda\tfrac12\log|H|$, with $\lambda$ a documented dial. That is what
+`laplaceLogdetScale` does, and it does not work.
+
+Crossing the two weights over the 2PL and 3PL (400 fits, paired seeds), every
+cell is worse than the shipped pairing on both held-out loss and curve RMSE:
+
+| $\lambda$ | A bias (2PL) | sd ratio (2PL) | curve RMSE (3PL) |
+|---|---|---|---|
+| 0 | +2.14 | 2.89 | .2107 |
+| 0.25 | +1.04 | 2.17 | .1317 |
+| 0.5 | +0.51 | 1.66 | .0880 |
+| 1 (shipped) | +0.00 | 1.08 | **.0628** |
+
+Damping the log-determinant does not add shrinkage, it removes it, and
+discrimination runs away. The reason is that $\lambda$ moves the explicit
+curvature term $-\tfrac12\operatorname{tr}(H^{-1}\partial H/\partial\psi)$ along
+with the implicit one, and it is the explicit term that holds discrimination
+down. Only the implicit correction benefits from being under-weighted, which is
+exactly what `laplaceAdjointScale` controls. The existing parameterisation is
+the right one.
+
+## What follows
+
+The numerics should stay as they are: no configuration tested beats the shipped
+pairing, and the alternatives that would make the optimiser self-consistent are
+measurably worse. Nor can consistency be recovered by rescaling, because a
+total derivative with one of its terms scaled is not in general the gradient of
+any closed-form objective.
+
+What should change is the description. The item step optimises neither the
+Laplace marginal likelihood nor any objective whose gradient it computes: it is
+a mode-adjusted quasi-Laplace estimator whose implicit correction is deliberately
+under-weighted, and whose default weight is where recovery is best rather than
+where the derivative is right. Convergence diagnostics report the norm of the
+gradient that is actually followed, which is the honest thing for them to
+report, but it is not the gradient of the reported objective and should not be
+described as though it were.
+
+
+# Resolution: the gradient was right, the objective was incomplete
+
+Everything above treats the mode-adjoint correction as under-weighted by about a
+factor of eight, on the evidence of central finite differences. That evidence
+was sound and the inference from it was wrong, because the finite differences
+were taken of the wrong function.
+
+Decomposing the implicit term into its two factors and testing each separately
+against finite differences:
+
+- $d\hat	heta_i/db_m$ against re-solved modes: correlation 1.000000, ratio
+  1.0000.
+- $\partial\log|H_i|/\partial	heta_i$ against a recomputed log-determinant:
+  correlation 1.000000, ratio 1.0000.
+
+Both factors exact, yet their product -- assembled by hand, and matching the
+backend's own adjoint to five decimals -- came out four to nineteen times
+smaller than the finite difference of the objective. A product of two exact
+factors cannot be wrong, so the objective had to be.
+
+It was. The per-subject objective in the C++ kernel is
+
+``` cpp
+const double subj_obj = loglik + 0.5 * K * std::log(2.0 * M_PI) - 0.5 * logdet;
+```
+
+where `loglik` accumulates the data log-likelihood only. The Laplace
+approximation to the marginal is
+$\ell(\hat	heta) + \log p(\hat	heta) + 	frac{K}{2}\log 2\pi -
+	frac12\log|H|$, so the ability prior evaluated at the mode --
+$-	frac12(\hat	heta-\mu)^	op Q(\hat	heta-\mu)$ -- is missing.
+
+That omission is not a constant offset, because $\hat	heta$ moves with the
+item parameters. More importantly it is the term that makes
+$\partial f/\partial	heta$ vanish at the mode. Without it the envelope
+theorem does not apply to the reported objective, its true total derivative
+carries an extra contribution, and an analytic gradient that is correct for the
+complete objective disagrees with finite differences of the incomplete one. The
+disagreement scales with $d\hat	heta/d\psi$, which is why it correlated 0.99
+with the adjoint and looked exactly like a missing constant factor.
+
+With the quadratic added to the objective, the analytic gradient matches the
+finite difference of the total derivative at correlation 1.000000 and maximum
+absolute difference 8e-08, and the implicit half matches at ratio 1.00 with
+standard deviation 0.00.
+
+## What this retracts
+
+- The adjoint correction is not under-weighted. `laplaceAdjointScale = 1` is the
+  correct value and needs no change.
+- The under-weighting was not acting as a regulariser, so there was never a
+  bias-variance trade to explain, and it is unsurprising that no explicit
+  regulariser could reproduce it.
+- The empirical studies remain valid as comparisons and their verdict is now
+  simply read: weight 1 won because it is the correct gradient, and weights 3,
+  8.4 and 20 lost because they are wrong ones.
+- The item step does optimise the Laplace objective, and its convergence
+  diagnostics do report the gradient of the function being optimised. The
+  earlier conclusion that the method should be described as a quasi-Laplace
+  estimator is withdrawn.
+
+What was genuinely wrong is the reported objective value, which omitted a term
+and was therefore not the Laplace marginal likelihood it was compared against.
+Fixing it leaves the estimates essentially unchanged -- the value enters the
+outer convergence tests and the item line search, not the gradient -- but it
+makes the reported objective the quantity the gradient belongs to.
