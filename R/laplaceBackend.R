@@ -1144,6 +1144,7 @@ bigIRT_laplace_direct_objective <- function(par, state, sdat, prior_precision,
   ## per-person score and log-determinant slope, so build the response rows and
   ## those sums once and share them.
   person_terms <- NULL
+  row_effective <- NULL
   if(need_person_terms){
     ## The block kernel already derived these while evaluating the likelihood,
     ## so take them rather than rebuilding the same four quantities in R. That
@@ -1174,7 +1175,8 @@ bigIRT_laplace_direct_objective <- function(par, state, sdat, prior_precision,
         row_context = row_context,
         layout = context$direct_layout,
         prior_precision = prior_precision,
-        person_terms = person_terms
+        person_terms = person_terms,
+        row_effective = row_effective
       )
     )
   }
@@ -1655,10 +1657,13 @@ bigIRT_laplace_person_row_terms <- function(sdat, posterior, row_effective,
     K = K)
 }
 
-bigIRT_laplace_person_row_terms_R <- function(sdat, posterior, row_effective, row_context){
-  if(is.null(posterior$covariance)) stop("bigIRT_laplace_person_row_terms needs posterior covariances; the caller must set keep_covariance.")
+## Per-response pieces of the ability gradient and of the log-determinant
+## slope. Both the person-level accumulation below and the ability-beta
+## gradient need them, and a covariate that varies within person has to weight
+## them BEFORE they are summed over responses, so they are built once here
+## rather than derived twice.
+bigIRT_laplace_row_gradient_pieces <- function(sdat, posterior, row_effective, row_context){
   K <- as.integer(sdat$Nscales)
-  N <- as.integer(sdat$Nsubs)
   ids <- as.integer(row_context$ids)
   lo <- row_effective$loadings
   if(is.null(dim(lo))) lo <- matrix(lo, ncol = K)
@@ -1685,12 +1690,24 @@ bigIRT_laplace_person_row_terms_R <- function(sdat, posterior, row_effective, ro
   for(k in seq_len(K)) for(l in seq_len(K))
     aSa <- aSa + lo[, k] * lo[, l] * Sig[k, l, ids]
 
+  list(grad_eta = grad_eta, slope_w = dw_deta * aSa, loadings = lo, ids = ids)
+}
+
+bigIRT_laplace_person_row_terms_R <- function(sdat, posterior, row_effective, row_context){
+  if(is.null(posterior$covariance)) stop("bigIRT_laplace_person_row_terms needs posterior covariances; the caller must set keep_covariance.")
+  K <- as.integer(sdat$Nscales)
+  N <- as.integer(sdat$Nsubs)
+  pieces <- bigIRT_laplace_row_gradient_pieces(sdat, posterior, row_effective, row_context)
+  ids <- pieces$ids
+  lo <- pieces$loadings
+  grad_eta <- pieces$grad_eta
+
   ## rowsum(reorder = FALSE) returns groups in the order they are encountered,
   ## not in level order, so the result has to be scattered back by label rather
   ## than assumed aligned. Response data are usually ordered by person, which
   ## makes the two coincide here and hid the difference; they do not coincide
   ## when the grouping is by item.
-  acc_raw <- rowsum(cbind(grad_eta * lo, (dw_deta * aSa) * lo), group = ids)
+  acc_raw <- rowsum(cbind(grad_eta * lo, pieces$slope_w * lo), group = ids)
   acc <- matrix(0, N, 2L * K)
   acc[as.integer(rownames(acc_raw)), ] <- acc_raw
   list(score = acc[, seq_len(K), drop = FALSE],
@@ -1716,7 +1733,21 @@ bigIRT_laplace_person_row_terms_R <- function(sdat, posterior, row_effective, ro
 ## person to person, which is why its error against finite differences moved
 ## around instead of being a constant. H_i^-1 is the stored posterior
 ## covariance, which is why this needs keep_covariance.
-bigIRT_laplace_ability_beta_contribution <- function(state, sdat, posterior, row_context, layout, prior_precision, person_terms){
+## Which person predictors vary within a person? A covariate that is constant
+## within person can be folded out of the sum over that person's responses; one
+## that varies cannot, and the two need different gradients.
+bigIRT_laplace_person_pred_within_varying <- function(row_context, tol = 1e-10){
+  X <- row_context$person_pred
+  if(is.null(X) || !ncol(X)) return(logical(0))
+  X <- as.matrix(X)
+  ids <- as.integer(row_context$ids)
+  n <- rowsum(rep(1, length(ids)), group = ids)
+  m <- rowsum(X, group = ids) / as.numeric(n)
+  idx <- match(ids, as.integer(rownames(m)))
+  apply(abs(X - m[idx, , drop = FALSE]), 2L, max) > tol
+}
+
+bigIRT_laplace_ability_beta_contribution <- function(state, sdat, posterior, row_context, layout, prior_precision, person_terms, row_effective = NULL){
   out <- matrix(0, nrow = sdat$Nscales, ncol = sdat$NpersonPreds)
   if(length(layout$ability_beta) == 0L || sdat$NpersonPreds == 0L) return(out)
   if(is.null(posterior$covariance)) stop("laplace_direct Abilitybeta gradients require posterior covariances.")
@@ -1730,10 +1761,6 @@ bigIRT_laplace_ability_beta_contribution <- function(state, sdat, posterior, row
   sacc <- person_terms$score
   gacc <- person_terms$slope
 
-  ## One covariate row and one fixed-ability mask per person; both are constant
-  ## within person, so writing every response in turn leaves the right value.
-  xmat <- matrix(0, N, P)
-  xmat[ids, ] <- as.matrix(row_context$person_pred)
   fixedmask <- matrix(FALSE, N, K)
   fixedmask[ids, ] <- as.logical(row_context$fixed_ability)
 
@@ -1744,12 +1771,58 @@ bigIRT_laplace_ability_beta_contribution <- function(state, sdat, posterior, row
     qkm <- if(prior_is_array) prior_precision[k, m, ] else prior_precision[k, m]
     QS[k, l, ] <- QS[k, l, ] + qkm * Sig[m, l, ]
   }
-  contrib <- sacc
-  for(k in seq_len(K)) for(l in seq_len(K))
-    contrib[, k] <- contrib[, k] - 0.5 * QS[k, l, ] * gacc[, l]
-  contrib[fixedmask] <- 0
 
-  out <- t(contrib) %*% xmat
+  reduce <- function(sx, gx){
+    contrib <- sx
+    for(k in seq_len(K)) for(l in seq_len(K))
+      contrib[, k] <- contrib[, k] - 0.5 * QS[k, l, ] * gx[, l]
+    contrib[fixedmask] <- 0
+    contrib
+  }
+
+  varying <- bigIRT_laplace_person_pred_within_varying(row_context)
+
+  ## Ability enters response j of person i as theta_i + x_ij' beta, so the
+  ## derivative with respect to beta_p weights each RESPONSE by x_ijp. When x is
+  ## constant within person that weight factors out of the sum over responses
+  ## and the person-level totals can simply be multiplied by it. When it varies
+  ## within person it cannot: summing first and weighting afterwards multiplies
+  ## a person's whole score by one arbitrary response's covariate value, which
+  ## is not the derivative of anything. Recovery of a known within-person effect
+  ## was the symptom -- a true 0.50 came back as -0.31, sign and all -- while
+  ## between-person effects, where the two agree, recovered correctly.
+  if(!any(varying)){
+    xmat <- matrix(0, N, P)
+    xmat[ids, ] <- as.matrix(row_context$person_pred)
+    out <- t(reduce(sacc, gacc)) %*% xmat
+    dimnames(out) <- NULL
+    return(out)
+  }
+
+  if(is.null(row_effective))
+    stop("laplace_direct Abilitybeta gradients need the response rows when a person predictor varies within person.")
+  pieces <- bigIRT_laplace_row_gradient_pieces(sdat, posterior, row_effective, row_context)
+  lo <- pieces$loadings
+  X <- as.matrix(row_context$person_pred)
+
+  ## One rowsum over all covariates at once: for each p, K columns of the
+  ## x-weighted score and K of the x-weighted log-determinant slope.
+  cols <- vector("list", P)
+  for(pp in seq_len(P)){
+    xw <- X[, pp]
+    cols[[pp]] <- cbind((pieces$grad_eta * xw) * lo, (pieces$slope_w * xw) * lo)
+  }
+  acc_raw <- rowsum(do.call(cbind, cols), group = ids)
+  acc <- matrix(0, N, 2L * K * P)
+  acc[as.integer(rownames(acc_raw)), ] <- acc_raw
+
+  out <- matrix(0, K, P)
+  for(pp in seq_len(P)){
+    off <- (pp - 1L) * 2L * K
+    sx <- acc[, off + seq_len(K), drop = FALSE]
+    gx <- acc[, off + K + seq_len(K), drop = FALSE]
+    out[, pp] <- colSums(reduce(sx, gx))
+  }
   dimnames(out) <- NULL
   out
 }
