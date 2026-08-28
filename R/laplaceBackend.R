@@ -708,6 +708,18 @@ bigIRT_laplace_par_scale <- function(sdat, layout){
   ## The ability mean is informed by every person.
   if(length(layout$ability_mean))
     out[layout$ability_mean] <- min(max(sqrt(per_item / nsub), 1e-4), 1e4)
+  ## So is each latent correlation, and leaving it out was the reason the
+  ## correlation estimator saturated. Its gradient sums over every person while
+  ## an item parameter's sums over its own responses, so a step sized for the
+  ## item block overshoots it by orders of magnitude. The correlation is
+  ## bounded -- rho = tanh(par) under the default parameterisation -- so
+  ## overshooting does not merely slow convergence, it lands in the flat tail
+  ## where the gradient is numerically zero and the fit can never come back.
+  ## That produced exactly 1.000 for any generating value from about .6 up,
+  ## while still reporting convergence, because the vanished gradient left
+  ## nothing for the total norm to notice.
+  if(length(layout$corr))
+    out[layout$corr] <- min(max(sqrt(per_item / nsub), 1e-4), 1e4)
   ## Item covariates, where the default is the bad case: one coefficient per
   ## predictor whose gradient sums over every response. With item-specific betas
   ## each sees only its own item and is already on the item scale.

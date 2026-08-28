@@ -423,4 +423,48 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
       if(length(idx)) expect_true(all(is.finite(stp[idx])), info = nm)
     }
   })
+
+  test_that("the latent correlation is recovered rather than saturating", {
+    ## The correlation is one parameter informed by every person, so its
+    ## gradient outgrows an item parameter's exactly as the covariate and mean
+    ## blocks do -- and it is bounded, rho = tanh(par), so an oversized step
+    ## does not merely overshoot but lands in the flat tail where the gradient
+    ## is numerically zero and the fit cannot return. Unscaled it produced
+    ## exactly 1.000 for any generating value from about .6 up, while still
+    ## reporting convergence.
+    for(rho in c(0.3, 0.6, 0.9)){
+      set.seed(77)
+      R <- matrix(c(1, rho, rho, 1), 2, 2)
+      s <- simIRT(Nsubs = 2500, Nitems = 200, Nscales = 2,
+        NitemsAnswered = c(12L, 12L), AMean = 1, ASD = .3, BMean = 0, BSD = 1,
+        AbilityMean = 0, AbilitySD = 1, AbilityCorr = R,
+        logitCMean = -20, logitCSD = 0, logitDMean = 20, logitDSD = 0)
+      f <- fitIRT(s$dat, score = "score", id = "id", item = "Item",
+        scale = "Scale", pl = 2L, marginalApprox = "laplace", cores = 1L,
+        verbose = 0L, plot = FALSE, priors = TRUE, ebayes = FALSE,
+        normalise = FALSE, dropPerfectScores = FALSE, estimateAbilityCorr = TRUE)
+      est <- as.matrix(f$abilityPrior$corr)[1, 2]
+      emp <- stats::cor(s$Ability[, 1], s$Ability[, 2])
+      expect_lt(est, 0.999, label = sprintf("rho %.1f not saturated", rho))
+      expect_equal(est, emp, tolerance = 0.08,
+        info = sprintf("rho %.1f: estimated %.4f, sample %.4f", rho, est, emp))
+    }
+  })
+
+  test_that("every small aggregating block is in the preconditioner", {
+    ## Four blocks of this shape were found one at a time, the correlation last
+    ## and only after it had produced a wrong published-facing number. This
+    ## asserts the whole set, so a fifth is not missed the same way.
+    sdat <- list(Nsubs = 5000, Nitems = 2000, Nobs = 100000, Nscales = 2,
+      NpersonPreds = 1L, fixedAbilityMean = 0L, itemSpecificBetas = 0L,
+      BitemPreds = "z", itemPreds = NULL, personPreds = matrix(rnorm(100000), ncol = 1))
+    lay <- list(B = 1:2000, B_mean = 2001L, B_beta = 2002L, A = 2003:4002,
+      A_mean = 4003L, ability_beta = 4004:4005, ability_mean = 4006:4007,
+      corr = 4008L)
+    attr(lay, "beta_scale") <- bigIRT:::bigIRT_laplace_beta_scale(sdat)
+    ps <- bigIRT:::bigIRT_laplace_par_scale(sdat, lay)
+    expect_equal(unique(ps[c(1:2000, 2003:4002)]), 1)   # item parameters are the reference
+    for(nm in c("B_mean", "A_mean", "B_beta", "ability_beta", "ability_mean", "corr"))
+      expect_lt(max(ps[lay[[nm]]]), 1, label = nm)
+  })
 }
