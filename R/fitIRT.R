@@ -1346,6 +1346,15 @@ bigIRT_validate_fit_inputs <- function(dat, score, id, item, scale, pl, controls
 #' @param AbilityMeandat Numeric array. Mean for the prior distribution of the ability parameters. Default is 0 for each scale.
 #' @param AbilitySD Numeric array. Standard deviation for the prior distribution of the ability parameters. Default is 1 for each scale.
 #' @param AbilityCorr Matrix. Correlation matrix for the ability parameters. Default is an identity matrix.
+#' @param AbilityCorrSD Numeric. Standard deviation of the prior on the
+#'   unconstrained latent-correlation parameters, used when
+#'   `estimateAbilityCorr = TRUE`. The correlation is bounded but the
+#'   parameter optimised is not, so without this the optimiser can settle
+#'   where the correlation is pinned at one and the gradient is numerically
+#'   zero. Default is 2, which is weakly informative: it corresponds to a
+#'   correlation of about .96 at one standard deviation, so it shrinks a
+#'   plausible correlation hardly at all and penalises only runaway. Set to
+#'   0 to remove it.
 #' @param AMeanSD Numeric. Standard deviation for the prior distribution of the discrimination parameters. Default is 1.
 #' @param BMeanSD Numeric. Standard deviation for the prior distribution of the difficulty parameters. Default is \code{BSD}.
 #' @param logitCMeanSD Numeric. Standard deviation for the prior distribution of the guessing parameters (on logit scale). Default is \code{logitCSD}.
@@ -1564,6 +1573,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   AbilityMeandat=array(0,dim=c(length(unique(dat[[scale]])))),
   AbilitySD=array(1,dim=c(length(unique(dat[[scale]])))),
   AbilityCorr=diag(1,c(length(unique(dat[[scale]])))),
+  AbilityCorrSD=2,
   AMeanSD=1,BMeanSD=BSD,logitCMeanSD=logitCSD,logitDMeanSD=logitDSD,
   AbilityMeanSD=array(1,dim=c(length(unique(dat[[scale]])))),
   iter=2000,cores=6,carefulfit=FALSE,
@@ -1938,6 +1948,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     CitemPreds=array(as.integer(which(colnames(itemPreds) %in% CitemPreds))),
     DitemPreds=array(as.integer(which(colnames(itemPreds) %in% DitemPreds))),
     itemPreds=array(unlist(itemPreds),dim(itemPreds)),
+    AbilityCorrSD=AbilityCorrSD,
     NpersonPreds=ncol(personPreds),
     personPreds=(array(unlist(personPreds),dim(personPreds))),
     itemSpecificBetas=as.integer(itemSpecificBetas),

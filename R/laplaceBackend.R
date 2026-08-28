@@ -1205,6 +1205,29 @@ bigIRT_laplace_direct_objective <- function(par, state, sdat, prior_precision,
       logdet_slope = person_terms$slope,
       jitter = jitter
     )
+    ## A weak prior on the unconstrained parameter, and the reason for it.
+    ##
+    ## The correlation is bounded but the parameter optimised is not: under the
+    ## default parameterisation rho = tanh(par), so far out in the tail the
+    ## gradient is numerically zero and nothing brings the fit back. That is
+    ## not a hypothetical -- unpenalised, the estimator returned exactly 1.000
+    ## on Mindsteps, where fixing rho on a grid puts the optimum near .70, and
+    ## reported convergence while doing it. Preconditioning the block makes an
+    ## oversized first step less likely but cannot rule it out, because nothing
+    ## in the objective opposes large |par|.
+    ##
+    ## A Normal prior does. Its gradient is -par/sd^2, which grows without
+    ## bound as the parameter does, so the flat tail stops being an absorbing
+    ## state. At the default sd of 2 it is genuinely weak: tanh(2) = .96, so a
+    ## correlation anywhere in the usable range is barely shrunk, and only
+    ## runaway is penalised.
+    corr_sd <- suppressWarnings(as.numeric(sdat$AbilityCorrSD)[1])
+    if(isTRUE(is.finite(corr_sd)) && corr_sd > 0){
+      cp <- as.numeric(curState$AbilityCorrPars)
+      prior$value <- prior$value + sum(stats::dnorm(cp, 0, corr_sd, log = TRUE))
+      approx_grad[context$direct_layout$corr] <-
+        approx_grad[context$direct_layout$corr] - cp / corr_sd^2
+    }
     corr_grad_sec <- wall_time_sec() - t_corr0
   }
   ## Chain rule for the rescaled coordinates. The optimiser works in
