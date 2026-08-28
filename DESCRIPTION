@@ -38,6 +38,9 @@ LinkingTo:
     rstan (>= 2.21.1),
     StanHeaders (>= 2.18.0)
 Suggests:
+    broom,
+    ggplot2,
+    loo,
     mirt,
     testthat,
     knitr,

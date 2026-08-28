@@ -1,0 +1,112 @@
+---
+title: "`r params$title`"
+output:
+  html_document:
+    self_contained: true
+    toc: true
+    toc_float: true
+    theme: readable
+params:
+  fit: NULL
+  title: "bigIRT model report"
+  method: "profile"
+  max_icc: 9
+  cores: 1
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE,
+                      fig.width = 9, fig.height = 5.5, dpi = 110)
+library(bigIRT)
+fit <- params$fit
+st <- fit$laplaceStatus
+```
+
+## Convergence
+
+```{r convergence}
+cc <- try(checkConvergence(fit, cores = params$cores), silent = TRUE)
+if (!inherits(cc, "try-error")) print(cc) else cat("Convergence detail unavailable.\n")
+```
+
+`r if (!isTRUE(st$converged)) "**This fit did not meet the gradient tolerance.** Read everything below with that in mind: the block table above says which parameters are responsible." else ""`
+
+## Model
+
+```{r glance}
+g <- glanceIRT(fit)
+knitr::kable(t(g), col.names = "value")
+```
+
+The log-likelihood is marginal, with the person parameters integrated out, so the
+degrees of freedom count item parameters and hyperparameters only.
+
+## Item parameters
+
+```{r items}
+ti <- try(tidyIRT(fit, conf.int = TRUE, method = params$method, cores = params$cores),
+          silent = TRUE)
+if (!inherits(ti, "try-error")) {
+  knitr::kable(head(ti[order(ti$term, ti$item), ], 60), digits = 3, row.names = FALSE)
+} else cat("Item parameters unavailable.\n")
+```
+
+`r if (identical(params$method, "profile")) "Standard errors use the closed-form profile weight and run about six per cent small; the hessian method differences the analytic gradient instead and is exact up to a block-diagonal term." else "Standard errors come from differencing the analytic gradient."`
+
+## Test information
+
+```{r information}
+plot(fit, type = "information")
+```
+
+```{r reliability}
+r <- try(reliability(fit), silent = TRUE)
+if (!inherits(r, "try-error")) knitr::kable(r, digits = 3, row.names = FALSE)
+```
+
+## Person and item coverage
+
+```{r wright, fig.height=6}
+plot(fit, type = "wright")
+```
+
+## Item fit
+
+```{r itemfit}
+itf <- try(itemFit(fit), silent = TRUE)
+if (!inherits(itf, "try-error")) {
+  itf <- itf[order(-abs(itf$outfit - 1)), ]
+  knitr::kable(head(itf, 20), digits = 3, row.names = FALSE,
+               caption = "Items ordered by departure of outfit from 1.")
+}
+```
+
+Infit and outfit are Rasch-family statistics; their reference distributions are
+only well behaved for one- and two-parameter models.
+
+## Observed against model-implied curves
+
+The items whose outfit departs furthest from 1. Bins are formed on estimated
+ability, which is shrunk and noisy, so the observed curve is flattened slightly
+relative to the model; read a one-sided or sharply localised departure as
+misfit, not a mild symmetric one.
+
+```{r icc, fig.height=7}
+if (!inherits(itf, "try-error")) {
+  worst <- utils::head(itf$item, params$max_icc)
+  idx <- match(worst, as.data.frame(fit$itemPars)$Item)
+  idx <- idx[!is.na(idx)]
+  if (length(idx)) plot(fit, type = "icc", items = idx)
+}
+```
+
+## Held-out performance
+
+```{r heldout}
+ho <- try(heldoutMetrics(fit), silent = TRUE)
+if (!inherits(ho, "try-error") && !is.null(ho)) {
+  knitr::kable(as.data.frame(ho), digits = 4, row.names = FALSE)
+  cat("\nThe item-base-rate benchmark predicts each item's training success rate",
+      "and ignores the person, so it is this model with zero discrimination.\n")
+} else cat("No held-out responses; refit with `trainingRows` to score them.\n")
+```

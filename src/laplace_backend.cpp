@@ -61,7 +61,7 @@ extern "C" SEXP _bigIRT_laplace_item_block_objective_cpp_impl(
     SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP,
     SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP,
     SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP,
-    SEXP, SEXP, SEXP);
+    SEXP, SEXP, SEXP, SEXP);
 
 inline double bigirt_softplus_scalar(const double x) {
   if (x > 0.0) return x + std::log1p(std::exp(-x));
@@ -629,6 +629,69 @@ extern "C" SEXP _bigIRT_laplace_person_step_cpp_impl(
 // posterior mode of u_i in theta_i = X_i beta + u_i.  Regressing u on X gives
 // the coefficient correction that restores E[u | X] = 0 without using an R
 // fitting path.
+// Per-person score and log-determinant-slope accumulations over responses.
+//
+// The R implementation of this was a third of every objective evaluation on
+// fits with person covariates, because the adjoint gradient path needs it and
+// it walks Nobs-length vectors several times over.  The arithmetic is entirely
+// elementwise plus one scatter by person, so it ports directly.
+extern "C" SEXP _bigIRT_laplace_person_row_terms_cpp_impl(
+    SEXP idsSEXP, SEXP ySEXP, SEXP etaSEXP, SEXP cSEXP, SEXP dSEXP,
+    SEXP loadingsSEXP, SEXP sigmaSEXP, SEXP NSEXP, SEXP KSEXP) {
+  BEGIN_RCPP
+  Rcpp::IntegerVector ids(idsSEXP);
+  Rcpp::NumericVector y(ySEXP), eta(etaSEXP), crow(cSEXP), drow(dSEXP);
+  Rcpp::NumericMatrix lo(loadingsSEXP);
+  Rcpp::NumericVector sigma(sigmaSEXP);
+  const int N = Rcpp::as<int>(NSEXP);
+  const int K = Rcpp::as<int>(KSEXP);
+  const R_xlen_t n = ids.size();
+  if(y.size() != n || eta.size() != n || crow.size() != n || drow.size() != n ||
+     lo.nrow() != n || lo.ncol() != K)
+    Rcpp::stop("Unexpected dimensions in Laplace person row terms.");
+  if(sigma.size() != (R_xlen_t)K * K * N)
+    Rcpp::stop("Posterior covariance array has unexpected size.");
+
+  Rcpp::NumericMatrix score(N, K), slope(N, K);
+  const double lo_p = 1e-12, hi_p = 1.0 - 1e-12;
+  for(R_xlen_t i = 0; i < n; ++i) {
+    const int subj = ids[i] - 1;                 // R is 1-based
+    if(subj < 0 || subj >= N) Rcpp::stop("Person index out of range.");
+    const double g = bigirt_stable_inv_logit(eta[i]);
+    const double q = g * (1.0 - g);
+    const double u = drow[i] - crow[i];
+    double p = crow[i] + u * g;
+    if(p < lo_p) p = lo_p; else if(p > hi_p) p = hi_p;
+    const double s = u * q;
+    double r = p * (1.0 - p);
+    if(r < lo_p) r = lo_p;
+    const double grad_eta = ((y[i] - p) / r) * s;
+    const double dq_deta = q * (1.0 - 2.0 * g);
+    const double ds_deta = u * dq_deta;
+    const double dr_deta = s * (1.0 - 2.0 * p);
+    const double dw_deta = (2.0 * s * ds_deta * r - s * s * dr_deta) / (r * r);
+
+    // aSa = a' Sigma a for this response, from the K^2 blocks of this person.
+    double aSa = 0.0;
+    const R_xlen_t base = (R_xlen_t)K * K * subj;
+    for(int k = 0; k < K; ++k) {
+      const double lk = lo(i, k);
+      if(lk == 0.0) continue;
+      for(int l = 0; l < K; ++l)
+        aSa += lk * lo(i, l) * sigma[base + k + (R_xlen_t)K * l];
+    }
+    const double slope_i = dw_deta * aSa;
+    for(int k = 0; k < K; ++k) {
+      const double lk = lo(i, k);
+      score(subj, k) += grad_eta * lk;
+      slope(subj, k) += slope_i * lk;
+    }
+  }
+  return Rcpp::List::create(Rcpp::Named("score") = score,
+                            Rcpp::Named("slope") = slope);
+  END_RCPP
+}
+
 extern "C" SEXP _bigIRT_laplace_ability_beta_mstep_cpp_impl(
     SEXP theta_residualSEXP, SEXP person_predSEXP, SEXP ability_betaSEXP,
     SEXP free_maskSEXP, SEXP beta_scaleSEXP, SEXP jitterSEXP) {
@@ -1007,6 +1070,18 @@ struct BigIRTLaplaceItemBlockWorker : public RcppParallel::Worker {
   // an under-weighted adjoint alone.
   double logdet_scale = 1.0;
 
+  // Row-effective outputs. This worker already derives the effective
+  // discrimination, difficulty, asymptotes and linear predictor for every
+  // response; without these it discards them and R rebuilds the same four
+  // quantities for the adjoint gradient path, which was a quarter of every
+  // objective evaluation. Each response belongs to exactly one subject, so the
+  // writes are disjoint and need no synchronisation. Borrowed, never owned.
+  double* out_eta = nullptr;
+  double* out_c = nullptr;
+  double* out_d = nullptr;
+  double* out_loadings = nullptr;   // Nobs x K, column major
+  int out_nobs = 0;
+
   BigIRTLaplaceItemBlockWorker(
       const std::vector< std::vector<int> >& obs_by_subj,
       Rcpp::IntegerVector score,
@@ -1081,7 +1156,8 @@ struct BigIRTLaplaceItemBlockWorker : public RcppParallel::Worker {
       grad_C_beta(static_cast<std::size_t>(std::max(0, other.nC_beta_row * other.pC)), 0.0),
       grad_D_beta(static_cast<std::size_t>(std::max(0, other.nD_beta_row * other.pD)), 0.0),
       subject_order(other.subject_order), adjoint_scale(other.adjoint_scale),
-      logdet_scale(other.logdet_scale) {}
+      logdet_scale(other.logdet_scale), out_eta(other.out_eta), out_c(other.out_c),
+      out_d(other.out_d), out_loadings(other.out_loadings), out_nobs(other.out_nobs) {}
 
   inline double softplus(const double x) const {
     if (x > 0.0) return x + std::log1p(std::exp(-x));
@@ -1164,6 +1240,16 @@ struct BigIRTLaplaceItemBlockWorker : public RcppParallel::Worker {
           }
           row_a[oi](k) = a_val;
           eta_obs += a_val * row_ability(obs, k);
+        }
+
+        if (out_eta != nullptr) {
+          out_eta[obs] = eta_obs;
+          out_c[obs] = c_row;
+          out_d[obs] = d_row;
+          for (int k = 0; k < K; ++k)
+            out_loadings[static_cast<std::size_t>(obs) +
+                         static_cast<std::size_t>(out_nobs) * static_cast<std::size_t>(k)] =
+              row_a[oi](k);
         }
 
         BigIRTRowTerms rt = bigirt_row_terms(static_cast<double>(score[obs]), eta_obs, c_row, d_row);
@@ -1457,7 +1543,8 @@ extern "C" SEXP _bigIRT_laplace_item_block_objective_cpp_impl(
     SEXP max_attemptsSEXP,
     SEXP adjoint_scaleSEXP,
     SEXP logdet_scaleSEXP,
-    SEXP grain_sizeSEXP) {
+    SEXP grain_sizeSEXP,
+    SEXP want_row_effectiveSEXP) {
   BEGIN_RCPP
 
   Rcpp::IntegerVector id(idSEXP);
@@ -1535,6 +1622,22 @@ extern "C" SEXP _bigIRT_laplace_item_block_objective_cpp_impl(
   worker.adjoint_scale = Rcpp::as<double>(adjoint_scaleSEXP);
   worker.logdet_scale = Rcpp::as<double>(logdet_scaleSEXP);
 
+  // Only the adjoint gradient path wants the per-response effective values,
+  // and it is not always present, so they are not materialised unless asked
+  // for; four Nobs-sized buffers are not free at eight million responses.
+  const bool want_re = Rcpp::as<bool>(want_row_effectiveSEXP);
+  Rcpp::NumericVector re_eta(want_re ? Nobs : 0);
+  Rcpp::NumericVector re_c(want_re ? Nobs : 0);
+  Rcpp::NumericVector re_d(want_re ? Nobs : 0);
+  Rcpp::NumericMatrix re_loadings(want_re ? Nobs : 0, want_re ? K : 0);
+  if (want_re) {
+    worker.out_eta = re_eta.begin();
+    worker.out_c = re_c.begin();
+    worker.out_d = re_d.begin();
+    worker.out_loadings = re_loadings.begin();
+    worker.out_nobs = Nobs;
+  }
+
   // The kernel is free of R access and reports failure through failure_code,
   // so the reduction is safe; the failure check stays on the calling thread.
   RcppParallel::parallelReduce(static_cast<std::size_t>(0),
@@ -1555,6 +1658,13 @@ extern "C" SEXP _bigIRT_laplace_item_block_objective_cpp_impl(
   std::copy(worker.grad_C_beta.begin(), worker.grad_C_beta.end(), grad_C_beta.begin());
   std::copy(worker.grad_D_beta.begin(), worker.grad_D_beta.end(), grad_D_beta.begin());
 
+  Rcpp::RObject re_out = R_NilValue;
+  if (want_re) re_out = Rcpp::List::create(
+    Rcpp::Named("eta_row") = re_eta,
+    Rcpp::Named("c_row") = re_c,
+    Rcpp::Named("d_row") = re_d,
+    Rcpp::Named("loadings") = re_loadings);
+
   return Rcpp::List::create(
     Rcpp::Named("objective") = worker.objective,
     Rcpp::Named("grad_A") = grad_A,
@@ -1564,7 +1674,8 @@ extern "C" SEXP _bigIRT_laplace_item_block_objective_cpp_impl(
     Rcpp::Named("grad_A_beta") = grad_A_beta,
     Rcpp::Named("grad_B_beta") = grad_B_beta,
     Rcpp::Named("grad_C_beta") = grad_C_beta,
-    Rcpp::Named("grad_D_beta") = grad_D_beta
+    Rcpp::Named("grad_D_beta") = grad_D_beta,
+    Rcpp::Named("row_effective") = re_out
   );
   END_RCPP
 }
@@ -2418,7 +2529,8 @@ extern "C" SEXP _bigIRT_laplace_direct_block_fg_cpp_impl(
     SEXP max_iterSEXP,
     SEXP tolSEXP,
     SEXP keep_covarianceSEXP,
-    SEXP grain_sizeSEXP) {
+    SEXP grain_sizeSEXP,
+    SEXP want_row_effectiveSEXP) {
   using Clock = std::chrono::steady_clock;
   const auto t0_total = Clock::now();
 
@@ -2468,7 +2580,8 @@ extern "C" SEXP _bigIRT_laplace_direct_block_fg_cpp_impl(
     invspAparsSEXP, invspAbetaSEXP, BparsSEXP, BbetaSEXP,
     logitCparsSEXP, logitCbetaSEXP, logitDparsSEXP, logitDbetaSEXP,
     prior_precisionSEXP, jitterSEXP, max_attemptsSEXP,
-    adjoint_scale_holder, logdet_scale_holder, grain_sizeSEXP
+    adjoint_scale_holder, logdet_scale_holder, grain_sizeSEXP,
+    want_row_effectiveSEXP
   ));
   const auto t3_item = Clock::now();
 

@@ -33,29 +33,6 @@ bigirt_int_matrix <- function(x, nr, nc){
   matrix(as.integer(x), nrow = nr, ncol = nc)
 }
 
-## Convert the per-response data once and keep it behind an external pointer.
-##
-## Everything here is data rather than parameters, so it is identical across the
-## eleven or so objective evaluations the item line search makes per outer
-## iteration. Converting it per call was the largest single piece of the R-level
-## share of the profile.
-bigIRT_laplace_item_prepare <- function(id, score, row_ability,
-  A_ref, A_fixed_value, A_beta_row, A_pred,
-  B_ref, B_fixed_value, B_beta_row, B_pred,
-  C_ref, C_fixed_value, C_beta_row, C_pred,
-  D_ref, D_fixed_value, D_beta_row, D_pred,
-  prior_precision, jitter, max_attempts){
-  nr <- nrow(row_ability); nc <- ncol(row_ability)
-  .Call(`_bigIRT_laplace_item_prepare_cpp_impl`,
-    as.integer(id), as.integer(score), as.matrix(row_ability),
-    bigirt_int_matrix(A_ref, nr, nc), as.matrix(A_fixed_value),
-    bigirt_int_matrix(A_beta_row, nr, nc), as.matrix(A_pred),
-    as.integer(B_ref), as.numeric(B_fixed_value), as.integer(B_beta_row), as.matrix(B_pred),
-    as.integer(C_ref), as.numeric(C_fixed_value), as.integer(C_beta_row), as.matrix(C_pred),
-    as.integer(D_ref), as.numeric(D_fixed_value), as.integer(D_beta_row), as.matrix(D_pred),
-    prior_precision, as.numeric(jitter), as.integer(max_attempts))
-}
-
 ## Evaluate against prepared data. Only the item parameters cross the boundary.
 bigIRT_laplace_item_eval <- function(prepared, invspApars, invspAbeta, Bpars, Bbeta,
   logitCpars, logitCbeta, logitDpars, logitDbeta, grain_size = 64L,
@@ -77,7 +54,8 @@ bigIRT_laplace_item_block_objective_cpp_impl <- function(id, score, row_ability,
   invspApars, invspAbeta, Bpars, Bbeta, logitCpars, logitCbeta, logitDpars, logitDbeta,
   prior_precision, jitter, max_attempts, grain_size = 64L,
   adjoint_scale = getOption("bigIRT.adjoint_scale", 1),
-  logdet_scale = getOption("bigIRT.logdet_scale", 1)){
+  logdet_scale = getOption("bigIRT.logdet_scale", 1),
+  want_row_effective = FALSE){
   .Call(
     `_bigIRT_laplace_item_block_objective_cpp_impl`,
     as.integer(id),
@@ -112,10 +90,10 @@ bigIRT_laplace_item_block_objective_cpp_impl <- function(id, score, row_ability,
     as.integer(max_attempts),
     as.numeric(adjoint_scale),
     as.numeric(logdet_scale),
-    as.integer(grain_size)
+    as.integer(grain_size),
+    as.logical(want_row_effective)[1]
   )
 }
-
 
 bigIRT_laplace_direct_block_fg_cpp_impl <- function(id, score, theta_init,
   person_pred, fixed_ability, fixed_ability_value,
@@ -125,7 +103,8 @@ bigIRT_laplace_direct_block_fg_cpp_impl <- function(id, score, theta_init,
   D_ref, D_fixed_value, D_beta_row, D_pred,
   Abilitybeta, invspApars, invspAbeta, Bpars, Bbeta, logitCpars, logitCbeta, logitDpars, logitDbeta,
   prior_mean, prior_precision, free_mask,
-  jitter, max_attempts, max_iter, tol, keep_covariance = FALSE, grain_size = 64L){
+  jitter, max_attempts, max_iter, tol, keep_covariance = FALSE, grain_size = 64L,
+  want_row_effective = FALSE){
   .Call(
     `_bigIRT_laplace_direct_block_fg_cpp_impl`,
     as.integer(id),
@@ -167,17 +146,10 @@ bigIRT_laplace_direct_block_fg_cpp_impl <- function(id, score, theta_init,
     as.integer(max_iter),
     as.numeric(tol),
     as.logical(keep_covariance),
-    as.integer(grain_size)
+    as.integer(grain_size),
+    as.logical(want_row_effective)[1]
   )
 }
-
-bigIRT_laplace_as_matrix <- function(x, nrow, ncol){
-  if(is.null(x) || length(x) == 0) return(matrix(0, nrow = nrow, ncol = ncol))
-  if(is.matrix(x)) return(matrix(as.numeric(x), nrow = nrow, ncol = ncol))
-  matrix(as.numeric(x), nrow = nrow, ncol = ncol, byrow = TRUE)
-}
-
-
 
 bigIRT_laplace_prior_precision_array <- function(sdat, jitter = 1e-8){
   priorSD <- pmax(as.numeric(sdat$AbilitySD), jitter)
@@ -388,7 +360,12 @@ bigIRT_laplace_row_context <- function(sdat, rows = bigIRT_laplace_training_rows
     ref[fixed_A[, si]] <- 0L
     A_ref[, si] <- ref
     if(sdat$NAitemPreds > 0){
-      A_beta_row[, si] <- ifelse(sdat$itemSpecificBetas == 1L, ref, ifelse(ref > 0L, 1L, 0L))
+      ## `ifelse` is vectorised over its condition, so a scalar condition here
+      ## returns a length-one result that is then recycled: every response gets
+      ## the first item's coefficient index. With item-specific betas that
+      ## pointed every row at one coefficient, which absorbed every item's
+      ## gradient and diverged to a non-finite difficulty. It needs `if`.
+      A_beta_row[, si] <- if(sdat$itemSpecificBetas == 1L) ref else ifelse(ref > 0L, 1L, 0L)
     }
   }
 
@@ -412,15 +389,21 @@ bigIRT_laplace_row_context <- function(sdat, rows = bigIRT_laplace_training_rows
     B_ref = B_ref,
     B_fixed = sdat$fixedB[items] == 1L,
     B_fixed_value = sdat$Bdata[items],
-    B_beta_row = if(sdat$NBitemPreds > 0) ifelse(sdat$itemSpecificBetas == 1L, B_ref, ifelse(B_ref > 0L, 1L, 0L)) else integer(nrows),
+    B_beta_row = if(sdat$NBitemPreds > 0) {
+      if(sdat$itemSpecificBetas == 1L) B_ref else ifelse(B_ref > 0L, 1L, 0L)
+    } else integer(nrows),
     C_ref = C_ref,
     C_fixed = sdat$fixedClogit[items] == 1L,
     C_fixed_value = sdat$Cdata[items],
-    C_beta_row = if(sdat$NCitemPreds > 0) ifelse(sdat$itemSpecificBetas == 1L, C_ref, ifelse(C_ref > 0L, 1L, 0L)) else integer(nrows),
+    C_beta_row = if(sdat$NCitemPreds > 0) {
+      if(sdat$itemSpecificBetas == 1L) C_ref else ifelse(C_ref > 0L, 1L, 0L)
+    } else integer(nrows),
     D_ref = D_ref,
     D_fixed = sdat$fixedDlogit[items] == 1L,
     D_fixed_value = sdat$Ddata[items],
-    D_beta_row = if(sdat$NDitemPreds > 0) ifelse(sdat$itemSpecificBetas == 1L, D_ref, ifelse(D_ref > 0L, 1L, 0L)) else integer(nrows),
+    D_beta_row = if(sdat$NDitemPreds > 0) {
+      if(sdat$itemSpecificBetas == 1L) D_ref else ifelse(D_ref > 0L, 1L, 0L)
+    } else integer(nrows),
     person_pred = if(sdat$NpersonPreds > 0) as.matrix(sdat$personPreds[rows,, drop = FALSE]) else matrix(0, nrow = nrows, ncol = 0),
     # Both predictor matrices are long-row matrices in standata.  Index them
     # with `rows`, never with the item id: item ids are not row positions.
@@ -558,76 +541,6 @@ bigIRT_laplace_fixed_row_ability <- function(state, sdat, thetaBase = state$Abil
   row_ability
 }
 
-bigIRT_laplace_person_step <- function(state, sdat, prior_precision, jitter = 1e-6,
-  max_attempts = 8L, max_iter = 50L, tol = 1e-4, keep_covariance = FALSE,
-  cores = 1L, row_context = NULL, train_rows = NULL){
-  ## The row context depends only on the data, but this function rebuilt it on
-  ## every call, and the outer loop calls it twice per iteration. Profiling on a
-  ## 20,000-person fit put that rebuild at roughly 80 per cent of the posterior
-  ## refresh phase -- serial R work inside a phase whose time reads as parallel
-  ## solving, and the reason that phase showed a speedup of 1.07x on 16 cores.
-  ## Callers that fit repeatedly should build it once and pass it in.
-  if(is.null(train_rows)) train_rows <- bigIRT_laplace_training_rows(sdat)
-  if(is.null(row_context)) row_context <- bigIRT_laplace_row_context(sdat, rows = train_rows)
-  prior_mean <- matrix(rep(state$AbilityMean, each = sdat$Nsubs), nrow = sdat$Nsubs)
-  free_mask <- 1L - sdat$fixedAbilityLogical
-  ## row_effective is no longer needed here: the block kernel derives the same
-  ## per-response values internally from the compact parameters.
-  ## Two kernels compute this. bigIRT_laplace_person_step_cpp_impl runs the
-  ## worker as worker(0, Nsubs) -- serial, ignoring the grain_size it is
-  ## handed. The block kernel does the same arithmetic under parallelFor and
-  ## takes item parameters plus the row-to-item index instead of per-response
-  ## expansions, so it also avoids an O(Nobs) materialisation.
-  ##
-  ## The block kernel had no callers, and untested code is untested: it read
-  ## the beta-row index per response, when that vector holds a single element
-  ## unless effects are item-specific, so it segfaulted whenever item
-  ## covariates were present. Fixed by guarding the index the way the item
-  ## kernel always has.
-  out <- bigIRT_laplace_person_step_block_cpp_impl(
-    id = sdat$id[train_rows], score = sdat$score[train_rows],
-    theta_init = state$AbilityBase,
-    person_pred = row_context$person_pred,
-    fixed_ability = row_context$fixed_ability,
-    fixed_ability_value = row_context$fixed_ability_value,
-    A_ref = row_context$A_ref, A_fixed_value = row_context$fixed_A_value,
-    A_beta_row = row_context$A_beta_row, A_pred = row_context$A_pred,
-    B_ref = row_context$B_ref, B_fixed_value = row_context$B_fixed_value,
-    B_beta_row = row_context$B_beta_row, B_pred = row_context$B_pred,
-    C_ref = row_context$C_ref, C_fixed_value = row_context$C_fixed_value,
-    C_beta_row = row_context$C_beta_row, C_pred = row_context$C_pred,
-    D_ref = row_context$D_ref, D_fixed_value = row_context$D_fixed_value,
-    D_beta_row = row_context$D_beta_row, D_pred = row_context$D_pred,
-    Abilitybeta = state$Abilitybeta,
-    invspApars = state$invspApars, invspAbeta = state$invspAbeta,
-    Bpars = state$Bpars, Bbeta = state$Bbeta,
-    logitCpars = state$logitCpars, logitCbeta = state$logitCbeta,
-    logitDpars = state$logitDpars, logitDbeta = state$logitDbeta,
-    prior_mean = prior_mean, prior_precision = prior_precision,
-    free_mask = free_mask,
-    jitter = jitter, max_attempts = max_attempts, max_iter = max_iter,
-    tol = tol, keep_covariance = keep_covariance,
-    grain_size = bigIRT_laplace_subject_grain(sdat$Nsubs, cores)
-  )
-  # Native status codes are authoritative: 0 is a resolved mode; 1/2 are
-  # ordinary non-convergence; higher values are numerical failures.
-  out$converged <- as.integer(out$status_code) == 0L
-  hard <- which(as.integer(out$status_code) >= 3L)
-  if(length(hard)){
-    stop(sprintf("Laplace person kernel numerical failure (person IDs: %s; codes: %s).",
-      paste(hard, collapse = ","), paste(out$status_code[hard], collapse = ",")), call. = FALSE)
-  }
-  state$AbilityBase <- out$theta_mode
-  if(sdat$fixedAbilityMean == 0L){
-    for(si in seq_len(sdat$Nscales)){
-      free_idx <- which(sdat$fixedAbilityLogical[,si] == 0L)
-      if(length(free_idx)) state$AbilityMean[si] <- mean(state$AbilityBase[free_idx, si])
-    }
-  }
-  list(state = state, posterior = out)
-}
-
-
 bigIRT_laplace_item_layout <- function(sdat){
   itemBetaCount <- function(freeN, predN){
     if(freeN <= 0 || predN <= 0) return(0L)
@@ -686,8 +599,6 @@ bigIRT_laplace_item_context <- function(sdat, layout = bigIRT_laplace_item_layou
   )
 }
 
-
-
 bigIRT_laplace_pack_item_state <- function(state, sdat, layout = bigIRT_laplace_item_layout(sdat)){
   out <- numeric(max(unlist(layout), 0L))
   if(length(layout$B)) out[layout$B] <- state$Bpars
@@ -738,7 +649,94 @@ bigIRT_laplace_direct_layout <- function(sdat, estimateAbilityCorr = FALSE){
   item_layout$ability_mean <- take(if(sdat$fixedAbilityMean == 0L) sdat$Nscales else 0L)
   n_corr <- if(isTRUE(estimateAbilityCorr) && sdat$Nscales > 1L) sdat$Nscales * (sdat$Nscales - 1L) / 2L else 0L
   item_layout$corr <- take(n_corr)
+  attr(item_layout, "beta_scale") <- bigIRT_laplace_beta_scale(sdat)
+  attr(item_layout, "par_scale") <- bigIRT_laplace_par_scale(sdat, item_layout)
   item_layout
+}
+
+## Per-covariate scale for the ability_beta block, aligned with the column-major
+## unrolling of the Nscales x NpersonPreds coefficient matrix.
+bigIRT_laplace_beta_scale <- function(sdat){
+  npred <- as.integer(sdat$NpersonPreds)
+  nscale <- as.integer(sdat$Nscales)
+  if(!isTRUE(npred > 0L) || !isTRUE(nscale > 0L)) return(numeric(0))
+  nsub <- max(as.numeric(sdat$Nsubs), 1)
+  nobs <- max(as.numeric(if(!is.null(sdat$Nobs)) sdat$Nobs else length(sdat$score)), 1)
+  nitem <- max(as.numeric(sdat$Nitems), 1)
+  ## curvature of an item parameter goes as its response count, of a covariate
+  ## coefficient as the person count times the covariate variance
+  base <- sqrt((nobs / nitem) / nsub)
+  preds <- sdat$personPreds
+  sdk <- if(!is.null(preds) && length(preds) && NCOL(preds) == npred){
+    apply(as.matrix(preds), 2, stats::sd)
+  } else rep(1, npred)
+  sdk[!is.finite(sdk) | sdk <= 0] <- 1
+  rep(pmin(pmax(base / sdk, 1e-4), 1e4), each = nscale)
+}
+
+## Per-parameter optimiser scaling for every block whose gradient aggregates
+## over many units while holding few parameters.
+##
+## Each such block was found the hard way, one at a time. A covariate
+## coefficient's gradient sums over every person while an item parameter's sums
+## only over its own responses, so one curvature estimate cannot size steps for
+## both. The mean hyperparameters have the same shape -- each is informed by
+## every item -- and at Mindsteps scale A_mean alone held 78 per cent of the
+## gradient norm while the fit reported convergence. So do the item covariates:
+## with `itemSpecificBetas = FALSE`, the default, a single shared coefficient
+## held 92 per cent of it on a 2,000-item fit. The rule is the same throughout,
+## the square root of the ratio of contributing units, and they are listed
+## together here so the next block added is not missed as these three were.
+bigIRT_laplace_par_scale <- function(sdat, layout){
+  n <- max(unlist(layout), 0L)
+  out <- rep(1, n)
+  if(n == 0L) return(out)
+  nsub <- max(as.numeric(sdat$Nsubs), 1)
+  nobs <- max(as.numeric(if(!is.null(sdat$Nobs)) sdat$Nobs else length(sdat$score)), 1)
+  nitem <- max(as.numeric(sdat$Nitems), 1)
+  per_item <- nobs / nitem                    # responses behind one item parameter
+  bs <- attr(layout, "beta_scale")
+  if(length(layout$ability_beta) && length(bs) == length(layout$ability_beta))
+    out[layout$ability_beta] <- bs
+  ## A mean hyperparameter is informed by every item, an item parameter by its
+  ## own responses only.
+  mean_scale <- sqrt(per_item / nitem)
+  for(nm in c("B_mean", "A_mean", "C_mean", "D_mean")){
+    idx <- layout[[nm]]
+    if(length(idx)) out[idx] <- min(max(mean_scale, 1e-4), 1e4)
+  }
+  ## The ability mean is informed by every person.
+  if(length(layout$ability_mean))
+    out[layout$ability_mean] <- min(max(sqrt(per_item / nsub), 1e-4), 1e4)
+  ## Item covariates, where the default is the bad case: one coefficient per
+  ## predictor whose gradient sums over every response. With item-specific betas
+  ## each sees only its own item and is already on the item scale.
+  item_beta_preds <- c(A_beta = "AitemPreds", B_beta = "BitemPreds",
+                       C_beta = "CitemPreds", D_beta = "DitemPreds")
+  shared_beta <- !identical(as.integer(sdat$itemSpecificBetas)[1], 1L)
+  ipred <- if(!is.null(sdat$itemPreds)) as.matrix(sdat$itemPreds) else NULL
+  for(nm in names(item_beta_preds)){
+    idx <- layout[[nm]]
+    if(!length(idx)) next
+    prednames <- sdat[[item_beta_preds[[nm]]]]
+    npred <- max(length(prednames), 1L)
+    per_pred <- max(length(idx) %/% npred, 1L)
+    sdk <- rep(1, npred)
+    if(!is.null(ipred) && length(prednames)){
+      cols <- intersect(prednames, colnames(ipred))
+      if(length(cols) == npred){
+        v <- apply(ipred[, cols, drop = FALSE], 2, stats::sd)
+        v[!is.finite(v) | v <= 0] <- 1
+        sdk <- as.numeric(v)
+      }
+    }
+    base_ib <- if(shared_beta) sqrt(1 / nitem) else 1
+    ## Bbeta is rows-by-predictors and packs column major, so a predictor's
+    ## scale repeats across its rows.
+    sc <- rep(pmin(pmax(base_ib / sdk, 1e-4), 1e4), each = per_pred)
+    if(length(sc) == length(idx)) out[idx] <- sc
+  }
+  out
 }
 
 ## Pack the direct Laplace parameter vector, optionally including the latent
@@ -759,6 +757,9 @@ bigIRT_laplace_pack_direct_state <- function(state, sdat,
   if(length(layout$corr)){
     out[layout$corr] <- as.numeric(state$AbilityCorrPars)
   }
+  ## Hand the optimiser the rescaled coordinates; see bigIRT_laplace_par_scale.
+  ps <- attr(layout, "par_scale")
+  if(length(ps) == length(out)) out <- out / ps
   out
 }
 
@@ -768,6 +769,9 @@ bigIRT_laplace_unpack_direct_state <- function(par, state, sdat,
   layout = bigIRT_laplace_direct_layout(sdat, estimateAbilityCorr = FALSE),
   corr_paramization = c("normalized_chol", "stan_corsqrt")){
   corr_paramization <- match.arg(corr_paramization)
+  ## Back to natural coordinates before anything reads a parameter.
+  ps <- attr(layout, "par_scale")
+  if(length(ps) == length(par)) par <- par * ps
   out <- state
   item_slots <- layout[intersect(names(layout), names(bigIRT_laplace_item_layout(sdat)))]
   out <- bigIRT_laplace_unpack_item_state(par, out, sdat, layout = item_slots)
@@ -942,121 +946,6 @@ bigIRT_laplace_ability_mean_contribution <- function(state, sdat, posterior, pri
   out
 }
 
-## Evaluate the frozen-mode Laplace item objective and analytic gradient.
-## Inputs: packed item/global parameter vector, current state, standata, person
-## modes `thetaBase`, and a cached item context. Returns objective, gradient,
-## unpacked state, and row-effective quantities for diagnostics.
-bigIRT_laplace_item_objective <- function(par, state, sdat, thetaBase, prior_precision, jitter = 1e-6, context = NULL, cores = 1L, prepared = NULL, row_context = NULL){
-  if(is.null(context)){
-    context <- bigIRT_laplace_item_context(sdat, row_context = row_context)
-    context$grain_size <- bigIRT_laplace_subject_grain(sdat$Nsubs, cores, chunks_per_core = 1L)
-  }
-  layout <- context$layout
-  curState <- bigIRT_laplace_unpack_item_state(par, state, sdat, layout = layout)
-  if(is.null(context$row_ability)){
-    context$row_ability <- bigIRT_laplace_fixed_row_ability(
-      state = state,
-      sdat = sdat,
-      thetaBase = thetaBase,
-      rows = context$train_rows,
-      context = context$row_context
-    )
-  }
-
-  ## With prepared data the per-response arrays stay in C++ and only the item
-  ## parameters cross the boundary; without it, fall back to the original path.
-  cpp <- if(!is.null(prepared)){
-    bigIRT_laplace_item_eval(prepared,
-      invspApars = curState$invspApars, invspAbeta = curState$invspAbeta,
-      Bpars = curState$Bpars, Bbeta = curState$Bbeta,
-      logitCpars = curState$logitCpars, logitCbeta = curState$logitCbeta,
-      logitDpars = curState$logitDpars, logitDbeta = curState$logitDbeta,
-      grain_size = context$grain_size)
-  } else bigIRT_laplace_item_block_objective_cpp_impl(
-    id = sdat$id[context$train_rows], score = sdat$score[context$train_rows], row_ability = context$row_ability,
-    A_ref = context$A_ref, A_fixed_value = context$row_context$fixed_A_value,
-    A_beta_row = context$A_beta_row, A_pred = context$A_pred,
-    B_ref = context$B_ref, B_fixed_value = context$row_context$B_fixed_value,
-    B_beta_row = context$B_beta_row, B_pred = context$B_pred,
-    C_ref = context$C_ref, C_fixed_value = context$row_context$C_fixed_value,
-    C_beta_row = context$C_beta_row, C_pred = context$C_pred,
-    D_ref = context$D_ref, D_fixed_value = context$row_context$D_fixed_value,
-    D_beta_row = context$D_beta_row, D_pred = context$D_pred,
-    invspApars = curState$invspApars, invspAbeta = curState$invspAbeta,
-    Bpars = curState$Bpars, Bbeta = curState$Bbeta,
-    logitCpars = curState$logitCpars, logitCbeta = curState$logitCbeta,
-    logitDpars = curState$logitDpars, logitDbeta = curState$logitDbeta,
-    prior_precision = prior_precision, jitter = jitter, max_attempts = 8L,
-    grain_size = context$grain_size)
-
-  grad <- numeric(length(par))
-  if(length(layout$A)){
-    grad[layout$A] <- grad[layout$A] + cpp$grad_A
-    if(sdat$NAitemPreds > 0 && length(layout$A_beta)) grad[layout$A_beta] <- grad[layout$A_beta] + as.numeric(cpp$grad_A_beta)
-  }
-
-  if(length(layout$B)){
-    grad[layout$B] <- grad[layout$B] + cpp$grad_B
-    if(sdat$NBitemPreds > 0 && length(layout$B_beta)) grad[layout$B_beta] <- grad[layout$B_beta] + as.numeric(cpp$grad_B_beta)
-  }
-
-  if(length(layout$C)){
-    grad[layout$C] <- grad[layout$C] + cpp$grad_C
-    if(sdat$NCitemPreds > 0 && length(layout$C_beta)) grad[layout$C_beta] <- grad[layout$C_beta] + as.numeric(cpp$grad_C_beta)
-  }
-
-  if(length(layout$D)){
-    grad[layout$D] <- grad[layout$D] + cpp$grad_D
-    if(sdat$NDitemPreds > 0 && length(layout$D_beta)) grad[layout$D_beta] <- grad[layout$D_beta] + as.numeric(cpp$grad_D_beta)
-  }
-
-  prior <- bigIRT_laplace_item_prior(curState, sdat)
-  ## The C++ objective accumulates the data log-likelihood at the modes, the
-  ## Gaussian constant and the log-determinant, but not the ability prior
-  ## evaluated at those modes. The Laplace approximation to the marginal is
-  ##   l(theta_hat) + log p(theta_hat) + K/2 log 2pi - 1/2 log|H|,
-  ## so the quadratic -1/2 (theta_hat - mu)' Q (theta_hat - mu) belongs in it.
-  ##
-  ## Omitting it is not a constant offset: theta_hat moves with the item
-  ## parameters. Worse, it is the term that makes df/dtheta vanish at the mode,
-  ## so without it the envelope theorem does not apply to the reported
-  ## objective, and the analytic gradient -- which is correct for the complete
-  ## objective -- disagrees with finite differences of the incomplete one by a
-  ## factor that looks like a broken adjoint.
-  ability_quad <- 0
-  if(!is.null(thetaBase) && !is.null(prior_precision)){
-    th <- as.matrix(thetaBase)
-    mu <- as.numeric(curState$AbilityMean)
-    if(length(mu) == ncol(th)){
-      dev <- sweep(th, 2L, mu, "-")
-      if(!is.null(sdat$fixedAbilityLogical)) dev[sdat$fixedAbilityLogical != 0L] <- 0
-      ## Contract over the K x K x Nsubs precision array with K^2 vector
-      ## operations rather than one small matrix product per subject: the loop
-      ## version cost more than the rest of the objective at realistic sizes.
-      K <- ncol(th)
-      if(K == 1L){
-        ability_quad <- sum(dev[, 1L]^2 * as.numeric(prior_precision))
-      } else {
-        ## Index the K x K x Nsubs array in place. Re-wrapping it with array()
-        ## copies the whole thing on every objective evaluation, and the item
-        ## line search calls this many times per outer iteration.
-        tmp <- matrix(0, nrow(th), K)
-        for(r in seq_len(K)) for(cc in seq_len(K))
-          tmp[, r] <- tmp[, r] + prior_precision[r, cc, ] * dev[, cc]
-        ability_quad <- sum(dev * tmp)
-      }
-    }
-  }
-
-  list(
-    value = cpp$objective + prior$value - 0.5 * ability_quad,
-    grad = grad + prior$grad,
-    state = curState,
-    rowEffective = NULL,
-    cpp = cpp
-  )
-}
-
 bigIRT_laplace_person_step_block_cpp_impl <- function(id, score, theta_init,
   person_pred, fixed_ability, fixed_ability_value,
   A_ref, A_fixed_value, A_beta_row, A_pred,
@@ -1111,7 +1000,6 @@ bigIRT_laplace_person_step_block_cpp_impl <- function(id, score, theta_init,
   )
 }
 
-
 ## Evaluate the direct Laplace objective by solving all person modes inside the
 ## objective call. This is the experimental single-stage backend used by
 ## `marginalApprox = "laplace_direct"`.
@@ -1160,6 +1048,11 @@ bigIRT_laplace_direct_objective <- function(par, state, sdat, prior_precision,
   setup_sec <- wall_time_sec() - t_setup0
   t_kernel0 <- wall_time_sec()
   if(isTRUE(getOption("bigIRT.debug.direct", FALSE))) message("bigIRT debug: entering direct_fg kernel")
+  ## Whether the adjoint gradient path runs decides whether the kernel should
+  ## hand back the per-response effective values it derives along the way.
+  need_person_terms <- length(context$direct_layout$ability_beta) > 0L ||
+    (isTRUE(context$estimateAbilityCorr) && length(context$direct_layout$corr) > 0L) ||
+    length(context$direct_layout$ability_mean) > 0L
   direct_fg <- bigIRT_laplace_direct_block_fg_cpp_impl(
     id = sdat$id[context$train_rows],
     score = sdat$score[context$train_rows],
@@ -1200,7 +1093,8 @@ bigIRT_laplace_direct_objective <- function(par, state, sdat, prior_precision,
     max_iter = max_iter,
     tol = tol,
     keep_covariance = keep_covariance,
-    grain_size = context$grain_size
+    grain_size = context$grain_size,
+    want_row_effective = need_person_terms
   )
   if(isTRUE(getOption("bigIRT.debug.direct", FALSE))) message("bigIRT debug: direct_fg kernel returned")
   kernel_sec <- wall_time_sec() - t_kernel0
@@ -1237,18 +1131,18 @@ bigIRT_laplace_direct_objective <- function(par, state, sdat, prior_precision,
   ## The ability-predictor and latent-correlation gradients both need the
   ## per-person score and log-determinant slope, so build the response rows and
   ## those sums once and share them.
-  need_person_terms <- length(context$direct_layout$ability_beta) > 0L ||
-    (isTRUE(context$estimateAbilityCorr) && length(context$direct_layout$corr) > 0L) ||
-    length(context$direct_layout$ability_mean) > 0L
   person_terms <- NULL
   if(need_person_terms){
-    row_effective <- bigIRT_laplace_row_effective(
-      state = curState,
-      sdat = sdat,
-      thetaBase = posterior$theta_mode,
-      rows = context$train_rows,
-      context = row_context
-    )
+    ## The block kernel already derived these while evaluating the likelihood,
+    ## so take them rather than rebuilding the same four quantities in R. That
+    ## rebuild was a quarter of every objective evaluation on fits with person
+    ## covariates, and keeping one implementation means the gradient and the
+    ## objective cannot drift apart.
+    row_effective <- direct_fg$item_fg$row_effective
+    if(is.null(row_effective))
+      row_effective <- bigIRT_laplace_row_effective(
+        state = curState, sdat = sdat, thetaBase = posterior$theta_mode,
+        rows = context$train_rows, context = row_context)
     person_terms <- bigIRT_laplace_person_row_terms(
       sdat = sdat, posterior = posterior,
       row_effective = row_effective, row_context = row_context
@@ -1301,6 +1195,13 @@ bigIRT_laplace_direct_objective <- function(par, state, sdat, prior_precision,
     )
     corr_grad_sec <- wall_time_sec() - t_corr0
   }
+  ## Chain rule for the rescaled coordinates. The optimiser works in
+  ## u = theta / par_scale, so dL/du = par_scale * dL/dtheta. Applied once, and
+  ## here, so every contributor above -- kernel, adjoint, prior -- stays in the
+  ## natural parameter scale.
+  par_scale <- attr(context$direct_layout, "par_scale")
+  if(length(par_scale) == length(approx_grad))
+    approx_grad <- approx_grad * par_scale
   total_sec <- wall_time_sec() - t_total0
   list(
     value = laplace_value + prior_norm_value + prior$value,
@@ -1327,14 +1228,65 @@ bigIRT_laplace_direct_objective <- function(par, state, sdat, prior_precision,
   )
 }
 
-bigIRT_laplace_ability_beta_mstep_cpp_impl <- function(theta_residual, person_pred,
-  ability_beta, free_mask, beta_scale, jitter){
-  .Call(`_bigIRT_laplace_ability_beta_mstep_cpp_impl`, as.matrix(theta_residual),
-    as.matrix(person_pred), as.matrix(ability_beta), matrix(as.integer(free_mask),
-      nrow=nrow(theta_residual), ncol=ncol(theta_residual)), as.numeric(beta_scale), as.numeric(jitter))
+## One block-Newton direction over the item parameters, from an evaluation that
+## retained the person posterior covariances. Returns a full-length step vector
+## with zeros outside the item blocks; NULL when no blocks are available.
+bigIRT_laplace_newton_step <- function(ev, sdat, context, layout){
+  if(is.null(ev$posterior$covariance)) return(NULL)
+  re <- bigIRT_laplace_row_effective(
+    state = ev$state, sdat = sdat, thetaBase = ev$posterior$theta_mode,
+    rows = context$train_rows, context = context$row_context)
+  bl <- bigIRT_item_info_blocks(state = ev$state, sdat = sdat, context = context,
+    row_effective = re, posterior = ev$posterior,
+    thetaBase = ev$posterior$theta_mode)
+  if(is.null(bl)) return(NULL)
+  P <- bl$P; ni <- bl$ni
+  ps <- attr(layout, "par_scale")
+  step <- numeric(length(ev$approx_grad))
+  for(j in seq_len(ni)){
+    idx <- vapply(bl$active, function(b) layout[[b]][j], integer(1))
+    if(anyNA(idx) || any(idx < 1L)) next
+    H <- matrix(bl$info[, , j], P, P) + diag(bl$prior_precision[, j], P)
+    ## The gradient arrives in the optimiser scale, and the curvature is in the
+    ## natural one, so bring the curvature across before solving.
+    if(length(ps) == length(step)){
+      s <- ps[idx]
+      H <- H * outer(s, s)
+    }
+    sol <- try(solve(H, ev$approx_grad[idx]), silent = TRUE)
+    if(inherits(sol, "try-error") || any(!is.finite(sol))) next
+    step[idx] <- sol
+  }
+
+  ## The mean hyperparameters too. Nothing else polishes them, and after the
+  ## item blocks are cleaned up they are what is left: on an empirical-Bayes
+  ## fit they held 41 per cent of the remaining gradient and kept it just the
+  ## wrong side of the tolerance. Each enters only through the item prior, so
+  ## its curvature is exact and needs no data pass:
+  ##   d2/dmu2  =  Nitems / sd^2  +  1 / muSD^2.
+  mean_blocks <- list(
+    B_mean = c(sd = "BSDx",     musd = "BMeanSD"),
+    A_mean = c(sd = "invspASD", musd = "AMeanSD"),
+    C_mean = c(sd = "logitCSD", musd = "logitCMeanSD"),
+    D_mean = c(sd = "logitDSD", musd = "logitDMeanSD"))
+  n_free <- c(B_mean = length(ev$state$Bpars), A_mean = length(ev$state$invspApars),
+              C_mean = length(ev$state$logitCpars), D_mean = length(ev$state$logitDpars))
+  for(nm in names(mean_blocks)){
+    idx <- layout[[nm]]
+    if(!length(idx) || n_free[[nm]] == 0L) next
+    sd_b <- suppressWarnings(as.numeric(sdat[[mean_blocks[[nm]][["sd"]]]])[1])
+    mu_sd <- suppressWarnings(as.numeric(sdat[[mean_blocks[[nm]][["musd"]]]])[1])
+    if(!isTRUE(is.finite(sd_b)) || sd_b <= 0) next
+    H <- n_free[[nm]] / sd_b^2
+    if(isTRUE(is.finite(mu_sd)) && mu_sd > 0) H <- H + 1 / mu_sd^2
+    if(length(ps) == length(step)) H <- H * ps[idx]^2
+    if(!is.finite(H) || H <= 0) next
+    step[idx] <- ev$approx_grad[idx] / H
+  }
+
+  if(all(step == 0)) return(NULL)
+  step
 }
-
-
 
 ## Optimize the direct Laplace objective with person modes solved inside each
 ## objective evaluation. The current implementation uses the exact direct
@@ -1345,7 +1297,8 @@ bigIRT_laplace_optimize_direct <- function(state, sdat, prior_precision,
   keep_covariance = FALSE, cores = 1L, estimateAbilityCorr = FALSE,
   corr_paramization = c("normalized_chol", "stan_corsqrt"),
   collect_history = FALSE, plot_callback = NULL, plot_every = 1L,
-  verbose = 0L, trace_fn = NULL, stochastic = FALSE){
+  verbose = 0L, trace_fn = NULL, stochastic = FALSE, polish_steps = 8L,
+  polish_tol = 1e-8){
   corr_paramization <- match.arg(corr_paramization)
   direct_layout <- bigIRT_laplace_direct_layout(sdat, estimateAbilityCorr = estimateAbilityCorr)
   item_layout <- direct_layout[setdiff(names(direct_layout), c("corr", "ability_mean", "ability_beta"))]
@@ -1533,8 +1486,58 @@ bigIRT_laplace_optimize_direct <- function(state, sdat, prior_precision,
       ginf_tol = 0
     )
   }
+  ## Newton polish.
+  ##
+  ## L-BFGS gives up early on large problems: at 8 million responses it stopped
+  ## reporting progress with a Newton decrement of 300, and a single Newton step
+  ## from that point recovered 146 units of objective against 149.5 predicted.
+  ## The curvature needed is the per-item information the empirical-Bayes path
+  ## already builds, so each step costs one closed-form assembly plus a short
+  ## backtracking search. The item blocks carry essentially all of the remaining
+  ## gradient, so only they are stepped.
+  polish <- list(steps = 0L, gain = 0)
+  if(polish_steps > 0L){
+    for(sIt in seq_len(as.integer(polish_steps))){
+      cur <- bigIRT_laplace_direct_objective(
+        par = fit$par, state = state, sdat = sdat, prior_precision = prior_precision,
+        theta_init = theta_warm, jitter = jitter, tol = person_tol,
+        keep_covariance = TRUE, context = context)
+      stp <- try(bigIRT_laplace_newton_step(cur, sdat, context, direct_layout), silent = TRUE)
+      if(inherits(stp, "try-error") || is.null(stp)) break
+      predicted <- 0.5 * sum(cur$approx_grad * stp)
+      if(!is.finite(predicted) || predicted <= polish_tol) break
+      moved <- FALSE
+      for(alpha in c(1, 0.5, 0.25, 0.1, 0.05)){
+        cand <- fit$par + alpha * stp
+        ## Covariances must be retained here. With person covariates, an
+        ## estimated ability mean or an estimated correlation, the gradient
+        ## path needs them and throws without them -- which a tryCatch turns
+        ## into a rejected step, so the polish silently does nothing on exactly
+        ## the fits that need it most.
+        v <- tryCatch(bigIRT_laplace_direct_objective(
+          par = cand, state = state, sdat = sdat, prior_precision = prior_precision,
+          theta_init = theta_warm, jitter = jitter, tol = person_tol,
+          keep_covariance = TRUE, context = context)$value,
+          error = function(e) -Inf)
+        if(is.finite(v) && v > cur$value){
+          fit$par <- cand
+          polish$gain <- polish$gain + (v - cur$value)
+          polish$steps <- polish$steps + 1L
+          moved <- TRUE
+          break
+        }
+      }
+      if(!moved) break
+    }
+  }
+  fit$polish <- polish
   final <- get_eval(fit$par)
   fit$masked_grad_norm <- sqrt(sum(final$approx_grad^2))
+  ## Keep the vector, not only its norm.  A single scaled norm cannot say which
+  ## block failed to settle, and that is exactly the question asked whenever a
+  ## fit stops short; it is one double per free item parameter.
+  fit$grad <- final$approx_grad
+  fit$layout <- direct_layout
   fit$target_evals <- eval_count
   fit$logLik <- final$value
   fit$timings <- final$timings
@@ -1604,7 +1607,43 @@ bigIRT_laplace_transformed_betas <- function(state, sdat){
 ## slope, and it is the same quantity, so it is built once per objective
 ## evaluation and shared. Vectorised over responses on purpose: the obvious
 ## per-response loop cost more than the rest of the fit put together.
-bigIRT_laplace_person_row_terms <- function(sdat, posterior, row_effective, row_context){
+bigIRT_laplace_person_row_terms_cpp_impl <- function(ids, y, eta, c_row, d_row,
+  loadings, sigma, N, K){
+  .Call(`_bigIRT_laplace_person_row_terms_cpp_impl`, as.integer(ids),
+    as.numeric(y), as.numeric(eta), as.numeric(c_row), as.numeric(d_row),
+    as.matrix(loadings), as.numeric(sigma), as.integer(N), as.integer(K))
+}
+
+## Per-person score and log-determinant-slope terms.
+##
+## This was a third of every objective evaluation on fits with person
+## covariates -- the adjoint gradient path needs it, and in R it walked
+## Nobs-length vectors a dozen times over. The arithmetic is elementwise plus
+## one scatter by person, so it moved to C++ whole. `impl = "R"` keeps the
+## original available, and the two are checked against each other in the tests.
+bigIRT_laplace_person_row_terms <- function(sdat, posterior, row_effective,
+  row_context, impl = c("cpp", "R")){
+  impl <- match.arg(impl)
+  if(identical(impl, "R"))
+    return(bigIRT_laplace_person_row_terms_R(sdat, posterior, row_effective, row_context))
+  if(is.null(posterior$covariance))
+    stop("bigIRT_laplace_person_row_terms needs posterior covariances; the caller must set keep_covariance.")
+  K <- as.integer(sdat$Nscales)
+  lo <- row_effective$loadings
+  if(is.null(dim(lo))) lo <- matrix(lo, ncol = K)
+  bigIRT_laplace_person_row_terms_cpp_impl(
+    ids = row_context$ids,
+    y = sdat$score[row_context$rows],
+    eta = row_effective$eta_row,
+    c_row = row_effective$c_row,
+    d_row = row_effective$d_row,
+    loadings = lo,
+    sigma = posterior$covariance,
+    N = as.integer(sdat$Nsubs),
+    K = K)
+}
+
+bigIRT_laplace_person_row_terms_R <- function(sdat, posterior, row_effective, row_context){
   if(is.null(posterior$covariance)) stop("bigIRT_laplace_person_row_terms needs posterior covariances; the caller must set keep_covariance.")
   K <- as.integer(sdat$Nscales)
   N <- as.integer(sdat$Nsubs)
@@ -1703,7 +1742,6 @@ bigIRT_laplace_ability_beta_contribution <- function(state, sdat, posterior, row
   out
 }
 
-
 bigIRT_laplace_constrained_pars <- function(state, sdat, posterior = NULL){
   rows <- seq_len(sdat$Nobs)
   row_context <- bigIRT_laplace_row_context(sdat, rows = rows)
@@ -1779,15 +1817,6 @@ bigIRT_laplace_constrained_pars <- function(state, sdat, posterior = NULL){
   }
   out
 }
-
-bigIRT_laplace_can_rescale <- function(sdat){
-  sdat$NitemPreds == 0 &&
-    sdat$NpersonPreds == 0 &&
-    !any(sdat$fixedB == 1L) &&
-    !any(sdat$fixedAbilityLogical == 1L) &&
-    !any(sdat$fixedAlog == 1L & abs(sdat$Adata) > 1e-10)
-}
-
 
 ## Empirical Bayes hyperparameter update for the Laplace backend.
 ##

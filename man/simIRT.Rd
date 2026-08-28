@@ -66,6 +66,9 @@ sparse-response datasets.}
 
 \item{AbilityMean}{Numeric. Mean of simulated person abilities.}
 
+\item{AbilityCorr}{Matrix. Correlation matrix for the latent abilities,
+used when \code{Nscales > 1}. Defaults to the identity.}
+
 \item{itemPreds}{Optional matrix/data frame of item-level predictors. Rows
 should align with items.}
 

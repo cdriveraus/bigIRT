@@ -13,6 +13,12 @@
 #' @import methods
 #' @import Rcpp data.table mize parallel
 #' @importFrom rstan sampling
+#' @importFrom stats median quantile var rnorm qnorm
+#' @importFrom stats nobs logLik vcov
+#' @importFrom stats AIC BIC cor cov2cor dnorm rbinom runif sd setNames
+#' @importFrom graphics abline matplot
+#' @importFrom utils head tail write.csv
+#' @importFrom graphics par hist arrows points axis mtext legend
 #' @keywords internal
 #'
 #' @references

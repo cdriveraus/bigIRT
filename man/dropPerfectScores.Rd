@@ -15,13 +15,13 @@ dropPerfectScores(
 \arguments{
 \item{dat}{The input data table}
 
-\item{scoreref}{The column name of the score variable in \code{dat}}
+\item{scoreref.}{The column name of the score variable in \code{dat}}
 
-\item{itemref}{The column name of the item variable in \code{dat}}
+\item{itemref.}{The column name of the item variable in \code{dat}}
 
-\item{idref}{The column name of the id variable in \code{dat}}
+\item{idref.}{The column name of the id variable in \code{dat}}
 
-\item{tol}{Tolerance level for checking perfect scores -- .01 would drop subjects with less than 1\% correct or incorrect}
+\item{tol.}{Tolerance level for checking perfect scores -- .01 would drop subjects with less than 1\% correct or incorrect}
 }
 \value{
 The input data table (\code{dat}) without variables/items and subjects with all perfect scores.

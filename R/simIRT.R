@@ -355,6 +355,8 @@ IRTcurve <- function(A, B, C = 0, D = 1, theta = seq(-3, 3, .01),
 #' @param returnRowLoadings Logical. If `TRUE` and `mirt=TRUE`, include per-row
 #'   loading columns (`A_1`, ..., `A_K`) in `dat`.
 #'
+#' @param AbilityCorr Matrix. Correlation matrix for the latent abilities,
+#'   used when `Nscales > 1`. Defaults to the identity.
 #' @return A list with:
 #' \describe{
 #'   \item{Ability}{Matrix of true person abilities (`Nsubs x Nscales`).}

@@ -44,15 +44,24 @@ fitIRT(
   ebayes = TRUE,
   ebayesmultiplier = 2,
   ebayesFromFixed = FALSE,
+  ebayesIter = 5L,
+  ebayesMethod = c("laplace", "moment"),
+  ebayesMinSD = 0.05,
+  ebayesCoarse = 100,
   estMeans = c("A", "B", "C", "D"),
   priors = TRUE,
   marginalApprox = c("none", "laplace", "laplace_fast", "laplace_direct"),
   estimateAbilityCorr = FALSE,
   laplaceCorrParam = c("stan_corsqrt", "normalized_chol"),
+  keepInternals = FALSE,
+  laplaceAdjointScale = 1,
+  laplaceLogdetScale = 1,
   laplaceOuterIter = 500,
   laplaceTol = 0.001,
   laplaceTolScale = c("relative", "per_obs"),
-  laplaceGradTol = 0.01,
+  laplaceGradTol = 1e-04,
+  laplacePolish = 8L,
+  laplacePrecond = 0L,
   laplacePersonTol = 1e-04,
   laplaceKeepCovariance = FALSE,
   laplaceDiagnostics = FALSE,
@@ -124,15 +133,35 @@ which subsequently have a 'softplus' log(1+exp(x)) applied. Default is 0.542, gi
 
 \item{BMeandat}{Numeric. Mean for the prior distribution of the item difficulty parameters. Default is 0.}
 
-\item{BSD}{Numeric. Standard deviation for the prior distribution of the item difficulty parameters. Default is 2.5, on the scale of \code{AbilitySD}. The previous default of 10 was effectively flat and let difficulty absorb the error in a weakly identified 3PL/4PL asymptote. Widen it for vertical scales.}
+\item{BSD}{Numeric. Standard deviation for the prior distribution of the
+item difficulty parameters. Default is 2.5, on the scale of
+\code{AbilitySD}. The previous default of 10 was effectively flat: on a
+standardised ability scale it puts about 69 per cent of its mass beyond
+|B| > 4, where an item is answered by almost everybody or almost nobody.
+Difficulty is well identified in a 2PL and barely notices, but under a 3PL
+or 4PL it absorbs the error in a weakly identified asymptote and runs away
+-- measured difficulty RMSE above 3 on sparse 4PL cells, against 0.4 with
+this default. Widen it for vertical scales, whose difficulties genuinely
+span more than this.}
 
 \item{logitCMeandat}{Numeric. Mean for the prior distribution of the item guessing parameters (on logit scale). Default is 0.}
 
-\item{logitCSD}{Numeric. Standard deviation for the prior distribution of the item guessing parameters (on logit scale). Default is 1. The previous default of 5 gave a prior precision of 0.04, negligible against any data, so per-item guessing was effectively unconstrained.}
+\item{logitCSD}{Numeric. Standard deviation for the prior distribution of
+the item guessing parameters (on logit scale). Default is 1. The previous
+default of 5 carried a prior precision of 0.04, which is negligible
+against any data, so per-item guessing was effectively unconstrained; 1
+gives precision comparable to what a handful of responses provide. Note
+that guessing is generally not recoverable per item at realistic test
+lengths -- fitted values correlate with the truth at around .07 on 20
+responses an item -- so this prior mostly decides how firmly items pool
+towards a common asymptote.}
 
 \item{logitDMeandat}{Numeric. Mean for the prior distribution of the item upper asymptote parameters (on logit scale). Default is 0.}
 
-\item{logitDSD}{Numeric. Standard deviation for the prior distribution of the item upper asymptote parameters (on logit scale). Default is 1, for the reasons given under \code{logitCSD}.}
+\item{logitDSD}{Numeric. Standard deviation for the prior distribution of
+the item upper asymptote parameters (on logit scale). Default is 1, for
+the reasons given under \code{logitCSD}; the upper asymptote is usually
+pinned by even fewer responses than the lower one.}
 
 \item{AbilityMeandat}{Numeric array. Mean for the prior distribution of the ability parameters. Default is 0 for each scale.}
 
@@ -163,24 +192,30 @@ which subsequently have a 'softplus' log(1+exp(x)) applied. Default is 0.542, gi
 \item{ebayesFromFixed}{Logical. Whether to initialize empirical Bayes from any specifed fixed values Default is FALSE.}
 
 \item{ebayesIter}{Integer. Maximum empirical-Bayes rounds on the Laplace
-backend. Each round refits, re-estimates the prior hyperparameters from that
-fit, and stops early once they settle. A block whose update reverses direction
-is frozen at its turning point rather than allowed to drift. Ignored when
+backend. Each round refits, updates the prior hyperparameters from the fit
+by the EM M-step for a normal-normal hierarchy, and stops early once every
+hyperparameter moves by less than a thousandth. Ignored when
 \code{ebayes = FALSE} or on the JML path, which runs its own single
 empirical-Bayes step. Default is 5.}
 
 \item{ebayesMethod}{Character. How the Laplace backend estimates prior
 hyperparameters when \code{ebayes = TRUE}. \code{"laplace"} (default)
-approximates the integral over the item parameters and maximises the resulting
-profile marginal, which is bounded and needs no floor or multiplier.
-\code{"moment"} keeps the earlier variance-components rule, which is faster
-but relies on a floor. Ignored on the JML path.}
+approximates the integral over the item parameters and maximises the
+resulting profile marginal, which is bounded and needs no floor or
+multiplier. \code{"moment"} keeps the earlier variance-components rule,
+which is faster but relies on a floor. Ignored on the JML path.}
 
 \item{ebayesMinSD}{Numeric. Floor on a prior SD estimated by
-\code{ebayesMethod = "moment"}. That rule subtracts a sampling-noise term and
-reaches zero whenever the data cannot support item-level variation, so the
-floor decides how hard those blocks pool. It does not apply to
+\code{ebayesMethod = "moment"}. That rule subtracts a sampling-noise term
+and reaches zero whenever the data cannot support item-level variation, so
+the floor decides how hard those blocks pool. It does not apply to
 \code{"laplace"}, which is bounded by its own objective. Default is 0.05.}
+
+\item{ebayesCoarse}{Numeric. Tolerance multiplier for the intermediate
+empirical-Bayes refits on the Laplace backend. Those rounds exist only to
+produce estimates to update the hyperparameters from, so they are run at
+\code{laplaceTol * ebayesCoarse}; the final fit always uses
+\code{laplaceTol}. Default is 100.}
 
 \item{estMeans}{Character vector. Which means to estimate from 'ability', 'A', 'B', 'C', 'D'. Default is c('ability', 'B', 'C', 'D'), with
 discrimination means fixed.}
@@ -189,19 +224,154 @@ discrimination means fixed.}
 
 \item{marginalApprox}{Character. Marginal approximation backend. Use
 \code{"none"} for the legacy Stan/JML path, or \code{"laplace"} for the
-Laplace backend: a single-stage optimizer over the item block that re-solves
-the person modes inside every objective evaluation and differentiates through
-them, so the gradient carries the adjoint term rather than treating the modes
-as fixed. It accepts item predictors, person predictors, estimated ability
-means and estimated latent correlations, and its gradient agrees with central
-finite differences in every one of those blocks. Predictor columns are
-response-row aligned and can vary within a person or item; the likelihood
-retains their exact row values while reported person/item summaries use
-within-entity predictor means. \code{"laplace_fast"} and
-\code{"laplace_direct"} are accepted as names for this same backend: they
-were once two implementations, an alternating one that froze the modes during
-an item step and this one, and the alternating one was withdrawn after it
-proved slower for the same answer. Default is \code{"none"}.}
+Laplace backend: a single-stage optimizer over the item block that
+re-solves the person modes inside every objective evaluation and
+differentiates through them, so the gradient carries the adjoint term
+rather than treating the modes as fixed. It accepts item predictors,
+person predictors, estimated ability means and estimated latent
+correlations, and its gradient agrees with central finite differences in
+every one of those blocks. Predictor columns are response-row aligned and
+can vary within a person or item; the likelihood retains their exact row
+values while reported person/item summaries use within-entity predictor
+means. \code{"laplace_fast"} and \code{"laplace_direct"} are accepted as
+names for this same backend: they were once two implementations, an
+alternating one that froze the modes during an item step and this one, and
+the alternating one was withdrawn after it proved slower for the same
+answer. Default is \code{"none"}.}
+
+\item{estimateAbilityCorr}{Logical. If \code{TRUE}, estimate the latent
+ability correlation matrix while keeping \code{AbilitySD} fixed, so that
+only the correlation is free (the latent scale is not identified
+separately from the loadings). Supported by \code{marginalApprox =
+"laplace"}, which optimises
+it as part of the parameter vector. Ignored for other backends and for
+unidimensional fits. It forces \code{laplaceKeepCovariance}, because the
+person posterior covariances are required: modes are shrunk towards zero
+by the prior, so their cross-product alone understates the correlation.
+The result is returned in \code{fit$abilityPrior$corr}, with
+\code{fit$abilityPrior$estimated} recording whether it was estimated or
+held fixed. This prior-level correlation is the quantity to report: the
+correlation among fitted ability point estimates is biased, downwards
+under an independent prior and upwards under a correlated one.
+Default is FALSE.}
+
+\item{laplaceCorrParam}{Character. Parameterisation used for the latent
+correlation when \code{estimateAbilityCorr = TRUE}.}
+
+\item{keepInternals}{Logical. Attach the prepared data (\code{sdat}), the
+final parameter state and the prior precision array to the returned fit.
+Off by default because these carry copies of the response arrays. Useful
+for verifying analytic gradients against finite differences, and for
+inspecting a fit that stopped somewhere unexpected.}
+
+\item{laplaceAdjointScale}{Numeric. Weight on the mode-adjoint correction in
+the item gradient. The item step evaluates its objective at frozen person
+modes but its gradient carries a correction for how those modes move with
+the item parameters, so the two do not describe quite the same function.
+Against finite differences the correction is roughly an order of magnitude
+too small. Raising this weight improves the Laplace objective monotonically
+and degrades recovery of the generating parameters monotonically, so the
+default of 1 is kept: it is where recovery is best, not where the gradient
+is right. Setting 0 removes the correction, which is worse on both counts.
+Exposed for diagnosis; see the package notes before changing it.}
+
+\item{laplaceLogdetScale}{Numeric. Weight on the Laplace log-determinant,
+applied to the objective and to both of its gradient contributions, so
+value and gradient always describe the same function. 1 is the Laplace
+objective; 0 drops the log-determinant and leaves the joint posterior;
+values between damp the Occam penalty that this term places on
+discrimination. Use this when shrinkage is wanted, in preference to
+detuning \code{laplaceAdjointScale}: damping the gradient alone leaves the
+optimiser minimising something it is not evaluating, and makes the
+convergence diagnostics report on a function that does not exist.}
+
+\item{laplaceOuterIter}{Integer. Maximum number of outer iterations for a
+Laplace backend. This is a fallback limit rather than
+the primary convergence criterion. Default is 500.}
+
+\item{laplaceTol}{Numeric. General outer tolerance for
+\code{marginalApprox="laplace"}, used for relative objective
+improvement and RMS step-size checks. Default is 1e-3.}
+
+\item{laplaceTolScale}{Character. What the objective-change tolerances in
+\code{laplaceTol} are measured against on the Laplace path.
+\code{\"relative\"} (the default, and the historical behaviour) divides
+the change by the size of the objective. Because the objective grows
+with the number of responses, the same nominal tolerance becomes laxer
+as data grow: on several million responses a relative change of 1e-3 is
+an absolute change in the thousands, and a fit can stop while it is
+still moving. \code{\"per_obs\"} divides by the number of responses
+instead, so the quantity thresholded is the change in mean
+log-likelihood per response and does not depend on data size. Prefer it
+when comparing fits across designs of very different sizes, but note
+that it is far stricter at large N: a tolerance chosen for
+\code{\"relative\"} should not be carried over unchanged. The scale used
+is recorded in \code{laplaceStatus$tolerance_scale}.}
+
+\item{laplaceGradTol}{Numeric. Tolerance for the item-block gradient,
+measured relative to the objective rather than as a raw norm: the reported
+norm is divided by the same denominator \code{laplaceTolScale} selects for
+the objective. An absolute norm grows with both the number of item
+parameters and the number of responses, so an absolute threshold cannot be
+met by a large sparse fit however well converged it is. Both the raw and
+the scaled value are returned in \code{laplaceStatus}. Formerly a
+gradient-norm tolerance for the item-step
+Laplace surrogate. Default is 1e-2.}
+
+\item{laplacePolish}{Integer. Maximum block-Newton polish steps taken after
+the quasi-Newton optimizer stops, on the final fit only. L-BFGS gives up
+early on large problems: at eight million responses it reported no further
+progress while a single Newton step still recovered 146 units of objective.
+The curvature is the per-item information already used for standard errors,
+so a step costs one closed-form assembly and a short backtracking search.
+Set to 0 to disable. Default is 8.}
+
+\item{laplacePrecond}{Integer. Warm-up iterations after which the item block
+is preconditioned, or 0 to leave the optimizer alone. The item curvature is
+block diagonal to about one per cent, so L-BFGS spends thirty stored vectors
+approximating something available in closed form. Changing variables so that
+block becomes the identity leaves L-BFGS to handle only the coupling between
+items. The warm-up matters: curvature at the starting values is not curvature
+near the optimum. Default is 0.}
+
+\item{laplacePersonTol}{Numeric. Newton tolerance for person-mode updates in
+\code{"laplace"}. Default is 1e-4.}
+
+\item{laplaceKeepCovariance}{Logical. Whether to keep full person covariance
+matrices on the Laplace path. Covariances are otherwise retained only when
+needed to estimate ability correlations. Default is FALSE.}
+
+\item{laplaceDiagnostics}{Logical. Whether to store outer-loop diagnostics for
+\code{"laplace"}. Default is FALSE.}
+
+\item{laplacePlot}{Logical. Whether to draw the Laplace diagnostic plot during
+fitting when \code{marginalApprox="laplace"}. Default is FALSE.}
+
+\item{laplacePlotEvery}{Integer. Plot every N outer iterations when
+\code{laplacePlot=TRUE}. Default is 1.}
+
+\item{laplaceJitter}{Numeric. Small jitter added to stabilize Laplace
+covariance calculations. Default is 1e-6.}
+
+\item{noptimsteps}{Integer. Number of optimizer iterations used inside each
+Laplace item step. Default is 10.}
+
+\item{normalise}{Logical. Whether to normalize the output estimates. Default is FALSE.}
+
+\item{normaliseScale}{Numeric. Scale for normalization. Default is 1.}
+
+\item{normaliseMean}{Numeric. Mean for normalization. Default is 0.}
+
+\item{dropPerfectScores}{Logical. Whether to drop perfect scores from each subject and item before estimation. Default is TRUE.}
+
+\item{trainingRows}{Integer vector. Rows of data to use for estimation of parameters. Default is all rows in \code{dat}.}
+
+\item{init}{Initial values for the fitting algorithm. Default is NA.}
+
+\item{tol}{Numeric. Tolerance for convergence. Default attempts to sensibly adjust for amount of data.}
+
+\item{...}{Additional arguments passed to the fitting function.}
+}
 \value{
 An object of class \code{bigIRT_fit}. All fits retain the legacy
 fields. Laplace fits additionally provide \code{laplaceStatus}: strict
