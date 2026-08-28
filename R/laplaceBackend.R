@@ -1791,38 +1791,47 @@ bigIRT_laplace_ability_beta_contribution <- function(state, sdat, posterior, row
   ## is not the derivative of anything. Recovery of a known within-person effect
   ## was the symptom -- a true 0.50 came back as -0.31, sign and all -- while
   ## between-person effects, where the two agree, recovered correctly.
-  if(!any(varying)){
-    xmat <- matrix(0, N, P)
-    xmat[ids, ] <- as.matrix(row_context$person_pred)
-    out <- t(reduce(sacc, gacc)) %*% xmat
-    dimnames(out) <- NULL
-    return(out)
-  }
-
-  if(is.null(row_effective))
-    stop("laplace_direct Abilitybeta gradients need the response rows when a person predictor varies within person.")
-  pieces <- bigIRT_laplace_row_gradient_pieces(sdat, posterior, row_effective, row_context)
-  lo <- pieces$loadings
-  X <- as.matrix(row_context$person_pred)
-
-  ## One rowsum over all covariates at once: for each p, K columns of the
-  ## x-weighted score and K of the x-weighted log-determinant slope.
-  cols <- vector("list", P)
-  for(pp in seq_len(P)){
-    xw <- X[, pp]
-    cols[[pp]] <- cbind((pieces$grad_eta * xw) * lo, (pieces$slope_w * xw) * lo)
-  }
-  acc_raw <- rowsum(do.call(cbind, cols), group = ids)
-  acc <- matrix(0, N, 2L * K * P)
-  acc[as.integer(rownames(acc_raw)), ] <- acc_raw
-
   out <- matrix(0, K, P)
-  for(pp in seq_len(P)){
-    off <- (pp - 1L) * 2L * K
-    sx <- acc[, off + seq_len(K), drop = FALSE]
-    gx <- acc[, off + K + seq_len(K), drop = FALSE]
-    out[, pp] <- colSums(reduce(sx, gx))
+
+  ## Person-constant covariates keep the cheap route: their weight factors out
+  ## of the sum over a person's responses, so the person-level totals need only
+  ## be multiplied by it. Mixed sets are common -- a within-person time term
+  ## beside between-person ones -- and only the varying columns should pay for
+  ## the exact path.
+  const_idx <- which(!varying)
+  if(length(const_idx)){
+    xmat <- matrix(0, N, length(const_idx))
+    xmat[ids, ] <- as.matrix(row_context$person_pred)[, const_idx, drop = FALSE]
+    out[, const_idx] <- t(reduce(sacc, gacc)) %*% xmat
   }
+
+  vary_idx <- which(varying)
+  if(length(vary_idx)){
+    if(is.null(row_effective))
+      stop("laplace_direct Abilitybeta gradients need the response rows when a person predictor varies within person.")
+    pieces <- bigIRT_laplace_row_gradient_pieces(sdat, posterior, row_effective, row_context)
+    lo <- pieces$loadings
+    X <- as.matrix(row_context$person_pred)
+
+    ## One rowsum for all varying covariates at once: for each, K columns of the
+    ## x-weighted score and K of the x-weighted log-determinant slope.
+    cols <- vector("list", length(vary_idx))
+    for(j in seq_along(vary_idx)){
+      xw <- X[, vary_idx[j]]
+      cols[[j]] <- cbind((pieces$grad_eta * xw) * lo, (pieces$slope_w * xw) * lo)
+    }
+    acc_raw <- rowsum(do.call(cbind, cols), group = ids)
+    acc <- matrix(0, N, 2L * K * length(vary_idx))
+    acc[as.integer(rownames(acc_raw)), ] <- acc_raw
+
+    for(j in seq_along(vary_idx)){
+      off <- (j - 1L) * 2L * K
+      sx <- acc[, off + seq_len(K), drop = FALSE]
+      gx <- acc[, off + K + seq_len(K), drop = FALSE]
+      out[, vary_idx[j]] <- colSums(reduce(sx, gx))
+    }
+  }
+
   dimnames(out) <- NULL
   out
 }
