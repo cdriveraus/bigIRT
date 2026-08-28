@@ -61,7 +61,6 @@ fitIRT(
   laplaceTolScale = c("relative", "per_obs"),
   laplaceGradTol = 1e-04,
   laplacePolish = 8L,
-  laplacePrecond = 0L,
   laplacePersonTol = 1e-04,
   laplaceKeepCovariance = FALSE,
   laplaceDiagnostics = FALSE,
@@ -325,14 +324,6 @@ progress while a single Newton step still recovered 146 units of objective.
 The curvature is the per-item information already used for standard errors,
 so a step costs one closed-form assembly and a short backtracking search.
 Set to 0 to disable. Default is 8.}
-
-\item{laplacePrecond}{Integer. Warm-up iterations after which the item block
-is preconditioned, or 0 to leave the optimizer alone. The item curvature is
-block diagonal to about one per cent, so L-BFGS spends thirty stored vectors
-approximating something available in closed form. Changing variables so that
-block becomes the identity leaves L-BFGS to handle only the coupling between
-items. The warm-up matters: curvature at the starting values is not curvature
-near the optimum. Default is 0.}
 
 \item{laplacePersonTol}{Numeric. Newton tolerance for person-mode updates in
 \code{"laplace"}. Default is 1e-4.}
