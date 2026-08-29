@@ -1,26 +1,39 @@
 optimBisection <- function(fn, maxiter=200,tol=.001,mn=-5, mx=5,...){
 
-  startingPhaseCount <- 1 #start with specified range (ideally sensible but narrow), expand as needed
-  while(startingPhaseCount < 10){
-    fnmn <- fn(mn,...) #function values at initial minimum
-    fnmx <- fn(mx,...) #function values at initial maximum
-
-    if(is.na(fnmn)) mn <- mn + (mx-mn)/3 #reduce minimum boundary
-    if(is.na(fnmx)) mx <- mx - (mx-mn)/3 #reduce maximum boundary
-
-    if(all(!is.na(c(fnmn,fnmx))) && sign(fnmn) != sign(fnmx)){ #if min and max could be computed, and if they have different signs
-        startingPhaseCount <- 999 #set to ensure progress beyond starting phase
-    } else {
-      if(all(!is.na(c(fnmn,fnmx)))){ #if min and max could be computed but were same sign, expand boundaries
-      mn <- mn - (mx-mn) #expand minimum boundary
-      mx <- mx + (mx-mn) #expand maximum boundary
-      }
+  ## Widen or pull in the bracket until both endpoints can be evaluated and
+  ## straddle a root. A response pattern with no interior root -- every item
+  ## correct, or none -- never straddles one, so the attempt count has to end
+  ## the search: previously the counter was set once and only ever cleared by
+  ## success, and such a person sent this into an unbreakable loop.
+  fnmn <- NA_real_
+  fnmx <- NA_real_
+  bracketed <- FALSE
+  for(attempt in seq_len(10L)){
+    fnmn <- fn(mn, ...)
+    fnmx <- fn(mx, ...)
+    if(is.na(fnmn) || is.na(fnmx)){
+      width <- mx - mn
+      if(is.na(fnmn)) mn <- mn + width / 3
+      if(is.na(fnmx)) mx <- mx - width / 3
+      next
     }
+    if(sign(fnmn) != sign(fnmx)){
+      bracketed <- TRUE
+      break
+    }
+    ## Widen both ways by the current width. Computing it once matters: taking
+    ## mx - mn again after moving mn made the upper expansion twice the lower.
+    width <- mx - mn
+    mn <- mn - width
+    mx <- mx + width
   }
 
-  if(sign(fnmn)==sign(fnmx)){ #if same sign after all expansions there is a problem, exit function returning mid value
-    return( (mx+mn)/2)
-  }
+  ## No bracket means no root to report. Returning the midpoint of whatever
+  ## interval the search happened to end on invents an estimate: on a fit with
+  ## runaway discriminations the gradient is not computable over half the range,
+  ## no person brackets, and every one of them comes back with the same
+  ## fabricated number. NA says what is true.
+  if(!bracketed) return(NA_real_)
 
   iter=0 #iteration counter
   step=  (mx-mn)/2 #initial step size
@@ -111,6 +124,11 @@ wleIRT <- function(fit){
         score = score_sel)
     }
   }
+  nfail <- sum(is.na(wle))
+  if(nfail)
+    warning(sprintf(
+      "wleIRT: no weighted likelihood estimate exists for %d of %d person-scale cells. This happens when the item parameters leave the gradient uncomputable over part of the ability range, which extreme discriminations will do.",
+      nfail, length(wle)), call. = FALSE)
   return(list(wle=wle,wleSE=wleSE))
 }
 
