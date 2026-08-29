@@ -63,9 +63,9 @@ bigIRT_item_info_blocks <- function(state, sdat, context, row_effective, posteri
   lo <- row_effective$loadings
   if(is.null(dim(lo))) lo <- matrix(lo, ncol = K)
   Sig <- posterior$covariance
-  aSa <- numeric(length(ids))
-  for(k in seq_len(K)) for(l in seq_len(K))
-    aSa <- aSa + lo[, k] * lo[, l] * Sig[k, l, ids]
+  ## One pass rather than K^2 passes over the response set.
+  aSa <- .Call(`_bigIRT_row_aSa_cpp_impl`, ids, lo, as.numeric(Sig),
+               as.integer(sdat$Nsubs), K)
   ## The Laplace correction: information in an item parameter net of what the
   ## person's own uncertainty already absorbs. Without it these are conditional
   ## (JML-like) standard errors and are too small.
@@ -119,17 +119,12 @@ bigIRT_item_info_blocks <- function(state, sdat, context, row_effective, posteri
   if(!length(active)) return(NULL)
   V <- V[active]; est <- est[active]; P <- length(active)
 
+  ## All P(P+1)/2 pairs gathered by item in one pass, rather than a rowsum over
+  ## every response for each pair.
   item <- as.integer(context$B_ref)
-  scat <- function(x){
-    agg <- rowsum(x, item); out <- numeric(ni)
-    out[as.integer(rownames(agg))] <- as.numeric(agg); out
-  }
-  S <- array(0, c(P, P, ni), dimnames = list(active, active, NULL))
-  for(b1 in seq_len(P)) for(b2 in b1:P){
-    v <- scat(V[[b1]] * V[[b2]] * wcorr)
-    S[b1, b2, ] <- v
-    if(b2 > b1) S[b2, b1, ] <- v
-  }
+  S <- .Call(`_bigIRT_item_info_accum_cpp_impl`, item,
+             matrix(unlist(V, use.names = FALSE), ncol = P), wcorr, ni)
+  dimnames(S) <- list(active, active, NULL)
 
   prior_sd <- c(B = "BSDx", A = "invspASD", C = "logitCSD", D = "logitDSD")
   prec <- matrix(0, nrow = P, ncol = ni, dimnames = list(active, NULL))

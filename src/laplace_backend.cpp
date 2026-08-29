@@ -692,6 +692,72 @@ extern "C" SEXP _bigIRT_laplace_person_row_terms_cpp_impl(
   END_RCPP
 }
 
+// a' Sigma a per response, for the item-information blocks. The R version made
+// K^2 passes over the response set, one per covariance block.
+extern "C" SEXP _bigIRT_row_aSa_cpp_impl(
+    SEXP idsSEXP, SEXP loadingsSEXP, SEXP sigmaSEXP, SEXP NSEXP, SEXP KSEXP) {
+  BEGIN_RCPP
+  Rcpp::IntegerVector ids(idsSEXP);
+  Rcpp::NumericMatrix lo(loadingsSEXP);
+  Rcpp::NumericVector sigma(sigmaSEXP);
+  const int N = Rcpp::as<int>(NSEXP), K = Rcpp::as<int>(KSEXP);
+  const R_xlen_t n = ids.size();
+  if(lo.nrow() != n || lo.ncol() != K) Rcpp::stop("Unexpected dimensions in aSa.");
+  if(sigma.size() != (R_xlen_t)K * K * N) Rcpp::stop("Posterior covariance array has unexpected size.");
+  Rcpp::NumericVector out(n);
+  for(R_xlen_t i = 0; i < n; ++i) {
+    const int subj = ids[i] - 1;
+    if(subj < 0 || subj >= N) Rcpp::stop("Person index out of range.");
+    const R_xlen_t base = (R_xlen_t)K * K * subj;
+    double acc = 0.0;
+    for(int k = 0; k < K; ++k) {
+      const double lk = lo(i, k);
+      if(lk == 0.0) continue;
+      for(int l = 0; l < K; ++l) acc += lk * lo(i, l) * sigma[base + k + (R_xlen_t)K * l];
+    }
+    out[i] = acc;
+  }
+  return out;
+  END_RCPP
+}
+
+// Item information blocks: S[b1,b2,item] = sum_rows V_b1 V_b2 wcorr, gathered
+// by item. The R version ran one rowsum over the whole response set for each
+// of the P(P+1)/2 distinct pairs; this makes a single pass.
+extern "C" SEXP _bigIRT_item_info_accum_cpp_impl(
+    SEXP itemSEXP, SEXP VSEXP, SEXP wcorrSEXP, SEXP niSEXP) {
+  BEGIN_RCPP
+  Rcpp::IntegerVector item(itemSEXP);
+  Rcpp::NumericMatrix V(VSEXP);
+  Rcpp::NumericVector w(wcorrSEXP);
+  const int ni = Rcpp::as<int>(niSEXP);
+  const R_xlen_t n = item.size();
+  const int P = V.ncol();
+  if(V.nrow() != n || w.size() != n) Rcpp::stop("Unexpected dimensions in item info accumulation.");
+  Rcpp::NumericVector out((R_xlen_t)P * P * ni);
+  std::vector<double> v(P);
+  for(R_xlen_t i = 0; i < n; ++i) {
+    const int it = item[i] - 1;
+    if(it < 0 || it >= ni) Rcpp::stop("Item index out of range.");
+    const double wi = w[i];
+    if(wi == 0.0) continue;
+    for(int b = 0; b < P; ++b) v[b] = V(i, b);
+    const R_xlen_t base = (R_xlen_t)P * P * it;
+    for(int b1 = 0; b1 < P; ++b1) {
+      const double v1 = v[b1] * wi;
+      if(v1 == 0.0) continue;
+      for(int b2 = b1; b2 < P; ++b2) {
+        const double add = v1 * v[b2];
+        out[base + b1 + (R_xlen_t)P * b2] += add;
+        if(b2 > b1) out[base + b2 + (R_xlen_t)P * b1] += add;
+      }
+    }
+  }
+  out.attr("dim") = Rcpp::IntegerVector::create(P, P, ni);
+  return out;
+  END_RCPP
+}
+
 // Person row terms and the within-person ability-beta gradient, grouped by
 // person and run in parallel.
 //

@@ -12,6 +12,7 @@ Rcpp::Rostream<false>& Rcpp::Rcerr = Rcpp::Rcpp_cerr_get();
 #endif
 
 
+RcppExport SEXP _bigIRT_item_info_accum_cpp_impl(SEXP, SEXP, SEXP, SEXP);
 RcppExport SEXP _bigIRT_laplace_ability_beta_rows_cpp_impl(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
 RcppExport SEXP _bigIRT_laplace_corr_grad_cpp_impl(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
 RcppExport SEXP _bigIRT_laplace_direct_block_fg_cpp_impl(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
@@ -25,10 +26,12 @@ RcppExport SEXP _bigIRT_laplace_person_step_block_cpp_impl(SEXP, SEXP, SEXP, SEX
 RcppExport SEXP _bigIRT_person_covariance_cpp_impl(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
 RcppExport SEXP _bigIRT_person_sigma_points_cpp_dense_impl(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
 RcppExport SEXP _bigIRT_person_sigma_points_cpp_impl(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
+RcppExport SEXP _bigIRT_row_aSa_cpp_impl(SEXP, SEXP, SEXP, SEXP, SEXP);
 RcppExport SEXP _rcpp_module_boot_stan_fit4irt_mod();
 
 static const R_CallMethodDef CallEntries[] = {
     {"_rcpp_module_boot_stan_fit4irt_mod", (DL_FUNC) &_rcpp_module_boot_stan_fit4irt_mod, 0},
+    {"_bigIRT_item_info_accum_cpp_impl",              (DL_FUNC) &_bigIRT_item_info_accum_cpp_impl,               4},
     {"_bigIRT_laplace_ability_beta_rows_cpp_impl",    (DL_FUNC) &_bigIRT_laplace_ability_beta_rows_cpp_impl,    13},
     {"_bigIRT_laplace_corr_grad_cpp_impl",            (DL_FUNC) &_bigIRT_laplace_corr_grad_cpp_impl,             9},
     {"_bigIRT_laplace_direct_block_fg_cpp_impl",      (DL_FUNC) &_bigIRT_laplace_direct_block_fg_cpp_impl,      41},
@@ -42,6 +45,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_bigIRT_person_covariance_cpp_impl",            (DL_FUNC) &_bigIRT_person_covariance_cpp_impl,            12},
     {"_bigIRT_person_sigma_points_cpp_dense_impl",    (DL_FUNC) &_bigIRT_person_sigma_points_cpp_dense_impl,    10},
     {"_bigIRT_person_sigma_points_cpp_impl",          (DL_FUNC) &_bigIRT_person_sigma_points_cpp_impl,          12},
+    {"_bigIRT_row_aSa_cpp_impl",                      (DL_FUNC) &_bigIRT_row_aSa_cpp_impl,                       5},
     {NULL, NULL, 0}
 };
 
