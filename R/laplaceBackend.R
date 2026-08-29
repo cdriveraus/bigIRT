@@ -674,7 +674,8 @@ bigIRT_laplace_unpack_item_state <- function(par, state, sdat, layout = bigIRT_l
 ## Returns item-layout indices plus `corr` when enabled; mutates nothing.
 bigIRT_laplace_direct_layout <- function(sdat, estimateAbilityCorr = FALSE){
   item_layout <- bigIRT_laplace_item_layout(sdat)
-  cursor <- bigIRT_laplace_layout_size(item_layout) + 1L
+  n_item_par <- bigIRT_laplace_layout_size(item_layout)
+  cursor <- n_item_par + 1L
   take <- function(n){
     if(n <= 0L) return(integer())
     idx <- seq.int(cursor, length.out = n)
@@ -686,6 +687,7 @@ bigIRT_laplace_direct_layout <- function(sdat, estimateAbilityCorr = FALSE){
   n_corr <- if(isTRUE(estimateAbilityCorr) && sdat$Nscales > 1L) sdat$Nscales * (sdat$Nscales - 1L) / 2L else 0L
   item_layout$corr <- take(n_corr)
   attr(item_layout, "n_par") <- max(unlist(item_layout), 0L)
+  attr(item_layout, "n_item_par") <- n_item_par
   attr(item_layout, "beta_scale") <- bigIRT_laplace_beta_scale(sdat)
   attr(item_layout, "par_scale") <- bigIRT_laplace_par_scale(sdat, item_layout)
   item_layout
@@ -794,8 +796,12 @@ bigIRT_laplace_pack_direct_state <- function(state, sdat,
   layout = bigIRT_laplace_direct_layout(sdat, estimateAbilityCorr = FALSE)){
   out <- numeric(bigIRT_laplace_layout_size(layout))
   item_slots <- layout[intersect(names(layout), names(bigIRT_laplace_item_layout(sdat)))]
-  if(length(unlist(item_slots))){
-    out[seq_len(max(unlist(item_slots), 0L))] <- bigIRT_laplace_pack_item_state(state, sdat, layout = item_slots)
+  ## The item blocks come first in the direct layout, so where they end is
+  ## recorded when it is built rather than rediscovered from the indices here.
+  n_item_par <- attr(layout, "n_item_par", exact = TRUE)
+  if(is.null(n_item_par)) n_item_par <- max(unlist(item_slots), 0L)
+  if(n_item_par > 0L){
+    out[seq_len(n_item_par)] <- bigIRT_laplace_pack_item_state(state, sdat, layout = item_slots)
   }
   if(length(layout$ability_beta)){
     out[layout$ability_beta] <- as.numeric(state$Abilitybeta)
@@ -1296,9 +1302,14 @@ bigIRT_laplace_direct_objective <- function(par, state, sdat, prior_precision,
 ## with zeros outside the item blocks; NULL when no blocks are available.
 bigIRT_laplace_newton_step <- function(ev, sdat, context, layout){
   if(is.null(ev$posterior$covariance)) return(NULL)
-  re <- bigIRT_laplace_row_effective(
-    state = ev$state, sdat = sdat, thetaBase = ev$posterior$theta_mode,
-    rows = context$train_rows, context = context$row_context)
+  ## The evaluation already carries the response rows when person terms were
+  ## wanted, and this runs once per polish step, so rebuilding them here was
+  ## eight extra sweeps over the response set per fit.
+  re <- ev$item_fg$row_effective
+  if(is.null(re))
+    re <- bigIRT_laplace_row_effective(
+      state = ev$state, sdat = sdat, thetaBase = ev$posterior$theta_mode,
+      rows = context$train_rows, context = context$row_context)
   bl <- bigIRT_item_info_blocks(state = ev$state, sdat = sdat, context = context,
     row_effective = re, posterior = ev$posterior,
     thetaBase = ev$posterior$theta_mode)
@@ -1440,7 +1451,12 @@ bigIRT_laplace_optimize_direct <- function(state, sdat, prior_precision,
       cur_theta <- res$posterior$theta_mode
       cov_arr <- res$posterior$covariance
       if(!is.null(cov_arr)){
-        post_sd <- unlist(lapply(seq_len(dim(cov_arr)[3]), function(ii) sqrt(pmax(diag(cov_arr[,,ii]), 0))))
+        ## Diagonals of a K x K x N array sit at a fixed stride; an lapply over
+        ## persons to take them is a loop over the whole sample.
+        Kc <- dim(cov_arr)[1]; Nc <- dim(cov_arr)[3]
+        sel <- rep((seq_len(Kc) - 1L) * (Kc + 1L) + 1L, times = Nc) +
+          rep((seq_len(Nc) - 1L) * Kc * Kc, each = Kc)
+        post_sd <- sqrt(pmax(as.numeric(cov_arr)[sel], 0))
         post_sd <- post_sd[is.finite(post_sd)]
         if(length(post_sd)){
           mean_post_sd <- mean(post_sd, na.rm = TRUE)
@@ -2332,4 +2348,23 @@ bigIRT_laplace_hyper_update <- function(state, sdat, context, row_effective, row
       sdat[[mean_names[[nm]]]] <- mean(pieces$est[[b]])
   }
   list(sdat = sdat, tau = tau)
+}
+
+## Diagonals of a K x K x N covariance array. Taking them with an lapply over
+## persons is a loop over the whole sample for a strided read.
+bigIRT_posterior_sd_vector <- function(cov_arr){
+  if(is.null(cov_arr)) return(numeric(0))
+  K <- dim(cov_arr)[1]; N <- dim(cov_arr)[3]
+  sel <- rep((seq_len(K) - 1L) * (K + 1L) + 1L, times = N) +
+    rep((seq_len(N) - 1L) * K * K, each = K)
+  sqrt(pmax(as.numeric(cov_arr)[sel], 0))
+}
+
+## data.table or data.frame of predictors to a plain numeric matrix, without
+## unlisting several million values into an intermediate vector first.
+bigIRT_as_numeric_matrix <- function(x){
+  m <- if(is.matrix(x)) x else as.matrix(x)
+  storage.mode(m) <- "double"
+  dimnames(m) <- NULL
+  m
 }
