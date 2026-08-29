@@ -19,6 +19,7 @@ RcppExport SEXP _bigIRT_laplace_item_block_objective_cpp_impl(SEXP, SEXP, SEXP, 
 RcppExport SEXP _bigIRT_laplace_item_eval_cpp_impl(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
 RcppExport SEXP _bigIRT_laplace_item_objective_cpp_impl(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
 RcppExport SEXP _bigIRT_laplace_person_beta_fused_cpp_impl(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
+RcppExport SEXP _bigIRT_laplace_person_beta_grouped_cpp_impl(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
 RcppExport SEXP _bigIRT_laplace_person_row_terms_cpp_impl(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
 RcppExport SEXP _bigIRT_laplace_person_step_block_cpp_impl(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
 RcppExport SEXP _bigIRT_person_covariance_cpp_impl(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
@@ -35,6 +36,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_bigIRT_laplace_item_eval_cpp_impl",            (DL_FUNC) &_bigIRT_laplace_item_eval_cpp_impl,            12},
     {"_bigIRT_laplace_item_objective_cpp_impl",       (DL_FUNC) &_bigIRT_laplace_item_objective_cpp_impl,       11},
     {"_bigIRT_laplace_person_beta_fused_cpp_impl",    (DL_FUNC) &_bigIRT_laplace_person_beta_fused_cpp_impl,    13},
+    {"_bigIRT_laplace_person_beta_grouped_cpp_impl",  (DL_FUNC) &_bigIRT_laplace_person_beta_grouped_cpp_impl,  14},
     {"_bigIRT_laplace_person_row_terms_cpp_impl",     (DL_FUNC) &_bigIRT_laplace_person_row_terms_cpp_impl,      9},
     {"_bigIRT_laplace_person_step_block_cpp_impl",    (DL_FUNC) &_bigIRT_laplace_person_step_block_cpp_impl,    40},
     {"_bigIRT_person_covariance_cpp_impl",            (DL_FUNC) &_bigIRT_person_covariance_cpp_impl,            12},

@@ -414,6 +414,14 @@ bigIRT_laplace_row_context <- function(sdat, rows = bigIRT_laplace_training_rows
     ids_int = as.integer(ids),
     score = as.numeric(sdat$score[rows]),
     fixed_ability_int = matrix(as.integer(fixed_ability), nrow = nrows, ncol = K),
+    ## Rows grouped by person. The ability-beta gradient needs a person total
+    ## before it can weight that person's responses, and with the rows grouped
+    ## that dependency is local: both passes run over one person's handful of
+    ## rows rather than over the whole response set twice. It also makes the
+    ## sweep parallel, since persons are disjoint. Response data are often
+    ## already in this order, but nothing guarantees it.
+    person_row_order = as.integer(order(ids)) - 1L,
+    person_row_start = as.integer(c(0L, cumsum(tabulate(ids, nbins = sdat$Nsubs)))),
     # Both predictor matrices are long-row matrices in standata.  Index them
     # with `rows`, never with the item id: item ids are not row positions.
     A_pred = if(sdat$NAitemPreds > 0) as.matrix(sdat$itemPreds[rows, sdat$AitemPreds, drop = FALSE]) else matrix(0, nrow = nrows, ncol = 0),
@@ -1935,7 +1943,8 @@ bigIRT_laplace_ability_beta_rows_cpp_impl <- function(ids, y, eta, c_row, d_row,
 ## takes the two-sweep route.
 bigIRT_laplace_person_beta_fused <- function(sdat, posterior, row_effective,
                                              row_context, vary_idx,
-                                             max_doubles = 2e7){
+                                             max_doubles = 2e7,
+                                             grain_size = 64L){
   if(!length(vary_idx)) return(NULL)
   K <- as.integer(sdat$Nscales)
   N <- as.integer(sdat$Nsubs)
@@ -1949,10 +1958,21 @@ bigIRT_laplace_person_beta_fused <- function(sdat, posterior, row_effective,
     fixed <- matrix(as.integer(row_context$fixed_ability), nrow = length(ids), ncol = K)
   lo <- row_effective$loadings
   if(is.null(dim(lo))) lo <- matrix(lo, ncol = K)
+  X <- row_context$person_pred
+  if(!is.matrix(X)) X <- as.matrix(X)
+  vi <- as.integer(vary_idx - 1L)
+
+  ## Grouped by person: no accumulator that scales with N * K^2 * P, and the
+  ## sweep runs in parallel over disjoint persons.
+  if(!is.null(row_context$person_row_order) && !is.null(row_context$person_row_start))
+    return(.Call(`_bigIRT_laplace_person_beta_grouped_cpp_impl`,
+      row_context$person_row_order, row_context$person_row_start, y,
+      row_effective$eta_row, row_effective$c_row, row_effective$d_row, lo,
+      posterior$covariance, X, vi, fixed, N, K, grain_size))
+
   res <- .Call(`_bigIRT_laplace_person_beta_fused_cpp_impl`, ids, y,
     row_effective$eta_row, row_effective$c_row, row_effective$d_row, lo,
-    posterior$covariance, as.matrix(row_context$person_pred),
-    as.integer(vary_idx - 1L), fixed, N, K, as.numeric(max_doubles))
+    posterior$covariance, X, vi, fixed, N, K, as.numeric(max_doubles))
   if(!isTRUE(res$fused)) return(NULL)
   res
 }

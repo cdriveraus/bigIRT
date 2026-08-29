@@ -692,6 +692,165 @@ extern "C" SEXP _bigIRT_laplace_person_row_terms_cpp_impl(
   END_RCPP
 }
 
+// Person row terms and the within-person ability-beta gradient, grouped by
+// person and run in parallel.
+//
+// The beta gradient's third term needs c_i = sum_j slope_w_ij lo_ij before it
+// can weight any of that person's responses, which is why this was two sweeps
+// over the whole response set. Grouped by person the dependency is local: both
+// passes run over one person's rows, which is a hundred or so values that stay
+// in cache, so nothing has to be stored between them and no accumulator scales
+// with N * K^2 * P.
+//
+// It also parallelises cleanly. Persons are disjoint, so score and slope are
+// written to slots no other thread touches; only the K x P gradient needs a
+// reduction, and it is tiny.
+struct BigIRTLaplacePersonBetaWorker : public RcppParallel::Worker {
+  const RcppParallel::RVector<int> order, starts;
+  const RcppParallel::RVector<double> y, eta, crow, drow, sigma;
+  const RcppParallel::RMatrix<double> lo, x;
+  const RcppParallel::RMatrix<int> fixed;
+  const RcppParallel::RVector<int> vary;
+  RcppParallel::RMatrix<double> score, slope;
+  const int K, P;
+  std::vector<double> out;
+
+  BigIRTLaplacePersonBetaWorker(const Rcpp::IntegerVector& order_, const Rcpp::IntegerVector& starts_,
+      const Rcpp::NumericVector& y_, const Rcpp::NumericVector& eta_,
+      const Rcpp::NumericVector& c_, const Rcpp::NumericVector& d_,
+      const Rcpp::NumericVector& sigma_, const Rcpp::NumericMatrix& lo_,
+      const Rcpp::NumericMatrix& x_, const Rcpp::IntegerMatrix& fixed_,
+      const Rcpp::IntegerVector& vary_, Rcpp::NumericMatrix score_,
+      Rcpp::NumericMatrix slope_, int K_, int P_)
+    : order(order_), starts(starts_), y(y_), eta(eta_), crow(c_), drow(d_),
+      sigma(sigma_), lo(lo_), x(x_), fixed(fixed_), vary(vary_),
+      score(score_), slope(slope_), K(K_), P(P_), out((size_t)K_*P_, 0.0) {}
+
+  BigIRTLaplacePersonBetaWorker(const BigIRTLaplacePersonBetaWorker& o, RcppParallel::Split)
+    : order(o.order), starts(o.starts), y(o.y), eta(o.eta), crow(o.crow), drow(o.drow),
+      sigma(o.sigma), lo(o.lo), x(o.x), fixed(o.fixed), vary(o.vary),
+      score(o.score), slope(o.slope), K(o.K), P(o.P), out((size_t)o.K*o.P, 0.0) {}
+
+  void join(const BigIRTLaplacePersonBetaWorker& o) {
+    for(size_t i = 0; i < out.size(); ++i) out[i] += o.out[i];
+  }
+
+  void operator()(std::size_t begin, std::size_t end) {
+    const double lo_p = 1e-12, hi_p = 1.0 - 1e-12;
+    std::vector<double> c_i(K), e_i(K);
+    for(std::size_t subj = begin; subj < end; ++subj) {
+      const int from = starts[subj], to = starts[subj + 1];
+      if(from == to) continue;
+      const R_xlen_t base = (R_xlen_t)K * K * subj;
+      for(int k = 0; k < K; ++k) c_i[k] = 0.0;
+
+      // pass A: person totals
+      for(int t = from; t < to; ++t) {
+        const R_xlen_t i = order[t];
+        const double g = bigirt_stable_inv_logit(eta[i]);
+        const double q = g * (1.0 - g);
+        const double u = drow[i] - crow[i];
+        double pp = crow[i] + u * g;
+        if(pp < lo_p) pp = lo_p; else if(pp > hi_p) pp = hi_p;
+        const double sc = u * q;
+        double r = pp * (1.0 - pp);
+        if(r < lo_p) r = lo_p;
+        const double grad_eta = ((y[i] - pp) / r) * sc;
+        const double dq = q * (1.0 - 2.0 * g);
+        const double dw_deta = (2.0 * sc * (u * dq) * r - sc * sc * (sc * (1.0 - 2.0 * pp))) / (r * r);
+        double aSa = 0.0;
+        for(int k = 0; k < K; ++k) {
+          const double lk = lo(i, k);
+          if(lk == 0.0) continue;
+          for(int l = 0; l < K; ++l) aSa += lk * lo(i, l) * sigma[base + k + (R_xlen_t)K * l];
+        }
+        const double slope_i = dw_deta * aSa;
+        for(int k = 0; k < K; ++k) {
+          const double lk = lo(i, k);
+          score(subj, k) += grad_eta * lk;
+          slope(subj, k) += slope_i * lk;
+          c_i[k] += slope_i * lk;
+        }
+      }
+      if(P == 0) continue;
+
+      // e_i = Sigma_i c_i, so q_j below is a dot product rather than a K^2 form
+      for(int n = 0; n < K; ++n) {
+        double acc = 0.0;
+        for(int m = 0; m < K; ++m) acc += sigma[base + n + (R_xlen_t)K * m] * c_i[m];
+        e_i[n] = acc;
+      }
+
+      // pass B: same rows, still warm
+      for(int t = from; t < to; ++t) {
+        const R_xlen_t i = order[t];
+        const double g = bigirt_stable_inv_logit(eta[i]);
+        const double q = g * (1.0 - g);
+        const double u = drow[i] - crow[i];
+        double pp = crow[i] + u * g;
+        if(pp < lo_p) pp = lo_p; else if(pp > hi_p) pp = hi_p;
+        const double sc = u * q;
+        double r = pp * (1.0 - pp);
+        if(r < lo_p) r = lo_p;
+        const double grad_eta = ((y[i] - pp) / r) * sc;
+        const double dq = q * (1.0 - 2.0 * g);
+        const double dw_deta = (2.0 * sc * (u * dq) * r - sc * sc * (sc * (1.0 - 2.0 * pp))) / (r * r);
+        double aSa = 0.0, q_row = 0.0;
+        for(int k = 0; k < K; ++k) {
+          const double lk = lo(i, k);
+          q_row += e_i[k] * lk;
+          if(lk == 0.0) continue;
+          for(int l = 0; l < K; ++l) aSa += lk * lo(i, l) * sigma[base + k + (R_xlen_t)K * l];
+        }
+        const double core = grad_eta - 0.5 * dw_deta * aSa + 0.5 * (sc * sc / r) * q_row;
+        for(int a = 0; a < P; ++a) {
+          const double xa = x(i, vary[a]);
+          if(xa == 0.0) continue;
+          for(int k = 0; k < K; ++k) {
+            if(fixed(i, k) != 0) continue;
+            out[(size_t)k * P + a] += core * lo(i, k) * xa;
+          }
+        }
+      }
+    }
+  }
+};
+
+extern "C" SEXP _bigIRT_laplace_person_beta_grouped_cpp_impl(
+    SEXP orderSEXP, SEXP startsSEXP, SEXP ySEXP, SEXP etaSEXP, SEXP cSEXP,
+    SEXP dSEXP, SEXP loadingsSEXP, SEXP sigmaSEXP, SEXP xSEXP, SEXP varyIdxSEXP,
+    SEXP fixedSEXP, SEXP NSEXP, SEXP KSEXP, SEXP grainSEXP) {
+  BEGIN_RCPP
+  Rcpp::IntegerVector order(orderSEXP), starts(startsSEXP), vary(varyIdxSEXP);
+  Rcpp::NumericVector y(ySEXP), eta(etaSEXP), crow(cSEXP), drow(dSEXP), sigma(sigmaSEXP);
+  Rcpp::NumericMatrix lo(loadingsSEXP), x(xSEXP);
+  Rcpp::IntegerMatrix fixed(fixedSEXP);
+  const int N = Rcpp::as<int>(NSEXP), K = Rcpp::as<int>(KSEXP);
+  const std::size_t grain = static_cast<std::size_t>(std::max(1, Rcpp::as<int>(grainSEXP)));
+  const R_xlen_t n = y.size();
+  const int P = vary.size();
+  if(eta.size() != n || crow.size() != n || drow.size() != n || lo.nrow() != n ||
+     lo.ncol() != K || x.nrow() != n || fixed.nrow() != n || fixed.ncol() != K ||
+     order.size() != n || starts.size() != N + 1)
+    Rcpp::stop("Unexpected dimensions in Laplace grouped person/beta pass.");
+  if(sigma.size() != (R_xlen_t)K * K * N)
+    Rcpp::stop("Posterior covariance array has unexpected size.");
+  for(int a = 0; a < P; ++a)
+    if(vary[a] < 0 || vary[a] >= x.ncol()) Rcpp::stop("Predictor index out of range.");
+
+  Rcpp::NumericMatrix score(N, K), slope(N, K);
+  BigIRTLaplacePersonBetaWorker w(order, starts, y, eta, crow, drow, sigma, lo, x,
+                                  fixed, vary, score, slope, K, P);
+  RcppParallel::parallelReduce(static_cast<std::size_t>(0),
+                               static_cast<std::size_t>(N), w, grain);
+  Rcpp::NumericMatrix out(K, P);
+  for(int k = 0; k < K; ++k) for(int a = 0; a < P; ++a) out(k, a) = w.out[(size_t)k * P + a];
+  return Rcpp::List::create(Rcpp::Named("score") = score,
+                            Rcpp::Named("slope") = slope,
+                            Rcpp::Named("beta") = out);
+  END_RCPP
+}
+
 // Person row terms and the within-person ability-beta gradient in one pass.
 //
 // The two used to be separate sweeps over the responses because the beta
