@@ -431,21 +431,25 @@ bigIRT_laplace_row_context <- function(sdat, rows = bigIRT_laplace_training_rows
   )
 }
 
-bigIRT_laplace_person_means_by_id <- function(sdat){
-  if(sdat$NpersonPreds == 0) return(matrix(0, nrow = sdat$Nsubs, ncol = 0))
-  out <- matrix(0, nrow = sdat$Nsubs, ncol = sdat$NpersonPreds)
-  counts <- tabulate(sdat$id, nbins = sdat$Nsubs)
-  for(i in seq_len(sdat$Nobs)) out[sdat$id[i],] <- out[sdat$id[i],] + sdat$personPreds[i,,drop = FALSE]
+## Group means of the predictors. These were accumulated a row at a time in R,
+## which is a loop over every response: 12 seconds of an 8.1M-response fit for
+## a quantity rowsum produces in one call. As elsewhere in this file, rowsum
+## returns groups in the order encountered rather than in level order, so the
+## result is scattered back by label rather than assumed aligned.
+bigIRT_laplace_group_means <- function(x, group, ngroups, ncols){
+  if(ncols == 0) return(matrix(0, nrow = ngroups, ncol = 0))
+  counts <- tabulate(group, nbins = ngroups)
+  acc <- rowsum(x, group = group, reorder = FALSE)
+  out <- matrix(0, nrow = ngroups, ncol = ncols)
+  out[as.integer(rownames(acc)), ] <- acc
   out / pmax(counts, 1)
 }
 
-bigIRT_laplace_item_means <- function(sdat){
-  if(sdat$NitemPreds == 0) return(matrix(0, nrow = sdat$Nitems, ncol = 0))
-  out <- matrix(0, nrow = sdat$Nitems, ncol = sdat$NitemPreds)
-  counts <- tabulate(sdat$item, nbins = sdat$Nitems)
-  for(i in seq_len(sdat$Nobs)) out[sdat$item[i],] <- out[sdat$item[i],] + sdat$itemPreds[i,,drop = FALSE]
-  out / pmax(counts, 1)
-}
+bigIRT_laplace_person_means_by_id <- function(sdat)
+  bigIRT_laplace_group_means(sdat$personPreds, sdat$id, sdat$Nsubs, sdat$NpersonPreds)
+
+bigIRT_laplace_item_means <- function(sdat)
+  bigIRT_laplace_group_means(sdat$itemPreds, sdat$item, sdat$Nitems, sdat$NitemPreds)
 
 bigIRT_laplace_row_effective <- function(state, sdat, thetaBase = state$AbilityBase,
   rows = seq_len(sdat$Nobs), include_raw = FALSE, context = NULL){
@@ -558,6 +562,21 @@ bigIRT_laplace_fixed_row_ability <- function(state, sdat, thetaBase = state$Abil
   row_ability
 }
 
+## How many parameters a layout covers. The layouts are built once per fit and
+## then packed and unpacked on every iteration, and max(unlist(layout)) rebuilds
+## an index vector the size of the whole parameter set each time it is asked.
+## The constructors record the answer instead.
+bigIRT_laplace_layout_size <- function(layout){
+  n <- attr(layout, "n_par", exact = TRUE)
+  if(!is.null(n)) return(n)
+  max(unlist(layout), 0L)
+}
+
+bigIRT_laplace_layout_with_size <- function(layout){
+  attr(layout, "n_par") <- max(unlist(layout), 0L)
+  layout
+}
+
 bigIRT_laplace_item_layout <- function(sdat){
   itemBetaCount <- function(freeN, predN){
     if(freeN <= 0 || predN <= 0) return(0L)
@@ -574,7 +593,7 @@ bigIRT_laplace_item_layout <- function(sdat){
     cursor <<- cursor + n
     idx
   }
-  list(
+  bigIRT_laplace_layout_with_size(list(
     B = take(freeB),
     B_mean = take(if(sdat$fixedBMean == 0L) 1L else 0L),
     B_beta = take(itemBetaCount(freeB, sdat$NBitemPreds)),
@@ -587,7 +606,7 @@ bigIRT_laplace_item_layout <- function(sdat){
     D = take(freeD),
     D_mean = take(if(sdat$fixedDMean == 0L) 1L else 0L),
     D_beta = take(itemBetaCount(freeD, sdat$NDitemPreds))
-  )
+  ))
 }
 
 bigIRT_laplace_item_context <- function(sdat, layout = bigIRT_laplace_item_layout(sdat), row_context = NULL){
@@ -617,7 +636,7 @@ bigIRT_laplace_item_context <- function(sdat, layout = bigIRT_laplace_item_layou
 }
 
 bigIRT_laplace_pack_item_state <- function(state, sdat, layout = bigIRT_laplace_item_layout(sdat)){
-  out <- numeric(max(unlist(layout), 0L))
+  out <- numeric(bigIRT_laplace_layout_size(layout))
   if(length(layout$B)) out[layout$B] <- state$Bpars
   if(length(layout$B_mean)) out[layout$B_mean] <- state$BMean
   if(length(layout$B_beta)) out[layout$B_beta] <- as.numeric(state$Bbeta)
@@ -655,7 +674,7 @@ bigIRT_laplace_unpack_item_state <- function(par, state, sdat, layout = bigIRT_l
 ## Returns item-layout indices plus `corr` when enabled; mutates nothing.
 bigIRT_laplace_direct_layout <- function(sdat, estimateAbilityCorr = FALSE){
   item_layout <- bigIRT_laplace_item_layout(sdat)
-  cursor <- max(unlist(item_layout), 0L) + 1L
+  cursor <- bigIRT_laplace_layout_size(item_layout) + 1L
   take <- function(n){
     if(n <= 0L) return(integer())
     idx <- seq.int(cursor, length.out = n)
@@ -666,6 +685,7 @@ bigIRT_laplace_direct_layout <- function(sdat, estimateAbilityCorr = FALSE){
   item_layout$ability_mean <- take(if(sdat$fixedAbilityMean == 0L) sdat$Nscales else 0L)
   n_corr <- if(isTRUE(estimateAbilityCorr) && sdat$Nscales > 1L) sdat$Nscales * (sdat$Nscales - 1L) / 2L else 0L
   item_layout$corr <- take(n_corr)
+  attr(item_layout, "n_par") <- max(unlist(item_layout), 0L)
   attr(item_layout, "beta_scale") <- bigIRT_laplace_beta_scale(sdat)
   attr(item_layout, "par_scale") <- bigIRT_laplace_par_scale(sdat, item_layout)
   item_layout
@@ -705,7 +725,7 @@ bigIRT_laplace_beta_scale <- function(sdat){
 ## the square root of the ratio of contributing units, and they are listed
 ## together here so the next block added is not missed as these three were.
 bigIRT_laplace_par_scale <- function(sdat, layout){
-  n <- max(unlist(layout), 0L)
+  n <- bigIRT_laplace_layout_size(layout)
   out <- rep(1, n)
   if(n == 0L) return(out)
   nsub <- max(as.numeric(sdat$Nsubs), 1)
@@ -772,7 +792,7 @@ bigIRT_laplace_par_scale <- function(sdat, layout){
 ## correlation parameters. Inputs: current state, standata, and a direct layout.
 bigIRT_laplace_pack_direct_state <- function(state, sdat,
   layout = bigIRT_laplace_direct_layout(sdat, estimateAbilityCorr = FALSE)){
-  out <- numeric(max(unlist(layout), 0L))
+  out <- numeric(bigIRT_laplace_layout_size(layout))
   item_slots <- layout[intersect(names(layout), names(bigIRT_laplace_item_layout(sdat)))]
   if(length(unlist(item_slots))){
     out[seq_len(max(unlist(item_slots), 0L))] <- bigIRT_laplace_pack_item_state(state, sdat, layout = item_slots)
@@ -847,8 +867,9 @@ bigIRT_laplace_corr_grad <- function(state, sdat, layout, posterior, prior_preci
 }
 
 bigIRT_laplace_item_prior <- function(state, sdat, layout = bigIRT_laplace_item_layout(sdat)){
-  if(!isTRUE(as.logical(sdat$dopriors))) return(list(value = 0, grad = numeric(max(unlist(layout), 0L))))
-  grad <- numeric(max(unlist(layout), 0L))
+  n_par <- bigIRT_laplace_layout_size(layout)
+  if(!isTRUE(as.logical(sdat$dopriors))) return(list(value = 0, grad = numeric(n_par)))
+  grad <- numeric(n_par)
   value <- 0
 
   if(length(state$invspApars)){
