@@ -41,7 +41,7 @@ clusterIDexport <- function(cl, vars){
   benv <- new.env(parent=globalenv())
   benv$cl <- cl
   lookframe <- parent.frame()
-  tmp<-lapply(vars,function(x) benv[[x]] <<- eval(parse(text=x),env=lookframe))
+  tmp<-lapply(vars,function(x) benv[[x]] <<- eval(parse(text=x),envir=lookframe))
   eval(parallel::clusterExport(benv$cl,vars,benv),envir=globalenv())
 }
 
