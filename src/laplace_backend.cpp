@@ -692,6 +692,143 @@ extern "C" SEXP _bigIRT_laplace_person_row_terms_cpp_impl(
   END_RCPP
 }
 
+// Person row terms and the within-person ability-beta gradient in one pass.
+//
+// The two used to be separate sweeps over the responses because the beta
+// gradient's third term needs c_i = sum_j slope_w_ij lo_ij, a per-person total
+// that is only complete once the first sweep has finished. It does not need it
+// per response, though. Writing that term out,
+//
+//   T3[k,p] = 1/2 sum_i sum_{m,n} Sigma_i[m,n] c_i[m] D_i[n,k,p]
+//   D_i[n,k,p] = sum_j hess_w_ij lo_ijn lo_ijk x_ijp
+//
+// separates into two per-person accumulators, and D_i accumulates in the same
+// sweep that builds c_i. The combination afterwards runs over persons rather
+// than responses. So one pass over the response set replaces two.
+//
+// D costs N*K*K*P doubles. That is small for the dimensions these models are
+// used at (4 MB for 67k persons, two scales, two varying covariates) but grows
+// with K^2, so past a budget the function falls back to the original second
+// sweep, which needs no storage.
+extern "C" SEXP _bigIRT_laplace_person_beta_fused_cpp_impl(
+    SEXP idsSEXP, SEXP ySEXP, SEXP etaSEXP, SEXP cSEXP, SEXP dSEXP,
+    SEXP loadingsSEXP, SEXP sigmaSEXP, SEXP xSEXP, SEXP varyIdxSEXP,
+    SEXP fixedSEXP, SEXP NSEXP, SEXP KSEXP, SEXP maxDoublesSEXP) {
+  BEGIN_RCPP
+  Rcpp::IntegerVector ids(idsSEXP);
+  Rcpp::NumericVector y(ySEXP), eta(etaSEXP), crow(cSEXP), drow(dSEXP);
+  Rcpp::NumericMatrix lo(loadingsSEXP);
+  Rcpp::NumericVector sigma(sigmaSEXP);
+  Rcpp::NumericMatrix x(xSEXP);
+  Rcpp::IntegerVector vary(varyIdxSEXP);
+  Rcpp::IntegerMatrix fixed(fixedSEXP);
+  const int N = Rcpp::as<int>(NSEXP);
+  const int K = Rcpp::as<int>(KSEXP);
+  const double max_doubles = Rcpp::as<double>(maxDoublesSEXP);
+  const R_xlen_t n = ids.size();
+  const int P = vary.size();
+  if(y.size() != n || eta.size() != n || crow.size() != n || drow.size() != n ||
+     lo.nrow() != n || lo.ncol() != K || x.nrow() != n ||
+     fixed.nrow() != n || fixed.ncol() != K)
+    Rcpp::stop("Unexpected dimensions in Laplace fused person/beta pass.");
+  if(sigma.size() != (R_xlen_t)K * K * N)
+    Rcpp::stop("Posterior covariance array has unexpected size.");
+  for(int a = 0; a < P; ++a)
+    if(vary[a] < 0 || vary[a] >= x.ncol()) Rcpp::stop("Predictor index out of range.");
+
+  Rcpp::NumericMatrix score(N, K), slope(N, K), out(K, P);
+  const double lo_p = 1e-12, hi_p = 1.0 - 1e-12;
+
+  const double want = (double)N * K * K * P;
+  const bool store_D = (P > 0) && (want <= max_doubles);
+  std::vector<double> D;
+  if(store_D) D.assign((size_t)want, 0.0);
+
+  // -- one sweep: person totals, the two direct beta terms, and D ------------
+  for(R_xlen_t i = 0; i < n; ++i) {
+    const int subj = ids[i] - 1;
+    if(subj < 0 || subj >= N) Rcpp::stop("Person index out of range.");
+    const double g = bigirt_stable_inv_logit(eta[i]);
+    const double q = g * (1.0 - g);
+    const double u = drow[i] - crow[i];
+    double pp = crow[i] + u * g;
+    if(pp < lo_p) pp = lo_p; else if(pp > hi_p) pp = hi_p;
+    const double sc = u * q;
+    double r = pp * (1.0 - pp);
+    if(r < lo_p) r = lo_p;
+    const double grad_eta = ((y[i] - pp) / r) * sc;
+    const double dq_deta = q * (1.0 - 2.0 * g);
+    const double ds_deta = u * dq_deta;
+    const double dr_deta = sc * (1.0 - 2.0 * pp);
+    const double dw_deta = (2.0 * sc * ds_deta * r - sc * sc * dr_deta) / (r * r);
+    const double hess_w = sc * sc / r;
+
+    const R_xlen_t base = (R_xlen_t)K * K * subj;
+    double aSa = 0.0;
+    for(int k = 0; k < K; ++k) {
+      const double lk = lo(i, k);
+      if(lk == 0.0) continue;
+      for(int l = 0; l < K; ++l) aSa += lk * lo(i, l) * sigma[base + k + (R_xlen_t)K * l];
+    }
+    const double slope_i = dw_deta * aSa;
+    for(int k = 0; k < K; ++k) {
+      const double lk = lo(i, k);
+      score(subj, k) += grad_eta * lk;
+      slope(subj, k) += slope_i * lk;
+    }
+    if(P == 0 || !store_D) continue;
+
+    const double core12 = grad_eta - 0.5 * slope_i;
+    for(int a = 0; a < P; ++a) {
+      const double xa = x(i, vary[a]);
+      if(xa == 0.0) continue;
+      for(int k = 0; k < K; ++k) {
+        if(fixed(i, k) != 0) continue;
+        const double lk = lo(i, k);
+        if(lk == 0.0) continue;
+        out(k, a) += core12 * lk * xa;
+        const double hx = hess_w * lk * xa;
+        if(hx == 0.0) continue;
+        for(int nn = 0; nn < K; ++nn) {
+          const double ln = lo(i, nn);
+          if(ln == 0.0) continue;
+          D[(((size_t)subj * K + nn) * K + k) * P + a] += hx * ln;
+        }
+      }
+    }
+  }
+
+  // -- combine over persons, not responses ----------------------------------
+  if(store_D && P > 0) {
+    for(int subj = 0; subj < N; ++subj) {
+      const R_xlen_t base = (R_xlen_t)K * K * subj;
+      double e[16];
+      const bool small = (K <= 16);
+      std::vector<double> ebig;
+      double* ep = e;
+      if(!small) { ebig.assign(K, 0.0); ep = ebig.data(); }
+      for(int nn = 0; nn < K; ++nn) {
+        double acc = 0.0;
+        for(int m = 0; m < K; ++m) acc += sigma[base + nn + (R_xlen_t)K * m] * slope(subj, m);
+        ep[nn] = acc;
+      }
+      for(int a = 0; a < P; ++a)
+        for(int k = 0; k < K; ++k) {
+          double acc = 0.0;
+          for(int nn = 0; nn < K; ++nn)
+            acc += ep[nn] * D[(((size_t)subj * K + nn) * K + k) * P + a];
+          out(k, a) += 0.5 * acc;
+        }
+    }
+  }
+
+  return Rcpp::List::create(Rcpp::Named("score") = score,
+                            Rcpp::Named("slope") = slope,
+                            Rcpp::Named("beta") = out,
+                            Rcpp::Named("fused") = store_D);
+  END_RCPP
+}
+
 // Ability-beta gradient for person predictors that vary within a person.
 //
 // The R path derived the same per-response quantities the row-terms kernel

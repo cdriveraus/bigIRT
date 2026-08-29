@@ -1165,10 +1165,20 @@ bigIRT_laplace_direct_objective <- function(par, state, sdat, prior_precision,
       row_effective <- bigIRT_laplace_row_effective(
         state = curState, sdat = sdat, thetaBase = posterior$theta_mode,
         rows = context$train_rows, context = row_context)
-    person_terms <- bigIRT_laplace_person_row_terms(
-      sdat = sdat, posterior = posterior,
-      row_effective = row_effective, row_context = row_context
-    )
+    ## When a person predictor varies within person the beta gradient needs a
+    ## second sweep only if its D accumulator is refused; otherwise both come
+    ## out of one.
+    beta_vary <- if(length(context$direct_layout$ability_beta))
+      which(bigIRT_laplace_person_pred_within_varying(row_context)) else integer(0)
+    fused <- if(length(beta_vary))
+      bigIRT_laplace_person_beta_fused(sdat = sdat, posterior = posterior,
+        row_effective = row_effective, row_context = row_context,
+        vary_idx = beta_vary) else NULL
+    person_terms <- if(!is.null(fused)) fused[c("score", "slope")] else
+      bigIRT_laplace_person_row_terms(
+        sdat = sdat, posterior = posterior,
+        row_effective = row_effective, row_context = row_context
+      )
   }
   if(length(context$direct_layout$ability_beta)){
     ## Accumulate. The item prior above already wrote this slot's beta prior
@@ -1185,7 +1195,8 @@ bigIRT_laplace_direct_objective <- function(par, state, sdat, prior_precision,
         layout = context$direct_layout,
         prior_precision = prior_precision,
         person_terms = person_terms,
-        row_effective = row_effective
+        row_effective = row_effective,
+        fused_beta = if(!is.null(fused)) fused$beta else NULL
       )
     )
   }
@@ -1768,7 +1779,8 @@ bigIRT_laplace_person_pred_varies <- function(X, ids, tol = 1e-10){
   apply(abs(X - m[idx, , drop = FALSE]), 2L, max) > tol
 }
 
-bigIRT_laplace_ability_beta_contribution <- function(state, sdat, posterior, row_context, layout, prior_precision, person_terms, row_effective = NULL, impl = c("cpp", "R")){
+bigIRT_laplace_ability_beta_contribution <- function(state, sdat, posterior, row_context, layout, prior_precision, person_terms, row_effective = NULL, impl = c("cpp", "R"),
+                                                   fused_beta = NULL){
   out <- matrix(0, nrow = sdat$Nscales, ncol = sdat$NpersonPreds)
   if(length(layout$ability_beta) == 0L || sdat$NpersonPreds == 0L) return(out)
   if(is.null(posterior$covariance)) stop("laplace_direct Abilitybeta gradients require posterior covariances.")
@@ -1857,10 +1869,11 @@ bigIRT_laplace_ability_beta_contribution <- function(state, sdat, posterior, row
     ## responses of something times x_ijp, so the whole gradient is one
     ## crossprod and needs no per-covariate aggregation: it does not grow with
     ## the number of covariates, and there is no scattered write.
-    out[, vary_idx] <- bigIRT_laplace_ability_beta_rows(
-      sdat = sdat, posterior = posterior, row_effective = row_effective,
-      row_context = row_context, gacc = gacc, vary_idx = vary_idx,
-      impl = impl)
+    out[, vary_idx] <- if(!is.null(fused_beta)) fused_beta else
+      bigIRT_laplace_ability_beta_rows(
+        sdat = sdat, posterior = posterior, row_effective = row_effective,
+        row_context = row_context, gacc = gacc, vary_idx = vary_idx,
+        impl = impl)
   }
 
   dimnames(out) <- NULL
@@ -1914,6 +1927,34 @@ bigIRT_laplace_ability_beta_rows_cpp_impl <- function(ids, y, eta, c_row, d_row,
     as.numeric(y), as.numeric(eta), as.numeric(c_row), as.numeric(d_row),
     loadings, as.numeric(sigma), cg, x, as.integer(vary_idx), fixed,
     as.integer(N), as.integer(K))
+}
+
+## Person row terms and the within-person ability-beta gradient from a single
+## sweep over the responses. Returns NULL when there is nothing within-varying
+## to fuse, or when the D accumulator would be too large, and the caller then
+## takes the two-sweep route.
+bigIRT_laplace_person_beta_fused <- function(sdat, posterior, row_effective,
+                                             row_context, vary_idx,
+                                             max_doubles = 2e7){
+  if(!length(vary_idx)) return(NULL)
+  K <- as.integer(sdat$Nscales)
+  N <- as.integer(sdat$Nsubs)
+  if(as.numeric(N) * K * K * length(vary_idx) > max_doubles) return(NULL)
+  ids <- row_context$ids_int
+  if(is.null(ids)) ids <- as.integer(row_context$ids)
+  y <- row_context$score
+  if(is.null(y)) y <- as.numeric(sdat$score[row_context$rows])
+  fixed <- row_context$fixed_ability_int
+  if(is.null(fixed))
+    fixed <- matrix(as.integer(row_context$fixed_ability), nrow = length(ids), ncol = K)
+  lo <- row_effective$loadings
+  if(is.null(dim(lo))) lo <- matrix(lo, ncol = K)
+  res <- .Call(`_bigIRT_laplace_person_beta_fused_cpp_impl`, ids, y,
+    row_effective$eta_row, row_effective$c_row, row_effective$d_row, lo,
+    posterior$covariance, as.matrix(row_context$person_pred),
+    as.integer(vary_idx - 1L), fixed, N, K, as.numeric(max_doubles))
+  if(!isTRUE(res$fused)) return(NULL)
+  res
 }
 
 bigIRT_laplace_constrained_pars <- function(state, sdat, posterior = NULL){
