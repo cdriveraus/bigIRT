@@ -692,6 +692,100 @@ extern "C" SEXP _bigIRT_laplace_person_row_terms_cpp_impl(
   END_RCPP
 }
 
+// Ability-beta gradient for person predictors that vary within a person.
+//
+// The R path derived the same per-response quantities the row-terms kernel
+// above already computes, then assembled the gradient in R. Both are avoided
+// here: this repeats the arithmetic (about twenty flops, cheaper than storing
+// and re-reading three vectors the length of the response set) and accumulates
+// the K x P result directly.
+//
+// The gradient is
+//
+//   out[k,p] = sum_j ( ge_j - 1/2 sw_j + 1/2 hw_j q_j ) lo_jk x_jp
+//
+// with q_j = c_i' Sigma_i lo_j and c_i the per-person slope total supplied in
+// cg. See the derivation note in bigIRT_laplace_ability_beta_contribution.
+extern "C" SEXP _bigIRT_laplace_ability_beta_rows_cpp_impl(
+    SEXP idsSEXP, SEXP ySEXP, SEXP etaSEXP, SEXP cSEXP, SEXP dSEXP,
+    SEXP loadingsSEXP, SEXP sigmaSEXP, SEXP cgSEXP, SEXP xSEXP,
+    SEXP varyIdxSEXP, SEXP fixedSEXP, SEXP NSEXP, SEXP KSEXP) {
+  BEGIN_RCPP
+  Rcpp::IntegerVector ids(idsSEXP);
+  Rcpp::NumericVector y(ySEXP), eta(etaSEXP), crow(cSEXP), drow(dSEXP);
+  Rcpp::NumericMatrix lo(loadingsSEXP);
+  Rcpp::NumericVector sigma(sigmaSEXP);
+  Rcpp::NumericMatrix cg(cgSEXP);
+  Rcpp::NumericMatrix x(xSEXP);
+  Rcpp::IntegerVector vary(varyIdxSEXP);        // 0-based columns of x
+  Rcpp::IntegerMatrix fixed(fixedSEXP);
+  const int N = Rcpp::as<int>(NSEXP);
+  const int K = Rcpp::as<int>(KSEXP);
+  const R_xlen_t n = ids.size();
+  const int P = vary.size();
+  if(y.size() != n || eta.size() != n || crow.size() != n || drow.size() != n ||
+     lo.nrow() != n || lo.ncol() != K || x.nrow() != n ||
+     fixed.nrow() != n || fixed.ncol() != K || cg.nrow() != N || cg.ncol() != K)
+    Rcpp::stop("Unexpected dimensions in Laplace ability-beta row gradient.");
+  if(sigma.size() != (R_xlen_t)K * K * N)
+    Rcpp::stop("Posterior covariance array has unexpected size.");
+  for(int a = 0; a < P; ++a)
+    if(vary[a] < 0 || vary[a] >= x.ncol()) Rcpp::stop("Predictor index out of range.");
+
+  Rcpp::NumericMatrix out(K, P);
+  const double lo_p = 1e-12, hi_p = 1.0 - 1e-12;
+  std::vector<double> w(K);
+  for(R_xlen_t i = 0; i < n; ++i) {
+    const int subj = ids[i] - 1;
+    if(subj < 0 || subj >= N) Rcpp::stop("Person index out of range.");
+    const double g = bigirt_stable_inv_logit(eta[i]);
+    const double q = g * (1.0 - g);
+    const double u = drow[i] - crow[i];
+    double pp = crow[i] + u * g;
+    if(pp < lo_p) pp = lo_p; else if(pp > hi_p) pp = hi_p;
+    const double sc = u * q;
+    double r = pp * (1.0 - pp);
+    if(r < lo_p) r = lo_p;
+    const double grad_eta = ((y[i] - pp) / r) * sc;
+    const double dq_deta = q * (1.0 - 2.0 * g);
+    const double ds_deta = u * dq_deta;
+    const double dr_deta = sc * (1.0 - 2.0 * pp);
+    const double dw_deta = (2.0 * sc * ds_deta * r - sc * sc * dr_deta) / (r * r);
+    const double hess_w = sc * sc / r;
+
+    // aSa = a' Sigma a, and q_row = c_i' Sigma_i a, over the same K^2 blocks.
+    const R_xlen_t base = (R_xlen_t)K * K * subj;
+    double aSa = 0.0, q_row = 0.0;
+    for(int k = 0; k < K; ++k) {
+      const double lk = lo(i, k);
+      const double ck = cg(subj, k);
+      if(lk == 0.0 && ck == 0.0) continue;
+      for(int l = 0; l < K; ++l) {
+        const double skl = sigma[base + k + (R_xlen_t)K * l];
+        const double ll = lo(i, l);
+        if(lk != 0.0) aSa += lk * ll * skl;
+        if(ck != 0.0) q_row += ck * skl * ll;
+      }
+    }
+    const double slope_w = dw_deta * aSa;
+    const double core = grad_eta - 0.5 * slope_w + 0.5 * hess_w * q_row;
+
+    bool any = false;
+    for(int k = 0; k < K; ++k) {
+      w[k] = (fixed(i, k) != 0) ? 0.0 : core * lo(i, k);
+      if(w[k] != 0.0) any = true;
+    }
+    if(!any) continue;
+    for(int a = 0; a < P; ++a) {
+      const double xa = x(i, vary[a]);
+      if(xa == 0.0) continue;
+      for(int k = 0; k < K; ++k) out(k, a) += w[k] * xa;
+    }
+  }
+  return out;
+  END_RCPP
+}
+
 extern "C" SEXP _bigIRT_laplace_ability_beta_mstep_cpp_impl(
     SEXP theta_residualSEXP, SEXP person_predSEXP, SEXP ability_betaSEXP,
     SEXP free_maskSEXP, SEXP beta_scaleSEXP, SEXP jitterSEXP) {

@@ -12,6 +12,7 @@ Rcpp::Rostream<false>& Rcpp::Rcerr = Rcpp::Rcpp_cerr_get();
 #endif
 
 
+RcppExport SEXP _bigIRT_laplace_ability_beta_rows_cpp_impl(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
 RcppExport SEXP _bigIRT_laplace_corr_grad_cpp_impl(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
 RcppExport SEXP _bigIRT_laplace_direct_block_fg_cpp_impl(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
 RcppExport SEXP _bigIRT_laplace_item_block_objective_cpp_impl(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
@@ -26,6 +27,7 @@ RcppExport SEXP _rcpp_module_boot_stan_fit4irt_mod();
 
 static const R_CallMethodDef CallEntries[] = {
     {"_rcpp_module_boot_stan_fit4irt_mod", (DL_FUNC) &_rcpp_module_boot_stan_fit4irt_mod, 0},
+    {"_bigIRT_laplace_ability_beta_rows_cpp_impl",    (DL_FUNC) &_bigIRT_laplace_ability_beta_rows_cpp_impl,    13},
     {"_bigIRT_laplace_corr_grad_cpp_impl",            (DL_FUNC) &_bigIRT_laplace_corr_grad_cpp_impl,             9},
     {"_bigIRT_laplace_direct_block_fg_cpp_impl",      (DL_FUNC) &_bigIRT_laplace_direct_block_fg_cpp_impl,      41},
     {"_bigIRT_laplace_item_block_objective_cpp_impl", (DL_FUNC) &_bigIRT_laplace_item_block_objective_cpp_impl, 34},

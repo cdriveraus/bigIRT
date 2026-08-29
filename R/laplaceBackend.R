@@ -405,6 +405,15 @@ bigIRT_laplace_row_context <- function(sdat, rows = bigIRT_laplace_training_rows
       if(sdat$itemSpecificBetas == 1L) D_ref else ifelse(D_ref > 0L, 1L, 0L)
     } else integer(nrows),
     person_pred = if(sdat$NpersonPreds > 0) as.matrix(sdat$personPreds[rows,, drop = FALSE]) else matrix(0, nrow = nrows, ncol = 0),
+    ## Constant for the life of the fit; see the note on the accessor.
+    person_pred_varies = if(sdat$NpersonPreds > 0)
+      bigIRT_laplace_person_pred_varies(sdat$personPreds[rows,, drop = FALSE], ids) else logical(0),
+    ## The native ability-beta kernel wants these in a fixed storage mode. They
+    ## do not change while the fit runs, and converting 8 million responses on
+    ## every gradient evaluation was showing up in the profile.
+    ids_int = as.integer(ids),
+    score = as.numeric(sdat$score[rows]),
+    fixed_ability_int = matrix(as.integer(fixed_ability), nrow = nrows, ncol = K),
     # Both predictor matrices are long-row matrices in standata.  Index them
     # with `rows`, never with the item id: item ids are not row positions.
     A_pred = if(sdat$NAitemPreds > 0) as.matrix(sdat$itemPreds[rows, sdat$AitemPreds, drop = FALSE]) else matrix(0, nrow = nrows, ncol = 0),
@@ -1690,7 +1699,11 @@ bigIRT_laplace_row_gradient_pieces <- function(sdat, posterior, row_effective, r
   for(k in seq_len(K)) for(l in seq_len(K))
     aSa <- aSa + lo[, k] * lo[, l] * Sig[k, l, ids]
 
-  list(grad_eta = grad_eta, slope_w = dw_deta * aSa, loadings = lo, ids = ids)
+  ## hess_w is the weight each response puts into the person precision,
+  ## H_i = sum_j hess_w_ij lo_ij lo_ij' + Q. The within-person beta gradient
+  ## needs it separately; the person-level accumulation does not.
+  list(grad_eta = grad_eta, slope_w = dw_deta * aSa, hess_w = s^2 / r,
+       loadings = lo, ids = ids)
 }
 
 bigIRT_laplace_person_row_terms_R <- function(sdat, posterior, row_effective, row_context){
@@ -1737,17 +1750,25 @@ bigIRT_laplace_person_row_terms_R <- function(sdat, posterior, row_effective, ro
 ## within person can be folded out of the sum over that person's responses; one
 ## that varies cannot, and the two need different gradients.
 bigIRT_laplace_person_pred_within_varying <- function(row_context, tol = 1e-10){
-  X <- row_context$person_pred
+  ## Computed once when the row context is built and carried on it: the
+  ## predictors are data and cannot change during a fit, and rederiving this
+  ## from every response on every gradient evaluation cost about a sixth of
+  ## each one.
+  if(!is.null(row_context$person_pred_varies)) return(row_context$person_pred_varies)
+  bigIRT_laplace_person_pred_varies(row_context$person_pred, row_context$ids, tol)
+}
+
+bigIRT_laplace_person_pred_varies <- function(X, ids, tol = 1e-10){
   if(is.null(X) || !ncol(X)) return(logical(0))
   X <- as.matrix(X)
-  ids <- as.integer(row_context$ids)
+  ids <- as.integer(ids)
   n <- rowsum(rep(1, length(ids)), group = ids)
   m <- rowsum(X, group = ids) / as.numeric(n)
   idx <- match(ids, as.integer(rownames(m)))
   apply(abs(X - m[idx, , drop = FALSE]), 2L, max) > tol
 }
 
-bigIRT_laplace_ability_beta_contribution <- function(state, sdat, posterior, row_context, layout, prior_precision, person_terms, row_effective = NULL){
+bigIRT_laplace_ability_beta_contribution <- function(state, sdat, posterior, row_context, layout, prior_precision, person_terms, row_effective = NULL, impl = c("cpp", "R")){
   out <- matrix(0, nrow = sdat$Nscales, ncol = sdat$NpersonPreds)
   if(length(layout$ability_beta) == 0L || sdat$NpersonPreds == 0L) return(out)
   if(is.null(posterior$covariance)) stop("laplace_direct Abilitybeta gradients require posterior covariances.")
@@ -1809,31 +1830,90 @@ bigIRT_laplace_ability_beta_contribution <- function(state, sdat, posterior, row
   if(length(vary_idx)){
     if(is.null(row_effective))
       stop("laplace_direct Abilitybeta gradients need the response rows when a person predictor varies within person.")
-    pieces <- bigIRT_laplace_row_gradient_pieces(sdat, posterior, row_effective, row_context)
-    lo <- pieces$loadings
-    X <- as.matrix(row_context$person_pred)
-
-    ## One rowsum for all varying covariates at once: for each, K columns of the
-    ## x-weighted score and K of the x-weighted log-determinant slope.
-    cols <- vector("list", length(vary_idx))
-    for(j in seq_along(vary_idx)){
-      xw <- X[, vary_idx[j]]
-      cols[[j]] <- cbind((pieces$grad_eta * xw) * lo, (pieces$slope_w * xw) * lo)
-    }
-    acc_raw <- rowsum(do.call(cbind, cols), group = ids)
-    acc <- matrix(0, N, 2L * K * length(vary_idx))
-    acc[as.integer(rownames(acc_raw)), ] <- acc_raw
-
-    for(j in seq_along(vary_idx)){
-      off <- (j - 1L) * 2L * K
-      sx <- acc[, off + seq_len(K), drop = FALSE]
-      gx <- acc[, off + K + seq_len(K), drop = FALSE]
-      out[, vary_idx[j]] <- colSums(reduce(sx, gx))
-    }
+    ## The reduce() above is not the general gradient. It is the general
+    ## gradient AFTER a cancellation that needs x outside the sum over a
+    ## person's responses. With b_i the person's base ability, the mode shifts
+    ## under beta as
+    ##
+    ##   db_i/dbeta_kp = -H_i^-1 sum_j hess_w_ij lo_ijk x_ijp lo_ij
+    ##
+    ## and for x constant within person that is -(I - H_i^-1 Q) x_ip, which
+    ## makes the explicit and mode-driven halves of dlog|H_i|/dbeta cancel down
+    ## to the single -1/2 Q Sigma g term. When x varies within person they do
+    ## not cancel, and weighting the collapsed form by x --- which is what an
+    ## earlier version of this function did --- weights an expression whose
+    ## surviving terms have already been discarded. Central differences on the
+    ## objective put that at a relative error of order one, sign included, while
+    ## the between-person columns of the same fit matched to 7e-06.
+    ##
+    ## Written out and kept row-level, the three terms are
+    ##
+    ##   T1 = sum_j g_ij lo_ijk x_ijp
+    ##   T2 = -1/2 sum_j slope_w_ij lo_ijk x_ijp
+    ##   T3 = +1/2 sum_j hess_w_ij q_ij lo_ijk x_ijp,  q_ij = c_i' Sigma_i lo_ij
+    ##
+    ## with c_i = sum_j slope_w_ij lo_ij, which is exactly the per-person slope
+    ## the caller has already accumulated. Every term is then a sum over
+    ## responses of something times x_ijp, so the whole gradient is one
+    ## crossprod and needs no per-covariate aggregation: it does not grow with
+    ## the number of covariates, and there is no scattered write.
+    out[, vary_idx] <- bigIRT_laplace_ability_beta_rows(
+      sdat = sdat, posterior = posterior, row_effective = row_effective,
+      row_context = row_context, gacc = gacc, vary_idx = vary_idx,
+      impl = impl)
   }
 
   dimnames(out) <- NULL
   out
+}
+
+## One pass over the responses for the within-person ability-beta gradient.
+## The C++ path repeats about twenty flops per row rather than materialising
+## three vectors the length of the response set; the R path is kept as the
+## reference the two are checked against.
+bigIRT_laplace_ability_beta_rows <- function(sdat, posterior, row_effective,
+                                             row_context, gacc, vary_idx,
+                                             impl = c("cpp", "R")){
+  impl <- match.arg(impl)
+  K <- as.integer(sdat$Nscales)
+  N <- as.integer(sdat$Nsubs)
+  ids <- row_context$ids_int
+  if(is.null(ids)) ids <- as.integer(row_context$ids)
+  X <- as.matrix(row_context$person_pred)
+  lo <- row_effective$loadings
+  if(is.null(dim(lo))) lo <- matrix(lo, ncol = K)
+
+  if(identical(impl, "cpp")){
+    fixed <- row_context$fixed_ability_int
+    if(is.null(fixed))
+      fixed <- matrix(as.integer(row_context$fixed_ability), nrow = length(ids), ncol = K)
+    y <- row_context$score
+    if(is.null(y)) y <- as.numeric(sdat$score[row_context$rows])
+    return(bigIRT_laplace_ability_beta_rows_cpp_impl(
+      ids = ids, y = y,
+      eta = row_effective$eta_row, c_row = row_effective$c_row,
+      d_row = row_effective$d_row,
+      loadings = lo, sigma = posterior$covariance,
+      cg = gacc, x = X, vary_idx = as.integer(vary_idx - 1L),
+      fixed = fixed, N = N, K = K))
+  }
+
+  pieces <- bigIRT_laplace_row_gradient_pieces(sdat, posterior, row_effective, row_context)
+  Sig <- posterior$covariance
+  q <- numeric(length(ids))
+  for(m in seq_len(K)) for(n in seq_len(K))
+    q <- q + gacc[ids, m] * Sig[m, n, ids] * lo[, n]
+  W <- (pieces$grad_eta - 0.5 * pieces$slope_w + 0.5 * pieces$hess_w * q) * lo
+  W[matrix(as.logical(row_context$fixed_ability), nrow = length(ids), ncol = K)] <- 0
+  crossprod(W, X[, vary_idx, drop = FALSE])
+}
+
+bigIRT_laplace_ability_beta_rows_cpp_impl <- function(ids, y, eta, c_row, d_row,
+    loadings, sigma, cg, x, vary_idx, fixed, N, K){
+  .Call(`_bigIRT_laplace_ability_beta_rows_cpp_impl`, as.integer(ids),
+    as.numeric(y), as.numeric(eta), as.numeric(c_row), as.numeric(d_row),
+    loadings, as.numeric(sigma), cg, x, as.integer(vary_idx), fixed,
+    as.integer(N), as.integer(K))
 }
 
 bigIRT_laplace_constrained_pars <- function(state, sdat, posterior = NULL){
