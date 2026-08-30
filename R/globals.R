@@ -5,6 +5,7 @@
 ## check output free of notes that would otherwise hide a real one.
 utils::globalVariables(c(
   ## response columns, in simIRT and the comparison helpers
+  ".",
   "id", "Item", "Scale", "score", "p", "pcorrect", "D",
   "parameter", "corr_type", "clms",
   ## per-item and per-person means, in dropPerfectScores
