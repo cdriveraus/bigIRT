@@ -29,8 +29,8 @@ if(identical(Sys.getenv("NOT_CRAN"), "true")& .Machine$sizeof.pointer != 4){
 
 
     #parallel check
-    fit <- fitIRT(dat$dat,cores=4,pl=1,plot=F,verbose=0,priors=T)
-    fit2 <- fitIRT(dat$dat,cores=4,pl=1,plot=F,verbose=0,priors=T,trainingRows = trainingSet)
+    fit <- fitIRT(dat$dat,cores=2,pl=1,plot=F,verbose=0,priors=T)
+    fit2 <- fitIRT(dat$dat,cores=2,pl=1,plot=F,verbose=0,priors=T,trainingRows = trainingSet)
 
     testthat::expect_equivalent(
       exp((sum(log(fit2$pars$p[-trainingSet]))-fit2$optim$f)/fit$dat$Nobs),

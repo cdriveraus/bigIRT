@@ -24,7 +24,7 @@ if(identical(Sys.getenv("NOT_CRAN"), "true")& .Machine$sizeof.pointer != 4){
     dat=dat[Item %in% items$Item,]
     dat2=copy(dat)[,Scale:=1]
 
-    fit <- fitIRT(dat2,cores=4,pl=1,plot=F,verbose=0,priors=T,
+    fit <- fitIRT(dat2,cores=2,pl=1,plot=F,verbose=0,priors=T,
       normalise = T,ebayes = F,ebayesmultiplier = 2)
 
     s=bigIRT:::scoreIRT(fit)

@@ -42,11 +42,11 @@ tamAbility <- IRT.factor.scores(tfit,type = 'WLE')
 
 
 # empirical bayes estimates for regularized final pass
-fit <- fitIRT(dat,cores=6,normalise=T,ebayes=T,
+fit <- fitIRT(dat,cores=2,normalise=T,ebayes=T,
   # itemPreds = 'betamean',
   pl=pl,plot=F,verbose=1,priors=T)
 
-fiti <- fitIRT(dat,cores=6,ebayesmultiplier = 2,ebayes = T,normalise=T,
+fiti <- fitIRT(dat,cores=2,ebayesmultiplier = 2,ebayes = T,normalise=T,
   # item = 'item2',score = 'score',id = 'id',scale = 'scale2',
   # itemDat = fiti$itemPars[1:2,],personDat = fiti$personPars[1:4,],
   itemPreds = 'itemgrade',
