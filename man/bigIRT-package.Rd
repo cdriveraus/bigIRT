@@ -7,10 +7,22 @@
 \title{The 'bigIRT' package.}
 \description{
 Tools for fitting binary item response theory (IRT) models for large and
-sparse response data. The main entry point is \code{\link[=fitIRT]{fitIRT()}}, which supports
-1PL-4PL models, optional covariate effects on item and person parameters,
-empirical-Bayes style prior adaptation, and utility functions for simulation
-and post-estimation summaries.
+sparse response data in long format. The main entry point is \code{\link[=fitIRT]{fitIRT()}},
+which estimates 1PL-4PL models by marginal maximum likelihood with a Laplace
+approximation to the integral over person abilities
+(\code{marginalApprox = "laplace"}; the \code{"none"} default is the older penalised
+joint MAP estimator, retained for backwards compatibility). It supports
+multidimensional and confirmatory loading structures with an estimated latent
+correlation, covariate effects on ability and on each item parameter, and
+empirical-Bayes prior adaptation.
+
+Post-estimation, see \code{\link[=itemInformation]{itemInformation()}} and \code{\link[=testInformation]{testInformation()}} for
+information and standard errors, \code{\link[=reliability]{reliability()}}, \code{\link[=itemFit]{itemFit()}} and
+\code{\link[=empiricalICC]{empiricalICC()}} for measurement diagnostics, \code{\link[=checkConvergence]{checkConvergence()}} and
+\code{\link[=plotLaplaceDiagnostics]{plotLaplaceDiagnostics()}} for the optimiser, \code{\link[=heldoutMetrics]{heldoutMetrics()}}, \code{\link[=IRTic]{IRTic()}}
+and \code{\link[=looIRT]{looIRT()}} for model comparison, \code{\link[=tidyIRT]{tidyIRT()}} and \code{\link[=reportIRT]{reportIRT()}} for
+reporting, \code{\link[=as.mirt]{as.mirt()}} for handing a fit to \code{mirt}, and \code{\link[=simIRT]{simIRT()}} to
+generate data in the shape \code{\link[=fitIRT]{fitIRT()}} expects.
 }
 \examples{
 # Generate simple 2PL data and fit a model.
@@ -20,7 +32,8 @@ dat <- simIRT(Nsubs = 500,Nitems = 50,Nscales = 1,
   BMean=0,BSD = .7,
   AbilityMean = 0,AbilitySD = 1)
 
-fit <- fitIRT(dat$dat,cores=1,pl=2,dropPerfectScores=FALSE)
+fit <- fitIRT(dat$dat,cores=1,pl=2,dropPerfectScores=FALSE,
+  marginalApprox='laplace')
 
 head(fit$itemPars)
 head(fit$personPars)

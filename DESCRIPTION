@@ -10,9 +10,12 @@ Authors@R:
 Author: Charles Driver [aut, cre]
 Maintainer: Charles Driver <charles.driver@psychologie.uzh.ch>
 Description: Fits binary item response theory (IRT) models for large and sparse
-    data in long format. Supports 1PL to 4PL models, optional covariate effects
-    on item and person parameters, empirical-Bayes style prior adaptation, and
-    helper tools for simulation and weighted-likelihood scoring.
+    data in long format, by marginal maximum likelihood with a Laplace
+    approximation to the integral over person abilities. Supports 1PL to 4PL
+    models, multidimensional and confirmatory loading structures with an
+    estimated latent correlation, covariate effects on ability and on each item
+    parameter, empirical-Bayes prior adaptation, and post-estimation tools for
+    information, reliability, item fit, held-out prediction and simulation.
 License: MIT + file LICENSE
 Encoding: UTF-8
 LazyData: true

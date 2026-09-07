@@ -1,71 +1,484 @@
 ---
-title: "bigIRT"
-author: "Charles Driver"
-date: ""
 output: github_document
 ---
-  <!-- badges: start -->
-  [![R-CMD-check](https://github.com/cdriveraus/bigIRT/actions/workflows/R-CMD-check.yaml/badge.svg)](https://github.com/cdriveraus/bigIRT/actions/workflows/R-CMD-check.yaml)
-  <!-- badges: end -->
+
+# bigIRT
+
+<!-- badges: start -->
+[![R-CMD-check](https://github.com/cdriveraus/bigIRT/actions/workflows/R-CMD-check.yaml/badge.svg)](https://github.com/cdriveraus/bigIRT/actions/workflows/R-CMD-check.yaml)
+<!-- badges: end -->
+
+Item response theory for large, sparse response sets in long format. bigIRT
+fits binary 1PL to 4PL models by marginal maximum likelihood, using a Laplace
+approximation for the integral over person abilities. It works one response row
+at a time and never builds the wide person-by-item matrix, so millions of
+responses and hundreds of thousands of people are an ordinary input.
+
+What is implemented:
+
+| | |
+|---|---|
+| **Models** | 1PL, 2PL, 3PL, 4PL |
+| **Estimation** | Marginal ML, Laplace approximation (`marginalApprox = "laplace"`) |
+| **Person covariates** | On ability, varying between *or within* a person |
+| **Item covariates** | On any of the four item parameters, shared or item-specific |
+| **Multiple dimensions** | Several scales at once, confirmatory loading patterns, estimated latent correlation |
+| **Priors** | Fixed, or hyperparameters estimated from the data (`ebayes`) |
+| **Validation** | Response-level or whole-person holdout, PSIS-LOO, AIC/BIC |
+| **Diagnostics** | Item and test information, standard errors, empirical ICCs, infit/outfit, reliability, convergence by parameter block |
+| **Interop** | `mirt` in both directions, `broom` tidiers, HTML report |
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>", dpi = 110,
+  fig.path = "readme_files/figure-gfm/")
+options(width = 90)
 ```
 
 ## Install
-If building on windows, first ensure you have Rtools installed. https://cran.r-project.org/bin/windows/Rtools/
 
-Run the following code to install the package:
+On Windows, first install Rtools: <https://cran.r-project.org/bin/windows/Rtools/>
 
-```{r cars, eval=FALSE}
-remotes::install_github('cdriveraus/bigIRT', INSTALL_opts = "--no-multiarch", dependencies = c("Depends", "Imports"))
+```{r install, eval=FALSE}
+remotes::install_github('cdriveraus/bigIRT',
+  INSTALL_opts = "--no-multiarch",
+  dependencies = c("Depends", "Imports"))
 ```
 
-## Quick start
+## The data
 
-```{r, message=FALSE, warning=FALSE}
+One row per response. You need a person column, an item column, a scale
+column, and a binary score; anything else in the data can be used as a
+covariate. `simIRT()` generates data in exactly this shape:
+
+```{r sim, message=FALSE}
 library(bigIRT)
 library(data.table)
 
-# Simulate a sparse 2PL-like dataset.
-sim <- simIRT(
-  Nsubs = 300, Nitems = 60, Nscales = 1,
-  AMean = 1, ASD = .15,
-  BMean = 0, BSD = .9,
-  logitCMean = -10, logitCSD = 0
-)
+set.seed(1)
+sim <- simIRT(Nsubs = 2000, Nitems = 120, Nscales = 1, NitemsAnswered = 30,
+  AMean = 1, ASD = .4, BMean = 0, BSD = 1,
+  logitCMean = -20, logitCSD = 0, logitDMean = 20, logitDSD = 0)
 
-# Fit using joint maximum likelihood / MAP style estimation.
-fit <- fitIRT(
-  sim$dat,
-  pl = 2,
-  cores = 1,
-  dropPerfectScores = FALSE
-)
-
-head(fit$itemPars)
-head(fit$personPars)
+dat <- data.table(sim$dat)
+head(dat[, .(id, Item, Scale, score)])
 ```
 
-## Laplace optimization
+2,000 people answered 30 of 120 items each: 60,000 rows out of a possible
+240,000. Column names are arguments, so your own names are fine
+(`fitIRT(dat, id = "student", item = "code", score = "correct")`).
 
-`fitIRT()` supports both blockwise and direct Laplace fitting:
+## Fitting
 
-```{r eval=FALSE}
-fit_laplace <- fitIRT(
-  sim$dat,
-  pl = 2,
-  marginalApprox = "laplace_fast",
-  laplaceDiagnostics = TRUE
+```{r fit}
+set.seed(2)
+train <- sample(nrow(dat), 0.9 * nrow(dat))   # hold a tenth back
+
+tm <- system.time(
+  fit <- fitIRT(dat, pl = 2,
+    marginalApprox = "laplace",   # pass this: the default is the old MAP path
+    trainingRows = train,
+    keepInternals = TRUE,         # keep what standard errors need
+    laplaceDiagnostics = TRUE,    # keep the optimiser trace for plotting
+    cores = 2, dropPerfectScores = FALSE, normalise = FALSE,
+    verbose = 0, plot = FALSE)
 )
+
+fit
 ```
 
-You can inspect diagnostics with:
+That is `r round(tm[["elapsed"]], 1)` seconds for 60,000 responses on two
+cores. **Always check the status line.** `strictly converged` is what you want;
+anything else means read `fit$laplaceStatus` and `checkConvergence()` before
+using the numbers.
 
-```{r eval=FALSE}
-plotLaplaceDiagnostics(fit_laplace)
+`summary()` gives the item parameters, their standard errors, the effective
+parameter count, reliability and the held-out prediction together:
+
+```{r summary}
+summary(fit)
 ```
+
+Against the parameters `simIRT()` generated (`normaliseIRT()` first, since
+estimated and generating parameters sit on different metrics):
+
+```{r recovery, fig.width=9, fig.height=3.4, fig.alt="Three scatter plots of estimates against generating values, for discrimination, intercept and ability, each with the identity line drawn. All three scatter tightly along the line, the discrimination panel most closely at r = 0.95, and the 2,000 ability estimates in a wider band at r = 0.90."}
+truth <- normaliseIRT(B = sim$B, Ability = sim$Ability, A = sim$A)
+est   <- normaliseIRT(B = fit$itemPars$B, Ability = fit$pars$Ability,
+                      A = fit$itemPars$A)
+
+local({
+  op <- par(mfrow = c(1, 3), mar = c(4.2, 4.2, 2.2, 1)); on.exit(par(op))
+  for(p in c("A", "B", "Ability")){
+    r <- cor(as.numeric(truth[[p]]), as.numeric(est[[p]]))
+    plot(truth[[p]], est[[p]], pch = 16, cex = .5, col = "#00000055",
+      xlab = "generating value", ylab = "estimate",
+      main = sprintf("%s   (r = %.3f)", p, r))
+    abline(0, 1, col = "red")
+  }
+})
+```
+
+### What comes back
+
+| | |
+|---|---|
+| `fit$itemPars` | One row per item: `Item`, `A`, `B`, `C`, `D` |
+| `fit$personPars` | One row per person: `id`, one ability column per scale, one posterior SD per scale |
+| `fit$pars$Ability` | Ability point estimates, persons x scales |
+| `fit$covariateEffects` | Covariate effects, raw (`$Ability`) and standardised (`$AbilityStd`) |
+| `fit$pars$Abilitybeta` | Person-covariate coefficients, as estimated |
+| `fit$pars$Bbeta`, `$Abeta`, `$Cbeta`, `$Dbeta` | Item-covariate coefficients |
+| `fit$pars$pcorrect` | Per-response probability of a correct answer, in *your* row order |
+| `fit$pars$p` | Per-response probability of the response actually observed |
+| `fit$abilityPrior$corr` | Latent correlation between scales |
+| `fit$personPosterior` | Person modes, precisions, covariances, per-person convergence |
+| `fit$laplaceStatus` | Convergence status, iterations, stop reason |
+| `fit$optim$logLik` | Optimiser objective. For a likelihood use `logLik(fit)` |
+
+`fit$pars$pcorrect` and `fit$pars$p` are mapped back to the row order of the
+data you passed in, so they index with the same row numbers you used for
+`trainingRows`. Scoring the held-out rows by hand reproduces what
+`heldoutMetrics()` reports, which is the check that the mapping is right:
+
+```{r rowmap}
+heldout <- setdiff(seq_len(nrow(dat)), train)
+brier <- mean((dat$score[heldout] - fit$pars$pcorrect[heldout])^2)
+
+c(by_hand = brier, heldoutMetrics = heldoutMetrics(fit)$brier)
+```
+
+Other row-level output (`b_row`, `eta_row`, `row_ability`, `fit$dat`) stays in
+the internal person-sorted order. `fit$pars$originalRow` maps between the two.
+
+### Arguments worth knowing
+
+| | |
+|---|---|
+| `pl` | 1 to 4. Number of item parameters |
+| `marginalApprox` | `"laplace"`. `"laplace_fast"` and `"laplace_direct"` are accepted names for the same thing |
+| `cores` | Threads used for fitting |
+| `trainingRows` | Rows used for estimation. See [Validation](#validation) |
+| `personPreds` | Column names of ability covariates |
+| `AitemPreds`, `BitemPreds`, `CitemPreds`, `DitemPreds` | Column names of item covariates |
+| `itemSpecificBetas` | `FALSE` (default) for one coefficient per predictor, `TRUE` for one per item |
+| `loadings` | Item x scale matrix. Fixed values, `NA` to estimate |
+| `estimateAbilityCorr` | Estimate the latent correlation between scales |
+| `ebayes` | `TRUE` (default) estimates the prior hyperparameters from the data |
+| `dropPerfectScores` | Drops all-right and all-wrong people and items before fitting |
+| `keepInternals` | Needed by `itemInformation()` and the tidiers |
+| `laplaceDiagnostics` | Keeps the optimiser trace for `plot(fit, "convergence")` |
+| `laplaceKeepCovariance` | Keeps full person posterior covariances. Needed by `looIRT()`. Large |
+
+## Diagnostics and plots
+
+`plot()` on a fit takes a `type`. Response curves come with the observed
+proportions in ability bins and their Wilson intervals, so you are comparing
+the model against the data:
+
+```{r icc, fig.width=9, fig.height=6, fig.alt="Six panels, one per item. Each shows the fitted 2PL response curve with binned observed proportions and their 95 percent Wilson intervals plotted over it, and the points track the curves. Item 2 is nearly flat, and item 3 rises only above ability 1, with every observed proportion near zero."}
+plot(fit, type = "icc", items = 1:6)
+```
+
+Item 2 barely discriminates, and item 3 does not start rising until the top of
+the ability range, so almost nobody who saw it got it right.
+
+Test information and the conditional standard error of measurement show where
+the test actually measures:
+
+```{r information, fig.width=8, fig.height=5, fig.alt="Test information peaks near ability zero at about 25 and falls away symmetrically to about 3 at the edges; the conditional standard error of measurement, on the right axis, is a mirrored U with its minimum of about 0.20 at the same place."}
+plot(fit, type = "information")
+```
+
+A person-item map compares where the people are with where the items are:
+
+```{r wright, fig.width=8, fig.height=6, fig.alt="Two stacked histograms on a shared ability axis. The upper panel shows the 2,000 person abilities, roughly normal and centred at zero. The lower panel shows the item intercepts, also concentrated near zero but with a long right tail and one isolated item out near 3.8."}
+plot(fit, type = "wright")
+```
+
+The isolated item out near 3.8 is item 3 from the panel above. This is how you
+find those without looking at every curve.
+
+`itemFit()` gives infit and outfit in one pass over the responses, and
+`reliability()` the empirical and marginal coefficients:
+
+```{r itemfit}
+head(itemFit(fit))
+reliability(fit)
+```
+
+Item 3 shows up here too, with an outfit far below 1: its responses are more
+predictable than the model expects, because almost nobody who saw it got it
+right.
+
+`itemInformation()` gives per-item standard errors and an effective parameter
+count. The default `method = "auto"` uses a fast closed-form weight, and
+switches to differencing the analytic gradient (exact, but two objective
+evaluations per parameter) when the projected cost fits `time_budget`.
+
+```{r iteminfo}
+itemInformation(fit)
+```
+
+`testInformation()` returns information and the conditional SEM on a theta
+grid, and `empiricalICC()` returns the binned observed-versus-expected table
+behind the first plot. Both are row-wise, so they run at any data size.
+
+### Convergence
+
+Read this as numbers, not only as a picture. `checkConvergence()` splits the
+gradient by parameter block, which is how you find a fit that reports
+convergence but is stalled on one small block:
+
+```{r checkconv}
+checkConvergence(fit)
+```
+
+`plot(fit, "convergence")` draws the optimiser's trace: objective, gradient
+norm, how far the item and person blocks moved, posterior spread, timing, and
+the two stopping criteria.
+
+```{r convergence, fig.width=10, fig.height=7, message=FALSE, fig.alt="Six diagnostic panels against outer iteration: the objective and the gradient norm both descend to a floor, item and person parameter movement decays toward zero, posterior spread is flat, per-iteration timing is small and irregular, and the strict and stability criteria both flatten at the end."}
+plot(fit, type = "convergence")
+```
+
+## Validation
+
+`trainingRows` selects the rows used for estimation; everything else is scored
+as holdout by `heldoutMetrics()`.
+
+```{r heldout}
+unlist(heldoutMetrics(fit))
+```
+
+`IRTic()` gives AIC and BIC with the person parameters correctly not counted,
+and `looIRT()` runs PSIS-LOO over draws from the person posteriors (refit with
+`laplaceKeepCovariance = TRUE` first).
+
+```{r ic}
+IRTic(fit)
+```
+
+**Whole people can be held out**, not just responses: a person with no training
+response has the prior as their posterior, so their fitted ability is exactly
+what their covariates predict. That is the design that tests whether covariates
+say anything about somebody the model never saw, and there is an example in
+[Covariates](#covariates) below. Items are not symmetric here — every item must
+keep at least one training response, since nothing else identifies it.
+
+## Covariates
+
+Ability covariates are column names passed to `personPreds`. They are aligned
+to response rows, not to people, so a covariate may vary *within* a person —
+which is what makes longitudinal designs work. Here `ses` is fixed per person
+and `t_dev` is a person-centred time score, giving a between-person and a
+within-person effect from one fit:
+
+```{r covariates}
+set.seed(7)
+N <- 1500; J <- 150; per <- 24; occ <- 4L
+A <- rlnorm(J, 0, .25); B <- rnorm(J, 0, 1)
+theta <- rnorm(N); sesv <- rnorm(N)
+
+d <- data.table(id = rep(seq_len(N), each = per))
+d[, occasion := rep(seq_len(occ), length.out = .N), by = id]
+d[, t_dev := (occasion - 1) / (occ - 1) * 2]
+d[, t_dev := t_dev - mean(t_dev), by = id]    # varies only within a person
+d[, ses := sesv[id]]                           # varies only between persons
+d[, Item := sample.int(J, .N, replace = TRUE)]
+d[, Scale := "s1"]
+
+ability <- theta[d$id] + 0.4 * d$t_dev + 0.3 * d$ses
+d[, score := rbinom(.N, 1, 1 / (1 + exp(-A[Item] * (ability - B[Item]))))]
+
+fitcov <- fitIRT(d, pl = 2, cores = 2, marginalApprox = "laplace",
+  personPreds = c("ses", "t_dev"),
+  dropPerfectScores = FALSE, normalise = FALSE, verbose = 0, plot = FALSE)
+
+rbind(estimated = drop(fitcov$covariateEffects$Ability), true = c(0.3, 0.4))
+```
+
+`fit$covariateEffects$AbilityStd` gives the same effects per standard deviation
+of the predictor.
+
+Item covariates work the same way through `AitemPreds`, `BitemPreds`,
+`CitemPreds` and `DitemPreds`. With `itemSpecificBetas = FALSE` there is one
+coefficient per predictor across all items, which is how you ask whether a
+feature of an item — its position in the test, its format, its language
+version — shifts difficulty in general:
+
+```{r itempreds, eval=FALSE}
+fitb <- fitIRT(dat, pl = 2, marginalApprox = "laplace",
+  BitemPreds = c("position", "isTranslated"))
+fitb$pars$Bbeta
+```
+
+Two things to know when interpreting ability coefficients. The ability mean is
+fixed at zero (`estMeans`), because location is pinned by either the ability
+prior or the item difficulties and not both, so coefficients are relative to
+that and there is no population offset to add back. And an uncentred binary
+covariate is fine — its coefficient is then a contrast against the reference
+group, which sits at the prior mean.
+
+To ask whether the covariates say anything about people the model has never
+seen, hold out whole people. Such a person has no likelihood, so their ability
+is their covariate prediction and nothing else — which you can check directly,
+comparing each person's ability against their own mean covariate values:
+
+```{r wholeperson}
+test_people <- sample(unique(d$id), 300)
+
+fit_ho <- fitIRT(d, pl = 2, cores = 2, marginalApprox = "laplace",
+  personPreds = c("ses", "t_dev"),
+  trainingRows = which(!d$id %in% test_people),
+  dropPerfectScores = FALSE, normalise = FALSE, verbose = 0, plot = FALSE)
+
+pmean <- d[, .(ses = mean(ses), t_dev = mean(t_dev)), by = id]
+pmean <- pmean[match(as.integer(fit_ho$personPars$id), pmean$id)]
+pred  <- as.matrix(pmean[, .(ses, t_dev)]) %*% drop(fit_ho$pars$Abilitybeta)
+gap   <- abs(as.numeric(fit_ho$pars$Ability) - as.numeric(pred))
+held  <- as.integer(fit_ho$personPars$id) %in% test_people
+
+c(held_out = max(gap[held]), in_training = max(gap[!held]))
+```
+
+Zero for the held-out people, and not for the others, whose abilities their own
+responses inform.
+
+Whether that prediction is worth anything is a separate question, and one
+number cannot answer it — you need the same holdout without the covariates to
+compare against:
+
+```{r wholeperson-contrast}
+fit_nocov <- fitIRT(d, pl = 2, cores = 2, marginalApprox = "laplace",
+  trainingRows = which(!d$id %in% test_people),
+  dropPerfectScores = FALSE, normalise = FALSE, verbose = 0, plot = FALSE)
+
+rbind(
+  `with covariates` = unlist(heldoutMetrics(fit_ho))[c("log_loss", "auc")],
+  `without`         = unlist(heldoutMetrics(fit_nocov))[c("log_loss", "auc")])
+```
+
+## Multiple dimensions
+
+Give the data more than one `Scale` and the scales are fitted together. Add
+`estimateAbilityCorr = TRUE` to estimate the latent correlation rather than
+assume it:
+
+```{r multidim}
+trueR <- matrix(c(1, .7, .4,  .7, 1, .5,  .4, .5, 1), 3, 3)
+set.seed(31)
+simm <- simIRT(Nsubs = 2500, Nitems = 60, Nscales = 3,
+  NitemsAnswered = c(10, 10, 10),
+  AMean = 1, ASD = .2, BMean = 0, BSD = 1,
+  logitCMean = -20, logitCSD = 0, logitDMean = 20, logitDSD = 0,
+  AbilityCorr = trueR)
+
+fitm <- fitIRT(simm$dat, pl = 2, cores = 2, marginalApprox = "laplace",
+  estimateAbilityCorr = TRUE, ebayes = FALSE,
+  dropPerfectScores = FALSE, normalise = FALSE, verbose = 0, plot = FALSE)
+
+round(fitm$abilityPrior$corr, 2)
+```
+
+**Report `fit$abilityPrior$corr`, not `cor(fit$pars$Ability)`.** The
+correlation among ability point estimates is biased — downwards under an
+independent prior, since each score is shrunk on its own, and upwards under a
+correlated one, since the shrinkage pulls scores together. Against the known
+truth:
+
+```{r multidim-bias}
+rbind(estimate = fitm$abilityPrior$corr[lower.tri(trueR)],
+      modes    = cor(fitm$pars$Ability)[lower.tri(trueR)],
+      truth    = trueR[lower.tri(trueR)])
+```
+
+For structure within a scale set, pass a loading matrix. Fixed values define
+the confirmatory pattern, `NA` entries are estimated, and rows and columns are
+matched to item and scale ids by name:
+
+```{r loadings, eval=FALSE}
+L <- matrix(NA_real_, nrow = length(item_ids), ncol = length(scale_ids),
+  dimnames = list(item_ids, scale_ids))
+L[1, ] <- c(0.8, 0.2)   # fixed cross-loading
+L[2, 2] <- 0            # fixed zero
+
+fitL <- fitIRT(dat, pl = 2, loadings = L, marginalApprox = "laplace",
+  estimateAbilityCorr = TRUE)
+```
+
+`loadingsFixed` takes over when you want an entry free at a chosen starting
+value, or fixed at a value that is not `NA`. `normaliseMIRT()` rotates and
+scales a multidimensional solution for comparison.
+
+## Reporting and interop
+
+`tidyIRT()`, `glanceIRT()` and `augmentIRT()` return tidy data frames, and are
+registered against `broom`'s generics when broom is installed. Standard errors
+are carried onto the reported parameter scale by the delta method, since
+discrimination is estimated as a softplus pre-image and the asymptotes as
+logits:
+
+```{r tidy}
+subset(tidyIRT(fit, conf.int = TRUE), item %in% c("1", "2", "3"))
+```
+
+`reportIRT(fit)` renders the whole set to a self-contained HTML report.
+
+Statistics that need the wide matrix are better taken from `mirt`. `as.mirt()`
+converts a fit into a fixed-parameter mirt object, which opens `itemfit()`,
+`personfit()`, `M2()`, `residuals(type = "Q3")`, `itemplot()` and `DIF()`. It
+refuses rather than attempts a fit too large to hold in a matrix, and
+`checkMirtBridge()` verifies the conversion against bigIRT's own response
+function.
+
+```{r mirt, eval=FALSE}
+mo <- as.mirt(fit)
+mirt::M2(mo)
+mirt::residuals(mo, type = "Q3")
+```
+
+`extractMIRTpars()` and `compareIRTmodels()` go the other way, from mirt into
+bigIRT.
+
+## Function reference
+
+| | |
+|---|---|
+| `fitIRT()` | Fit a model |
+| `simIRT()` | Simulate data in the expected format |
+| `summary()`, `plot()`, `logLik()`, `vcov()`, `nobs()` | Standard methods on a fit |
+| `checkConvergence()`, `plotLaplaceDiagnostics()` | Convergence |
+| `itemInformation()`, `testInformation()` | Information and standard errors |
+| `reliability()`, `itemFit()`, `empiricalICC()` | Measurement diagnostics |
+| `heldoutMetrics()`, `IRTic()`, `looIRT()` | Validation and model comparison |
+| `wleIRT()` | Weighted-likelihood person scores |
+| `normaliseIRT()`, `normaliseMIRT()` | Put parameter sets on a common metric |
+| `tidyIRT()`, `glanceIRT()`, `augmentIRT()`, `reportIRT()` | Reporting |
+| `as.mirt()`, `extractMIRTpars()`, `compareIRTmodels()`, `checkMirtBridge()` | mirt |
+
+## The joint MAP path (now outdated)
+
+`marginalApprox = "none"` selects the original estimator: penalised joint MAP,
+which treats every ability as a parameter and maximises over all of them
+alongside the item parameters instead of integrating them out. It is still the
+**default value** of `marginalApprox`, for backwards compatibility, which is
+why every example here passes `marginalApprox = "laplace"` explicitly.
+
+Use it only to reproduce an old result. It is slower once there are covariates
+on ability, `estimateAbilityCorr` and the Laplace diagnostics do not apply to
+it, and `itemInformation()`, `checkConvergence()`, `IRTic()`, `reliability()`
+and `looIRT()` all require a marginal fit and will refuse. The two estimators
+also do not identify the latent metric the same way, so use `normaliseIRT()`
+before comparing any parameters across them.
 
 ## Notes
 
-- Use `normaliseIRT()` when comparing parameter sets estimated on different scales.
+- `sd(fit$pars$Ability)` is pinned near 1 by the ability prior in every fit, so
+  it is not a common metric across fits and dividing by it does almost nothing.
+  To compare two fits, either link the item parameters, or report a ratio of
+  two quantities from the same fit so the metric cancels.
+- `logLik(fit)` is the marginal log-likelihood. `fit$optim$logLik` is the
+  optimiser objective, which differs from it by constants; use `logLik()` for
+  anything comparative.
+- `vignette("laplace-objective")` derives the objective and its gradient. It is
+  written for someone changing the package, not for using it.
