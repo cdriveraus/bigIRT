@@ -1357,8 +1357,21 @@ bigIRT_validate_fit_inputs <- function(dat, score, id, item, scale, pl, controls
 #' @param ebayes Logical. Whether to use empirical Bayes estimation. Default is TRUE. With ebayes, the priors are adapted based on a first pass estimate.
 #' @param ebayesmultiplier Numeric. Multiplier for the widths of the empirical Bayes priors. Default is 2, as this appears to work better in practice.
 #' @param ebayesFromFixed Logical. Whether to initialize empirical Bayes from any specifed fixed values Default is FALSE.
-#' @param estMeans Character vector. Which means to estimate from 'ability', 'A', 'B', 'C', 'D'. Default is c('ability', 'B', 'C', 'D'), with
-#' discrimination means fixed.
+#' @param estMeans Character vector. Which means to estimate, from 'ability',
+#'   'A', 'B', 'C', 'D'. Default is \code{c('A','B','C','D')}: the item means
+#'   are estimated and the ability mean is held at \code{AbilityMeandat}, which
+#'   is 0 unless supplied.
+#'
+#'   The ability mean and the difficulty mean cannot both be estimated. Adding a
+#'   constant to every ability and the same constant to every difficulty leaves
+#'   every response probability unchanged, so the location of the scale has to
+#'   be pinned by one or the other. The default pins it through the ability
+#'   prior; passing 'ability' here estimates the ability mean instead and
+#'   requires dropping 'B'.
+#'
+#'   This matters when whole persons are held out of \code{trainingRows}: such a
+#'   person has no likelihood, so their ability is the prior mean, which under
+#'   the default is 0 plus whatever their \code{personPreds} imply.
 #' @param priors Logical. Whether to use prior distributions. Default is TRUE.
 #' @param marginalApprox Character. Marginal approximation backend. Use
 #'   \code{"none"} for the legacy Stan/JML path, or \code{"laplace"} for the
@@ -1494,7 +1507,16 @@ bigIRT_validate_fit_inputs <- function(dat, score, id, item, scale, pl, controls
 #' @param laplaceCorrParam Character. Parameterisation used for the latent
 #'   correlation when `estimateAbilityCorr = TRUE`.
 #' @param dropPerfectScores Logical. Whether to drop perfect scores from each subject and item before estimation. Default is TRUE.
-#' @param trainingRows Integer vector. Rows of data to use for estimation of parameters. Default is all rows in \code{dat}.
+#' @param trainingRows Integer vector. Rows of data to use for estimation of
+#'   parameters. Default is all rows in \code{dat}. Every item must keep at
+#'   least one training response, since there is nothing else from which to
+#'   calibrate it. Persons need not: a person whose responses are all excluded
+#'   has the prior as their posterior, so their fitted ability is exactly the
+#'   prediction from their \code{personPreds} (or the prior mean if there are
+#'   none). Holding out whole persons this way is the design that answers
+#'   whether person covariates say anything about somebody the model has never
+#'   seen -- excluding only some of a person's responses cannot, because their
+#'   own ability parameter is still estimated from the rest.
 #' @param init Initial values for the fitting algorithm. Default is NA.
 #' @param tol Numeric. Tolerance for convergence. Default attempts to sensibly adjust for amount of data.
 #' @param ... Additional arguments passed to the fitting function.
@@ -1508,6 +1530,16 @@ bigIRT_validate_fit_inputs <- function(dat, score, id, item, scale, pl, controls
 #'   person RMS steps, item gradient, posterior SD, person convergence, timings,
 #'   optimizer work, and strict/stability criteria. Direct-Laplace-specific
 #'   stability fields are unavailable (\code{NA}).
+#'
+#'   The frozen-effect flags, \code{beta_frozen} and its alias
+#'   \code{frozen_effects}, are TRUE only when \code{personPreds} were supplied
+#'   \emph{and} their ability coefficients were held out of the optimised
+#'   parameter vector. The current backend always estimates them, so these read
+#'   FALSE on any fit that has person predictors; a fit with none reports FALSE
+#'   too, because there is nothing that could be frozen. (Before this was
+#'   corrected the flag was set from the presence of person predictors alone,
+#'   so it was TRUE for precisely the fits that estimate the coefficients, and
+#'   \code{print()} wrongly announced that the effects had been held fixed.)
 #'
 #'   \strong{Row ordering.} \code{fitIRT} sorts the data by person before
 #'   fitting, so most row-level objects are in that internal order. The two
@@ -1532,9 +1564,10 @@ bigIRT_validate_fit_inputs <- function(dat, score, id, item, scale, pl, controls
 #'   BMean=0,BSD = .5,
 #'   AbilityMean = 0,AbilitySD = 1)
 #'
-#' #fit using bigIRT
+#' #fit using bigIRT. marginalApprox = 'laplace' integrates the abilities out;
+#' #the "none" default is the older joint MAP estimator.
 #' fit <- fitIRT(dat$dat,cores=2,score = 'score',id = 'id',
-#'   scale = 'Scale',item = 'Item', pl=2)
+#'   scale = 'Scale',item = 'Item', pl=2, marginalApprox = 'laplace')
 #'
 #'   print(fit$personPars)
 #'   print(fit$itemPars)
@@ -1547,7 +1580,8 @@ bigIRT_validate_fit_inputs <- function(dat, score, id, item, scale, pl, controls
 #'   dimnames = list(item_ids, scale_ids))
 #' L[1, ] <- c(0.8, 0.2) #fixed cross-loading
 #' L[2, 2] <- 0          #fixed zero loading
-#' fit_mirt <- fitIRT(dat$dat, pl = 2, cores = 1, loadings = L)
+#' fit_mirt <- fitIRT(dat$dat, pl = 2, cores = 1, loadings = L,
+#'   marginalApprox = 'laplace')
 #' head(fit_mirt$itemPars[, grep("^A(_|$)", names(fit_mirt$itemPars)), drop = FALSE])
 fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   personDat=NA, personPreds=character(),
@@ -1881,8 +1915,20 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   trainingLogical <- array(as.integer(dat[["__bigIRT_training__"]]))
   if(!any(trainingLogical)) stop("No selected `trainingRows` remain after filtering.")
   trainDat <- dat[trainingLogical == 1L]
-  if(length(unique(trainDat[[idref.]])) < Nsubs || length(unique(trainDat[[itemref.]])) < Nitems)
-    stop("`trainingRows` must include every person and item retained for estimation.")
+  ## Items and persons are not in the same position here. An item with no
+  ## training response has no data from which to calibrate its parameters, so
+  ## it remains an error. A person with no training response does not: their
+  ## ability is simply the prior, which is the covariate prediction when
+  ## `personPreds` are supplied and the prior mean otherwise. Allowing that is
+  ## what makes it possible to hold out whole people and ask what the
+  ## covariates alone say about them.
+  if(length(unique(trainDat[[itemref.]])) < Nitems)
+    stop("`trainingRows` must include at least one response for every item retained for estimation.")
+  ## Persons with no training response are permitted: their posterior is the
+  ## prior, so their fitted ability is the covariate prediction exactly. This
+  ## is what makes a whole-person holdout possible, which is the only design
+  ## that can measure whether person covariates carry information about
+  ## somebody the model has not seen.
 
   sdat <- c(sdat,list(
     Nobs=nrow(dat),
@@ -2382,7 +2428,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
       converged = strict_direct,
       reason = if(isTRUE(strict_direct)) "approx_gradient" else "max_iter",
       outer_iters = if(!is.null(directFit$optim$iter)) directFit$optim$iter else max(2L, as.integer(laplaceOuterIter)),
-      beta_frozen = sdat$NpersonPreds > 0,
+      beta_frozen = bigIRT_laplace_beta_frozen(sdat, directFit$optim$layout),
       initialized_from = "prior_anchored",
       direct_objective = TRUE,
       approximate_gradient = TRUE,

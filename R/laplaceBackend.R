@@ -693,6 +693,25 @@ bigIRT_laplace_direct_layout <- function(sdat, estimateAbilityCorr = FALSE){
   item_layout
 }
 
+## Whether the person-predictor coefficients were kept out of estimation.
+##
+## The reported flag used to be `sdat$NpersonPreds > 0`, which is backwards: it
+## read TRUE for exactly the fits that estimate the coefficients, and FALSE
+## whenever there was nothing that could be frozen. The freezing it was named
+## for belonged to the withdrawn alternating backend, which took its item step
+## against a frozen posterior; the direct backend puts `ability_beta` into the
+## free parameter vector whenever person predictors exist.
+##
+## Ask the layout rather than the data, so the flag stays true to whatever a
+## backend actually does: coefficients are frozen only if they exist and the
+## optimiser did not carry them. A missing layout means nothing was optimised,
+## which is frozen too.
+bigIRT_laplace_beta_frozen <- function(sdat, layout){
+  npred <- sdat$NpersonPreds %||% 0L
+  if(!isTRUE(npred > 0L)) return(FALSE)
+  !isTRUE(length(layout$ability_beta) > 0L)
+}
+
 ## Per-covariate scale for the ability_beta block, aligned with the column-major
 ## unrolling of the Nscales x NpersonPreds coefficient matrix.
 bigIRT_laplace_beta_scale <- function(sdat){

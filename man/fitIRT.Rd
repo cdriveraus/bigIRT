@@ -374,6 +374,16 @@ person RMS steps, item gradient, posterior SD, person convergence, timings,
 optimizer work, and strict/stability criteria. Direct-Laplace-specific
 stability fields are unavailable (\code{NA}).
 
+The frozen-effect flags, \code{beta_frozen} and its alias
+\code{frozen_effects}, are TRUE only when \code{personPreds} were supplied
+\emph{and} their ability coefficients were held out of the optimised
+parameter vector. The current backend always estimates them, so these read
+FALSE on any fit that has person predictors; a fit with none reports FALSE
+too, because there is nothing that could be frozen. (Before this was
+corrected the flag was set from the presence of person predictors alone,
+so it was TRUE for precisely the fits that estimate the coefficients, and
+\code{print()} wrongly announced that the effects had been held fixed.)
+
 \strong{Row ordering.} \code{fitIRT} sorts the data by person before
 fitting, so most row-level objects are in that internal order. The two
 per-response predictions users normally want, \code{fit$pars$p} (the
@@ -399,9 +409,10 @@ dat <- simIRT(Nsubs = 50,Nitems = 100,Nscales = 2,
   BMean=0,BSD = .5,
   AbilityMean = 0,AbilitySD = 1)
 
-#fit using bigIRT
+#fit using bigIRT. marginalApprox = 'laplace' integrates the abilities out;
+#the "none" default is the older joint MAP estimator.
 fit <- fitIRT(dat$dat,cores=2,score = 'score',id = 'id',
-  scale = 'Scale',item = 'Item', pl=2)
+  scale = 'Scale',item = 'Item', pl=2, marginalApprox = 'laplace')
 
   print(fit$personPars)
   print(fit$itemPars)
@@ -414,6 +425,7 @@ L <- matrix(NA_real_, nrow = length(item_ids), ncol = length(scale_ids),
   dimnames = list(item_ids, scale_ids))
 L[1, ] <- c(0.8, 0.2) #fixed cross-loading
 L[2, 2] <- 0          #fixed zero loading
-fit_mirt <- fitIRT(dat$dat, pl = 2, cores = 1, loadings = L)
+fit_mirt <- fitIRT(dat$dat, pl = 2, cores = 1, loadings = L,
+  marginalApprox = 'laplace')
 head(fit_mirt$itemPars[, grep("^A(_|$)", names(fit_mirt$itemPars)), drop = FALSE])
 }
