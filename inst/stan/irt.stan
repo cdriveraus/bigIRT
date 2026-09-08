@@ -2,10 +2,10 @@
 // Square brackets indicate object dimensions, square brackets after name indicates array of specified object.
 // Objects are all declared at the top of the relevant sections and potentially modified below.
 functions{
-  int[] which(int[] a, int condition){
+  array[] int which(array[] int a, int condition){
     int Nmatches = 0;
-    int zero[0];
-    int whichout[size(a)];
+    array[0] int zero;
+    array[size(a)] int whichout;
 
     for(i in 1:size(a)){
       if(a[i]==condition){
@@ -29,14 +29,14 @@ int Nitems; //Total number of unique items (questions)
 int Nsubs; //Total unique subjects (may be students or assessment occasions)
 int Nscales; //Total number of scales (e.g. German reading)
 int NitemScales; //Total number of item-by-scale loading slots
-int trainingLogical[Nobs]; //Which rows of data to use in target probability
+array[Nobs] int trainingLogical; //Which rows of data to use in target probability
 
 int rowIndexPar; //specifies single row to use for target probability, used for getting stan to compute score contributions by row
 
-int id[Nobs]; //Subject identifier for each response
-int score[Nobs]; //Binary response array
-int item[Nobs]; //Item identifier for each response
-int scale[Nobs]; //Scale identifier for each response
+array[Nobs] int id; //Subject identifier for each response
+array[Nobs] int score; //Binary response array
+array[Nobs] int item; //Item identifier for each response
+array[Nobs] int scale; //Scale identifier for each response
 
 int NitemPreds; //Number of covariates used to predict item parameters
 int NAitemPreds; //Number of covariates used to predict item parameters
@@ -44,17 +44,17 @@ int NBitemPreds; //Number of covariates used to predict item parameters
 int NCitemPreds; //Number of covariates used to predict item parameters
 int NDitemPreds; //Number of covariates used to predict item parameters
 int NpersonPreds; //Number of covariates used to predict person parameters
-int AitemPreds[NAitemPreds];
-int BitemPreds[NBitemPreds];
-int CitemPreds[NCitemPreds];
-int DitemPreds[NDitemPreds];
+array[NAitemPreds] int AitemPreds;
+array[NBitemPreds] int BitemPreds;
+array[NCitemPreds] int CitemPreds;
+array[NDitemPreds] int DitemPreds;
 
 int itemSpecificBetas;
 int doGenQuant;
 int doRowEff;
 
-row_vector[NitemPreds] itemPreds[Nobs]; //Values of item predictors
-row_vector[NpersonPreds] personPreds[Nobs]; //Values of person predictors
+array[Nobs] row_vector[NitemPreds] itemPreds; //Values of item predictors
+array[Nobs] row_vector[NpersonPreds] personPreds; //Values of person predictors
 //row_vector[NstatePreds] statePreds[Nobs]; //Values of state predictors
 
 int NfixedA; //Number of fixed (ie user supplied) 'A' (item discrimination) parameters
@@ -63,30 +63,30 @@ int NfixedC;//Number of fixed (ie user supplied) 'C' (item guessing propensity) 
 int NfixedD;//Number of fixed (ie user supplied) 'D' (item guessing propensity) parameters
 int NfixedAbility;//Number of fixed (ie user supplied) ability parameters
 
-int whichfixedA[NfixedA]; //Vector indicating which item-scale slots have fixed loading parameters
-int whichfixedB[NfixedB];//Vector indicating which items have a fixed B parameter
-int whichfixedC[NfixedC];//Vector indicating which items have a fixed C parameter
-int whichfixedD[NfixedD];//Vector indicating which items have a fixed C parameter
+array[NfixedA] int whichfixedA; //Vector indicating which item-scale slots have fixed loading parameters
+array[NfixedB] int whichfixedB;//Vector indicating which items have a fixed B parameter
+array[NfixedC] int whichfixedC;//Vector indicating which items have a fixed C parameter
+array[NfixedD] int whichfixedD;//Vector indicating which items have a fixed C parameter
 
-int fixedAlog[NitemScales]; //logical Vector indicating which item-scale slots have fixed loading parameters
-int fixedB[Nitems];//logical Vector indicating which items have a fixed B parameter
-int fixedClogit[Nitems];//logical Vector indicating which items have a fixed C parameter
-int fixedDlogit[Nitems];//logical Vector indicating which items have a fixed D parameter
+array[NitemScales] int fixedAlog; //logical Vector indicating which item-scale slots have fixed loading parameters
+array[Nitems] int fixedB;//logical Vector indicating which items have a fixed B parameter
+array[Nitems] int fixedClogit;//logical Vector indicating which items have a fixed C parameter
+array[Nitems] int fixedDlogit;//logical Vector indicating which items have a fixed D parameter
 
 //As above, but vectors indicating which responses have *free* parameters (used for performance reasons here)
-int whichnotfixedA[NitemScales-NfixedA];
-int whichnotfixedB[Nitems-NfixedB];
-int whichnotfixedC[Nitems-NfixedC];
-int whichnotfixedD[Nitems-NfixedD];
+array[NitemScales-NfixedA] int whichnotfixedA;
+array[Nitems-NfixedB] int whichnotfixedB;
+array[Nitems-NfixedC] int whichnotfixedC;
+array[Nitems-NfixedD] int whichnotfixedD;
 
-int freeAref[NitemScales]; //for each item-scale slot, if fixed then 0, or index of free loading parameter
-int freeBref[Nitems];
-int freeCref[Nitems];
-int freeDref[Nitems];
+array[NitemScales] int freeAref; //for each item-scale slot, if fixed then 0, or index of free loading parameter
+array[Nitems] int freeBref;
+array[Nitems] int freeCref;
+array[Nitems] int freeDref;
 
-int fixedAbilityLogical[Nsubs,Nscales];//Logical array indicating whether subjects have a fixed or free ability parameter
-int Abilityparsindex[Nsubs,Nscales];//Denotes which free ability param corresponds slots of the Nsubs * Nscales ability array
-int Abilityparsscaleindex[Nsubs*Nscales-NfixedAbility]; //Denotes which scale each free ability parameter corresponds to
+array[Nsubs,Nscales] int fixedAbilityLogical;//Logical array indicating whether subjects have a fixed or free ability parameter
+array[Nsubs,Nscales] int Abilityparsindex;//Denotes which free ability param corresponds slots of the Nsubs * Nscales ability array
+array[Nsubs*Nscales-NfixedAbility] int Abilityparsscaleindex; //Denotes which scale each free ability parameter corresponds to
 
 vector[NitemScales] Adata; //user specified (fixed) A values for each item-scale loading slot
 vector[Nitems] Bdata; //user specified (fixed) B values for each item (values ignored for items with free parameter)
@@ -122,7 +122,7 @@ vector[Nscales] AbilityMeandat; //mean of ability parameters
 
 transformed data{ // Section contains calculations that only dependx on user input data
 int Ntrainingset = sum(trainingLogical[1:Nobs]);
-int trainingset[Ntrainingset];
+array[Ntrainingset] int trainingset;
 int counter=0;
 int doApreds = (NitemScales-NfixedA) ? (NAitemPreds>0) : 0;
 int doBpreds = (Nitems-NfixedB) ? (NBitemPreds>0) : 0;
@@ -140,23 +140,23 @@ for(i in 1:Nobs){
 parameters{ //Section specifying free parameters to be estimated
 vector[Nsubs*Nscales-NfixedAbility] Abilitypars; //free ability parameters
 vector[fixedAbilityMean ? 0 : Nscales] AbilityMeanpar;//means of ability parameters, unless values fixed
-vector[(Nsubs*Nscales-NfixedAbility) ? NpersonPreds : 0] Abilitybeta[Nscales];//reg. weights for covariate effects on ability
+array[Nscales] vector[(Nsubs*Nscales-NfixedAbility) ? NpersonPreds : 0] Abilitybeta;//reg. weights for covariate effects on ability
 
 vector[Nitems-NfixedB] Bpars;//free B parameters
 vector[fixedBMean ? 0 : 1] BMeanpar;//mean of B parameters, unless value fixed
-vector[(Nitems-NfixedB) ? size(BitemPreds) : 0] Bbeta[ itemSpecificBetas ? (Nitems-NfixedB) : 1];//regression weights for covariate effects on B params
+array[ itemSpecificBetas ? (Nitems-NfixedB) : 1] vector[(Nitems-NfixedB) ? size(BitemPreds) : 0] Bbeta;//regression weights for covariate effects on B params
 
 vector[NitemScales-NfixedA] invspApars;// inverse softplus of free item-scale loading parameters
 vector[fixedAMean ? 0 : 1] invspAMeanpar; // mean of inverse softplus of A parameters, unless value fixed
-vector[(NitemScales-NfixedA) ? size(AitemPreds) : 0] invspAbeta[ itemSpecificBetas ? (NitemScales-NfixedA) : 1];//regression weights for covariate effects on inverse softplus A params
+array[ itemSpecificBetas ? (NitemScales-NfixedA) : 1] vector[(NitemScales-NfixedA) ? size(AitemPreds) : 0] invspAbeta;//regression weights for covariate effects on inverse softplus A params
 
 vector[Nitems-NfixedC] logitCpars;//logit of free C parameters
 vector[fixedCMean ? 0 : 1] logitCMeanpar;//mean of logit C parameters, unless value fixed
-vector[(Nitems-NfixedC) ? size(CitemPreds) : 0] logitCbeta[itemSpecificBetas ? (Nitems-NfixedC) : 1];//regression weights for covariate effects on logit C params
+array[itemSpecificBetas ? (Nitems-NfixedC) : 1] vector[(Nitems-NfixedC) ? size(CitemPreds) : 0] logitCbeta;//regression weights for covariate effects on logit C params
 
 vector[Nitems-NfixedD] logitDpars;//logit of free C parameters
 vector[fixedDMean ? 0 : 1] logitDMeanpar;//mean of logit D parameters, unless value fixed
-vector[(Nitems-NfixedD) ? size(CitemPreds) : 0] logitDbeta[itemSpecificBetas ? (Nitems-NfixedD) : 1];//regression weights for covariate effects on logit D params
+array[itemSpecificBetas ? (Nitems-NfixedD) : 1] vector[(Nitems-NfixedD) ? size(CitemPreds) : 0] logitDbeta;//regression weights for covariate effects on logit D params
 
 }
 
@@ -191,7 +191,7 @@ vector[Nobs] e6;
 vector[Nobs] e7;
 vector[Nobs] e9;
 vector[Nobs] e11;
-int scoreCoef[Nobs];
+array[Nobs] int scoreCoef;
 
 //probability computation
 for(i in 1:Nobs){
@@ -239,7 +239,7 @@ for(i in 1:Nobs){
 if(doGenQuant){ //compute subject sd's from accumulated curvature
   for(rowi in 1:Nsubs){
     for(coli in 1:Nscales){
-      if(!fixedAbilityLogical[rowi,coli]) sAbilitySD[rowi,coli] = sqrt(inv(fabs(sAbilitySD[rowi,coli])));
+      if(!fixedAbilityLogical[rowi,coli]) sAbilitySD[rowi,coli] = sqrt(inv(abs(sAbilitySD[rowi,coli])));
     }
   }
 }
@@ -265,7 +265,7 @@ if(dopriors){
   if(Nscales==1) Abilitypars ~ normal(AbilityMean[1],AbilitySD[1]); //AbilityMean[1]
   if(Nscales > 1){
     for(i in 1:Nsubs) {
-      int selector[Nscales - sum(fixedAbilityLogical[i,])] = which(fixedAbilityLogical[i,],0); // which scales does this subject have estimated pars for
+      array[Nscales - sum(fixedAbilityLogical[i,])] int selector = which(fixedAbilityLogical[i,],0); // which scales does this subject have estimated pars for
       if(size(selector)>0) Abilitypars[Abilityparsindex[i,selector] ] ~ multi_normal_cholesky(AbilityMean[selector],AbilityChol[selector,selector] ); //AbilityMean[selector] rep_vector(0,size(selector))
     }
   }
@@ -285,9 +285,9 @@ if(dopriors){
 generated quantities{ //Section generates additional output that i not relevant for probability model
 vector[Nobs] pcorrect; //probability of a correct response for each observation
 matrix[Nsubs,Nscales] Ability; //ability matrix (potentially mix of free parameters and fixed values)
-vector[(NitemScales-NfixedA) ? NAitemPreds : 0] Abeta[ itemSpecificBetas ? (NitemScales-NfixedA) : 1];//linearised regression weights for covariate effects on A params
-vector[(Nitems-NfixedC) ? NCitemPreds : 0] Cbeta[ itemSpecificBetas ? (Nitems-NfixedC) : 1];//linearised regression weights for covariate effects on A params
-vector[(Nitems-NfixedD) ? NDitemPreds : 0] Dbeta[ itemSpecificBetas ? (Nitems-NfixedD) : 1];//linearised regression weights for covariate effects on A params
+array[ itemSpecificBetas ? (NitemScales-NfixedA) : 1] vector[(NitemScales-NfixedA) ? NAitemPreds : 0] Abeta;//linearised regression weights for covariate effects on A params
+array[ itemSpecificBetas ? (Nitems-NfixedC) : 1] vector[(Nitems-NfixedC) ? NCitemPreds : 0] Cbeta;//linearised regression weights for covariate effects on A params
+array[ itemSpecificBetas ? (Nitems-NfixedD) : 1] vector[(Nitems-NfixedD) ? NDitemPreds : 0] Dbeta;//linearised regression weights for covariate effects on A params
 matrix[Nitems,Nscales] A; // item-by-scale loading values
 vector[Nitems] B; //item B values
 vector[Nitems] C; //item C values
@@ -299,8 +299,8 @@ vector[Nobs] eta_row = rep_vector(0,Nobs); //row-level linear predictor
 matrix[Nobs,Nscales] row_loadings = rep_matrix(0,Nobs,Nscales); //row-level effective loadings
 matrix[Nobs,Nscales] row_ability = rep_matrix(0,Nobs,Nscales); //row-level effective abilities
 
-row_vector[NitemPreds] itemPredsMean[Nitems]; //Values of item predictors
-row_vector[NpersonPreds] personPredsMean[Nsubs]; //Values of person predictors
+array[Nitems] row_vector[NitemPreds] itemPredsMean; //Values of item predictors
+array[Nsubs] row_vector[NpersonPreds] personPredsMean; //Values of person predictors
 
 if(doGenQuant || doRowEff){ //row-effective outputs are available for covariance/sampled-ability plumbing
   for(i in 1:Nobs){
