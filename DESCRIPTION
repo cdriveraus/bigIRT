@@ -1,14 +1,12 @@
 Package: bigIRT
 Title: Item Response Theory for Large Sparse Data
 Version: 0.1.8
-Authors@R: 
+Authors@R:
     person(given = "Charles",
            family = "Driver",
            role = c("aut", "cre"),
            email = "charles.driver@psychologie.uzh.ch",
            comment = c(ORCID = "0000-0002-4174-2970"))
-Author: Charles Driver [aut, cre]
-Maintainer: Charles Driver <charles.driver@psychologie.uzh.ch>
 Description: Fits binary item response theory (IRT) models for large and sparse
     data in long format, by marginal maximum likelihood with a Laplace
     approximation to the integral over person abilities. Supports 1PL to 4PL
@@ -18,7 +16,6 @@ Description: Fits binary item response theory (IRT) models for large and sparse
     information, reliability, item fit, held-out prediction and simulation.
 License: MIT + file LICENSE
 Encoding: UTF-8
-LazyData: true
 Roxygen: list(markdown = TRUE)
 Depends: 
     R (>= 3.5.0),
