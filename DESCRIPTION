@@ -40,12 +40,9 @@ LinkingTo:
     StanHeaders (>= 2.18.0)
 Suggests:
     broom,
-    future,
     ggplot2,
-    ggpointdensity,
     loo,
     mirt,
-    TAM,
     testthat,
     knitr,
     rmarkdown

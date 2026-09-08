@@ -92,7 +92,7 @@ fit
 #> Note: direct Laplace uses approximate global derivatives.
 ```
 
-That is 6.1 seconds for 60,000 responses on two cores. **Always check
+That is 3.2 seconds for 60,000 responses on two cores. **Always check
 the status line.** `strictly converged` is what you want; anything else
 means read `fit$laplaceStatus` and `checkConvergence()` before using the
 numbers.
@@ -155,7 +155,7 @@ local({
 })
 ```
 
-<img src="readme_files/figure-gfm/recovery-1.png" alt="Three scatter plots of estimates against generating values, for discrimination, intercept and ability, each with the identity line drawn. All three scatter tightly along the line, the discrimination panel most closely at r = 0.95, and the 2,000 ability estimates in a wider band at r = 0.90."  />
+<img src="man/figures/README-recovery-1.png" alt="Three scatter plots of estimates against generating values, for discrimination, intercept and ability, each with the identity line drawn. All three scatter tightly along the line, the discrimination panel most closely at r = 0.95, and the 2,000 ability estimates in a wider band at r = 0.90."  />
 
 ### What comes back
 
@@ -222,7 +222,7 @@ comparing the model against the data:
 plot(fit, type = "icc", items = 1:6)
 ```
 
-<img src="readme_files/figure-gfm/icc-1.png" alt="Six panels, one per item. Each shows the fitted 2PL response curve with binned observed proportions and their 95 percent Wilson intervals plotted over it, and the points track the curves. Item 2 is nearly flat, and item 3 rises only above ability 1, with every observed proportion near zero."  />
+<img src="man/figures/README-icc-1.png" alt="Six panels, one per item. Each shows the fitted 2PL response curve with binned observed proportions and their 95 percent Wilson intervals plotted over it, and the points track the curves. Item 2 is nearly flat, and item 3 rises only above ability 1, with every observed proportion near zero."  />
 
 Item 2 barely discriminates, and item 3 does not start rising until the
 top of the ability range, so almost nobody who saw it got it right.
@@ -234,7 +234,7 @@ where the test actually measures:
 plot(fit, type = "information")
 ```
 
-<img src="readme_files/figure-gfm/information-1.png" alt="Test information peaks near ability zero at about 25 and falls away symmetrically to about 3 at the edges; the conditional standard error of measurement, on the right axis, is a mirrored U with its minimum of about 0.20 at the same place."  />
+<img src="man/figures/README-information-1.png" alt="Test information peaks near ability zero at about 25 and falls away symmetrically to about 3 at the edges; the conditional standard error of measurement, on the right axis, is a mirrored U with its minimum of about 0.20 at the same place."  />
 
 A person-item map compares where the people are with where the items
 are:
@@ -243,7 +243,7 @@ are:
 plot(fit, type = "wright")
 ```
 
-<img src="readme_files/figure-gfm/wright-1.png" alt="Two stacked histograms on a shared ability axis. The upper panel shows the 2,000 person abilities, roughly normal and centred at zero. The lower panel shows the item intercepts, also concentrated near zero but with a long right tail and one isolated item out near 3.8."  />
+<img src="man/figures/README-wright-1.png" alt="Two stacked histograms on a shared ability axis. The upper panel shows the 2,000 person abilities, roughly normal and centred at zero. The lower panel shows the item intercepts, also concentrated near zero but with a long right tail and one isolated item out near 3.8."  />
 
 The isolated item out near 3.8 is item 3 from the panel above. This is
 how you find those without looking at every curve.
@@ -323,7 +323,7 @@ spread, timing, and the two stopping criteria.
 plot(fit, type = "convergence")
 ```
 
-<img src="readme_files/figure-gfm/convergence-1.png" alt="Six diagnostic panels against outer iteration: the objective and the gradient norm both descend to a floor, item and person parameter movement decays toward zero, posterior spread is flat, per-iteration timing is small and irregular, and the strict and stability criteria both flatten at the end."  />
+<img src="man/figures/README-convergence-1.png" alt="Six diagnostic panels against outer iteration: the objective and the gradient norm both descend to a floor, item and person parameter movement decays toward zero, posterior spread is flat, per-iteration timing is small and irregular, and the strict and stability criteria both flatten at the end."  />
 
 ## Validation
 

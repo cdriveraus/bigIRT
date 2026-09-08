@@ -3,8 +3,10 @@
 ^.testing
 ^\.github$
 ^\.git$
+^dev$
+^README\.Rmd$
 ^tests/noncran$
-^tests/.*\\.(pdf|png|html)$
-^.*\\.Rcheck$
+^tests/.*\.(pdf|png|html)$
+^.*\.Rcheck$
 ^.*\.Rproj$
 ^R/testscript\.R$

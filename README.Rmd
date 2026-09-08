@@ -30,7 +30,7 @@ What is implemented:
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(collapse = TRUE, comment = "#>", dpi = 110,
-  fig.path = "readme_files/figure-gfm/")
+  fig.path = "man/figures/README-")
 options(width = 90)
 ```
 
