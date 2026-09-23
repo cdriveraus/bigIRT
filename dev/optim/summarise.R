@@ -22,12 +22,19 @@ rows <- lapply(fs, function(f){
     ll = r$logLik, ll_precise = r$ll_precise %||% NA_real_,
     polish = r$polish_steps, term = as.character(r$terminate),
     ctrl = r$ctrl_sec, err = !is.null(r$error),
+    ebr = if(is.null(r$ebayes_rounds)) NA_integer_ else as.integer(r$ebayes_rounds),
+    hyper = paste(sprintf("%.4f", r$hyper %||% NA_real_), collapse = " "),
     trace = list(tr))
 })
 `%||%` <- function(a, b) if(is.null(a)) b else a
 d <- rbindlist(rows)
 d[, score := ifelse(is.finite(ll_precise), ll_precise, ll)]
-d[, best := max(score, na.rm = TRUE), by = .(regime, seed)]
+## Empirical-Bayes cells (variant name ending _eb) each end on their own
+## hyperparameters, so their objectives are not comparable with each other or
+## with the fixed-prior cells: each is its own family, scored only on cost,
+## against the baseline's _eb counterpart.
+d[, fam := ifelse(grepl("_eb$", variant), variant, "fixed")]
+d[, best := max(score, na.rm = TRUE), by = .(regime, seed, fam)]
 d[, gap := best - score]
 d[, c("evals_to_tol", "sec_to_tol") := {
   e <- integer(.N); s <- numeric(.N)
@@ -41,8 +48,9 @@ d[, c("evals_to_tol", "sec_to_tol") := {
 }]
 d[, evals_per_iter := evals / pmax(iter, 1)]
 basev <- if(length(args) > 2) args[3] else "base"
-base <- d[variant == basev, .(regime, seed, base_sec = sec, base_evals = evals)]
-d <- merge(d, base, by = c("regime", "seed"), all.x = TRUE)
+d[, basevar := ifelse(grepl("_eb$", variant), paste0(basev, "_eb"), basev)]
+base <- d[, .(regime, seed, basevar = variant, base_sec = sec, base_evals = evals)]
+d <- merge(d, base, by = c("regime", "seed", "basevar"), all.x = TRUE)
 d[, speedup := base_sec / sec]
 d[, fail := gap > 1e-3]
 options(width = 250, datatable.print.nrows = 10000, datatable.print.topn = 10000)
@@ -58,3 +66,8 @@ print(d[, .(cells = .N, gm_speedup = round(exp(mean(log(speedup), na.rm = TRUE))
   gm_evals_ratio = round(exp(mean(log(base_evals / evals), na.rm = TRUE)), 2),
   fails = sum(fail, na.rm = TRUE), max_gap = signif(max(gap, na.rm = TRUE), 2)),
   by = variant][order(-gm_speedup)])
+eb <- d[grepl("_eb$", variant)]
+if(nrow(eb)){
+  cat("\nEmpirical-Bayes cells: rounds and final hyperparameters (BSD ASD CSD DSD):\n")
+  print(eb[order(regime, seed, variant), .(regime, seed, variant, sec = round(sec, 2), evals, ebr, hyper)])
+}

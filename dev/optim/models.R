@@ -41,7 +41,13 @@ bench_regimes <- list(
   ## suit every item. The case a per-item metric exists for.
   H = list(desc = "2PL 1D  N=5000  I=200 uneven exposure 25/person",
     sim = list(Nsubs = 5000, Nitems = 200, NitemsAnswered = 200),
-    exposure = list(n = 25, power = 1), pl = 2)
+    exposure = list(n = 25, power = 1), pl = 2),
+  ## Many items, each person seeing a random 40 of them: the item-item
+  ## coupling is nearly dense (3000 x 3000), which is where the Fisher
+  ## metric's assembly and factorisation cost the most.
+  I = list(desc = "2PL 1D  N=20000 I=1500 sparse 40/person",
+    sim = list(Nsubs = 20000, Nitems = 1500, NitemsAnswered = 40),
+    pl = 2)
 )
 
 bench_data <- function(regime, seed){

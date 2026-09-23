@@ -50,6 +50,12 @@ VARIANTS <- list(
   ## has R/laplaceOptimizer.R. No namespace replacement: this is the package.
   pkg_fisher = list(fit = list(laplaceOptimizer = "fisher")),
   pkg_mize = list(fit = list(laplaceOptimizer = "mize")),
+  ## The Fisher metric built once, at the start, and never refreshed; and
+  ## refreshed every 5 iterations. The build is the dominant cost when items
+  ## are many (about 6 s at 3000 parameters, dev1, against 0.4 s per
+  ## evaluation), so whether refreshing pays is worth knowing.
+  pkg_fisher_r0 = list(fit = list(laplaceOptimizer = "fisher"), opts = list(bigIRT.fisher_refresh = 0L)),
+  pkg_fisher_r5 = list(fit = list(laplaceOptimizer = "fisher"), opts = list(bigIRT.fisher_refresh = 5L)),
   pkg_fisher_pt6 = list(fit = list(laplaceOptimizer = "fisher", laplacePersonTol = 1e-6)),
   pkg_mize_pt6 = list(fit = list(laplaceOptimizer = "mize", laplacePersonTol = 1e-6)),
   ## End to end with the package default ebayes = TRUE: several coarse rounds
@@ -67,6 +73,7 @@ variant_fit_args <- function(v) VARIANTS[[v]]$fit %||% list()
 install_variant <- function(v){
   spec <- VARIANTS[[v]]
   if(is.null(spec)) stop("unknown variant ", v)
+  if(!is.null(spec$opts)) options(spec$opts)
   if(!is.null(spec$mize_args)){
     mns <- asNamespace("mize")
     orig_mize <- get("mize", mns)
