@@ -40,15 +40,19 @@ d[, c("evals_to_tol", "sec_to_tol") := {
   list(e, s)
 }]
 d[, evals_per_iter := evals / pmax(iter, 1)]
-base <- d[variant == "base", .(regime, seed, base_sec = sec, base_evals = evals)]
+basev <- if(length(args) > 2) args[3] else "base"
+base <- d[variant == basev, .(regime, seed, base_sec = sec, base_evals = evals)]
 d <- merge(d, base, by = c("regime", "seed"), all.x = TRUE)
 d[, speedup := base_sec / sec]
 d[, fail := gap > 1e-3]
-options(width = 200)
+options(width = 250, datatable.print.nrows = 10000, datatable.print.topn = 10000)
 print(d[order(regime, seed, variant), .(regime, seed, variant, sec = round(sec, 2),
   evals, iter, epi = round(evals_per_iter, 2), polish, term,
   gap = signif(gap, 2), fail, e_tol = evals_to_tol, s_tol = round(sec_to_tol, 2),
   speedup = round(speedup, 2), ctrl = round(ctrl, 3))])
+cat("\nBy regime and variant, means over seeds (sec, evals, gap in nats):\n")
+print(dcast(d[, .(v = sprintf("%5.1fs %4.0fe %7.1e", mean(sec), mean(evals), max(gap))), by = .(regime, variant)],
+  regime ~ variant, value.var = "v"))
 cat("\nBy variant, geometric mean over cells of base_sec / sec, and failures:\n")
 print(d[, .(cells = .N, gm_speedup = round(exp(mean(log(speedup), na.rm = TRUE)), 2),
   gm_evals_ratio = round(exp(mean(log(base_evals / evals), na.rm = TRUE)), 2),

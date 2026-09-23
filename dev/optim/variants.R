@@ -46,6 +46,18 @@ VARIANTS <- list(
   lb_fisher_pt6 = list(proto = list(metric = "fisher", stop = "gain", gain_tol = 1e-4,
     polish_steps = 0L), fit = list(laplacePersonTol = 1e-6)),
   base_pt6 = list(fit = list(laplacePersonTol = 1e-6)),
+  ## The ported optimiser, run through fitIRT's own argument, on a build that
+  ## has R/laplaceOptimizer.R. No namespace replacement: this is the package.
+  pkg_fisher = list(fit = list(laplaceOptimizer = "fisher")),
+  pkg_mize = list(fit = list(laplaceOptimizer = "mize")),
+  pkg_fisher_pt6 = list(fit = list(laplaceOptimizer = "fisher", laplacePersonTol = 1e-6)),
+  pkg_mize_pt6 = list(fit = list(laplaceOptimizer = "mize", laplacePersonTol = 1e-6)),
+  ## End to end with the package default ebayes = TRUE: several coarse rounds
+  ## and a final pass. The objectives differ between the two (each ends with
+  ## its own hyperparameters), so only cost is comparable, plus how far apart
+  ## the final hyperparameters land.
+  pkg_fisher_eb = list(fit = list(laplaceOptimizer = "fisher", ebayes = TRUE)),
+  pkg_mize_eb = list(fit = list(laplaceOptimizer = "mize", ebayes = TRUE)),
   lb_info_pt6 = list(proto = list(metric = TRUE, stop = "gain", gain_tol = 1e-4),
     fit = list(laplacePersonTol = 1e-6))
 )

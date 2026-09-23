@@ -14,5 +14,5 @@ export BIGIRT_LIB=${BIGIRT_LIB:-$HOME/bigirt-optim/lib-base}
 export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1
 echo $$ > "$out/GRID_PID"
 grep -v '^#' "$cells" | grep -v '^$' | xargs -P "$par" -L 1 bash -c \
-  'Rscript harness.R "$0" "$1" "$2" '"$out"' > '"$out"'/"$0_$1_$2".log 2>&1; tail -n 1 '"$out"'/"$0_$1_$2".log'
+  'Rscript ${HARNESS:-harness.R} "$0" "$1" "$2" '"$out"' > '"$out"'/"$0_$1_$2".log 2>&1; tail -n 1 '"$out"'/"$0_$1_$2".log'
 date > "$out/GRID_DONE"
