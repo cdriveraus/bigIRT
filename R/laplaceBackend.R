@@ -2262,11 +2262,11 @@ bigIRT_laplace_eb_update <- function(state, sdat, context, row_effective, row_co
   ## Free-parameter length is the reliable signal: a 2PL leaves logitCpars
   ## empty rather than recording a model order in standata.
   if(length(state$logitCpars) >= 3L){
-    ic <- sum_by(((1 - gg) * cr * (1 - cr))^2 / r, context$C_ref, ni)
+    ic <- sum_by(((1 - gg) * bigIRT_dc_dx(cr))^2 / r, context$C_ref, ni)
     set_block("logitCSD", "logitCMeandat", state$logitCpars, ic, sdat$fixedCMean)
   }
   if(length(state$logitDpars) >= 3L){
-    id <- sum_by((gg * dr * (1 - dr))^2 / r, context$D_ref, ni)
+    id <- sum_by((gg * bigIRT_dd_dx(dr))^2 / r, context$D_ref, ni)
     set_block("logitDSD", "logitDMeandat", state$logitDpars, id, sdat$fixedDMean)
   }
   ## Discrimination enters through a*theta, so its information carries theta^2
@@ -2274,7 +2274,8 @@ bigIRT_laplace_eb_update <- function(state, sdat, context, row_effective, row_co
   ## several scales the mapping from rows to per-scale loadings is not a single
   ## index and the prior is left alone rather than updated approximately.
   if(as.integer(sdat$Nscales) == 1L && length(state$invspApars) >= 3L){
-    th <- as.numeric(thetaBase)[as.integer(row_context$ids)]
+    ## The row ability, covariate term included: that is what A multiplies.
+    th <- as.numeric(bigIRT_row_ability(state, sdat, row_context, thetaBase, row_effective))
     dsp <- inv_logit(as.numeric(state$invspApars))
     aref <- as.integer(context$A_ref[, 1])
     dspr <- rep(1, length(th)); keep <- aref > 0L
@@ -2334,9 +2335,9 @@ bigIRT_laplace_hyper_pieces <- function(state, sdat, context, row_effective,
   sig <- inv_logit(as.numeric(state$invspApars))
   aref <- as.integer(context$A_ref[, 1])
   sigr <- rep(1, length(ids)); keep <- aref > 0L; sigr[keep] <- sig[aref[keep]]
-  th1 <- if(K == 1L) as.numeric(thetaBase)[ids] else as.matrix(thetaBase)[ids, 1]
+  th1 <- bigIRT_row_ability(state, sdat, row_context, thetaBase, row_effective)[, 1]
   V <- list(B = -s, A = s * th1 * sigr,
-            C = (1 - gg) * cr * (1 - cr), D = gg * dr * (1 - dr))
+            C = (1 - gg) * bigIRT_dc_dx(cr), D = gg * bigIRT_dd_dx(dr))
   est <- list(B = as.numeric(state$Bpars), A = as.numeric(state$invspApars),
               C = as.numeric(state$logitCpars), D = as.numeric(state$logitDpars))
   ## Only blocks with enough free parameters to have a dispersion are updated.

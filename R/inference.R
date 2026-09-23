@@ -48,6 +48,29 @@ bigIRT_direct_eval_from_fit <- function(fit, keep_covariance = TRUE, cores = 1L,
 ##
 ## Returns a P x P x Nitems array of likelihood information, the matching prior
 ## precision, and the block labels. Mutates nothing.
+## Chain-rule factors of the asymptote links, written in terms of the link's
+## value: c = plogis(x)/2 gives dc/dx = c(1 - 2c); d = plogis(x)/2 + 1/2 gives
+## dd/dx = (2d - 1)(1 - d). Using the plain-logistic c(1 - c) and d(1 - d)
+## instead overstates their information by (1-c)^2/(1-2c)^2 and d^2/(2d-1)^2.
+bigIRT_dc_dx <- function(c) c * (1 - 2 * c)
+bigIRT_dd_dx <- function(d) (2 * d - 1) * (1 - d)
+
+## Per-row ability, base ability plus the person-covariate term, as the
+## likelihood uses it. Taken from `row_effective` when it carries it (the R
+## builder does, the kernel's does not). Returns an Nobs x K matrix.
+bigIRT_row_ability <- function(state, sdat, row_context, thetaBase, row_effective = NULL){
+  K <- as.integer(sdat$Nscales)
+  if(!is.null(row_effective$row_ability))
+    return(matrix(as.numeric(row_effective$row_ability), ncol = K))
+  th <- matrix(as.numeric(thetaBase), ncol = K)
+  rab <- th[as.integer(row_context$ids), , drop = FALSE]
+  if(isTRUE(sdat$NpersonPreds > 0) && length(state$Abilitybeta))
+    rab <- rab + row_context$person_pred %*% t(state$Abilitybeta)
+  fx <- row_context$fixed_ability
+  if(!is.null(fx) && any(fx)) rab[fx] <- row_context$fixed_ability_value[fx]
+  rab
+}
+
 bigIRT_item_info_blocks <- function(state, sdat, context, row_effective, posterior, thetaBase){
   if(is.null(posterior$covariance))
     stop("Item information needs the person posterior covariances.")
@@ -72,6 +95,10 @@ bigIRT_item_info_blocks <- function(state, sdat, context, row_effective, posteri
   wcorr <- pmax(1 / r - (s^2 * aSa) / r^2, 0)
 
   th <- if(K == 1L) matrix(as.numeric(thetaBase), ncol = 1L) else as.matrix(thetaBase)
+  ## Discrimination multiplies the ROW ability, which carries the person
+  ## covariate term x_row'beta on top of the base ability. The kernel's
+  ## row_effective does not return it, so rebuild it when absent.
+  rab <- bigIRT_row_ability(state, sdat, context$row_context, th, row_effective)
   invspA <- as.numeric(state$invspApars)
 
   ## Discrimination enters through the loading, and `A_ref` carries one
@@ -99,16 +126,19 @@ bigIRT_item_info_blocks <- function(state, sdat, context, row_effective, posteri
       if(!any(hit)) next
       q <- A_ref[hit, k]
       qrow[hit] <- q
-      contrib[hit] <- contrib[hit] + (lo[hit, k] / Aval[q]) * th[ids[hit], k]
+      contrib[hit] <- contrib[hit] + (lo[hit, k] / Aval[q]) * rab[hit, k]
     }
   }
   V_A <- numeric(length(ids))
   ok <- qrow > 0L
   if(any(ok)) V_A[ok] <- s[ok] * sig[qrow[ok]] * contrib[ok]
 
-  ## Every entry is dp/dparameter, so information is V V' / (p(1-p)).
+  ## Every entry is dp/dparameter, so information is V V' / (p(1-p)). The
+  ## asymptotes are c = plogis(x)/2 and d = plogis(x)/2 + 1/2 (cfunc, dfunc),
+  ## so their chain-rule factors are those of bigIRT_dc_dx and bigIRT_dd_dx,
+  ## as in the kernel's gradient -- not the plain-logistic c(1-c) and d(1-d).
   V <- list(B = -s, A = V_A,
-            C = (1 - gg) * cr * (1 - cr), D = gg * dr * (1 - dr))
+            C = (1 - gg) * bigIRT_dc_dx(cr), D = gg * bigIRT_dd_dx(dr))
   est <- list(B = as.numeric(state$Bpars), A = invspA,
               C = as.numeric(state$logitCpars), D = as.numeric(state$logitDpars))
   ## A block counts only when it holds one free parameter per item; anything
