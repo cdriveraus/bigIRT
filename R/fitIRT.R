@@ -1465,9 +1465,11 @@ bigIRT_validate_fit_inputs <- function(dat, score, id, item, scale, pl, controls
 #' @param laplaceOuterIter Integer. Maximum number of outer iterations for a
 #'   Laplace backend. This is a fallback limit rather than
 #'   the primary convergence criterion. Default is 500.
-#' @param laplaceTol Numeric. General outer tolerance for
-#'   \code{marginalApprox="laplace"}, used for relative objective
-#'   improvement and RMS step-size checks. Default is 1e-3.
+#' @param laplaceTol Numeric. Outer tolerance for
+#'   \code{marginalApprox="laplace"}. Under \code{laplaceOptimizer = "fisher"}
+#'   it is the predicted remaining gain in log-likelihood, in nats, at which
+#'   the optimiser stops; under \code{"mize"} it is mize's absolute tolerance
+#'   on the change in objective and on the gradient norm. Default is 1e-3.
 #' @param laplaceTolScale Character. What the objective-change tolerances in
 #'   \code{laplaceTol} are measured against on the Laplace path.
 #'   \code{\"relative\"} (the default, and the historical behaviour) divides
@@ -1493,7 +1495,19 @@ bigIRT_validate_fit_inputs <- function(dat, score, id, item, scale, pl, controls
 #'   progress while a single Newton step still recovered 146 units of objective.
 #'   The curvature is the per-item information already used for standard errors,
 #'   so a step costs one closed-form assembly and a short backtracking search.
-#'   Set to 0 to disable. Default is 8.
+#'   Set to 0 to disable. Default is 8. Applies to
+#'   \code{laplaceOptimizer = "mize"} only.
+#' @param laplaceOptimizer Character. Optimiser for the Laplace backend.
+#'   \code{"fisher"} (default) is L-BFGS whose initial inverse Hessian is
+#'   shaped by the Fisher information of the marginal likelihood, including
+#'   the coupling between items that runs through the persons, and which stops
+#'   when the predicted gain in log-likelihood falls below \code{laplaceTol}
+#'   nats. \code{"mize"} is the previous path: mize's L-BFGS stopping on the
+#'   change in objective, followed by the block-Newton polish. Measured on
+#'   simulated 2PL to 4PL designs, the Fisher path needed about a third of the
+#'   objective evaluations and half the time, and ended closer to the optimum.
+#'   It builds the information as a sparse matrix, and falls back to an
+#'   unscaled L-BFGS when that would exceed about 5e7 nonzeros.
 #' @param laplaceGradTol Numeric. Tolerance for the item-block gradient,
 #'   measured relative to the objective rather than as a raw norm: the reported
 #'   norm is divided by the same denominator \code{laplaceTolScale} selects for
@@ -1623,7 +1637,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   marginalApprox=c("none","laplace","laplace_fast","laplace_direct"),
   estimateAbilityCorr=FALSE,
   laplaceCorrParam=c("stan_corsqrt","normalized_chol"),
-  keepInternals=FALSE,laplaceOuterIter=500,laplaceTol=1e-3,laplaceTolScale=c("relative","per_obs"),laplaceGradTol=1e-4,laplacePolish=8L,laplacePersonTol=1e-4,
+  keepInternals=FALSE,laplaceOuterIter=500,laplaceTol=1e-3,laplaceTolScale=c("relative","per_obs"),laplaceGradTol=1e-4,laplacePolish=8L,laplacePersonTol=1e-4,laplaceOptimizer=c("fisher","mize"),
   laplaceKeepCovariance=FALSE,laplaceDiagnostics=FALSE,laplacePlot=FALSE,laplacePlotEvery=1L,
   laplaceJitter=1e-6,noptimsteps=10,
   normalise=FALSE,normaliseScale=1,normaliseMean=0,
@@ -1727,6 +1741,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   if(marginalApprox %in% c("laplace_fast", "laplace_direct")) marginalApprox <- "laplace"
   ebayesMethod <- match.arg(ebayesMethod)
   laplaceCorrParam <- match.arg(laplaceCorrParam)
+  laplaceOptimizer <- match.arg(laplaceOptimizer)
 
   itemPreds <- unique(c(AitemPreds,BitemPreds,CitemPreds,DitemPreds))
 
@@ -2281,7 +2296,8 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
       plot_every = laplacePlotEvery,
       verbose = laplaceVerbose,
       trace_fn = function(msg) laplace_trace(2, msg),
-      stochastic = isTRUE(optimdots$stochastic)
+      stochastic = isTRUE(optimdots$stochastic),
+      optimizer = laplaceOptimizer
     )
 
       if(eb_round > eb_rounds) break
@@ -2406,7 +2422,14 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
       relative = max(1, abs(if(!is.null(directFit$optim$logLik)) directFit$optim$logLik else 1)),
       per_obs  = max(1, as.numeric(sdat$Nobs)))
     directGradScaled <- directFit$optim$masked_grad_norm / max(1, directGradDenom)
-    strict_direct <- isTRUE(directGradScaled < laplaceGradTol)
+    ## The Fisher-shaped optimiser stops on the predicted gain, in nats, which
+    ## is the scale-free criterion; a scaled gradient norm is not, and can sit
+    ## just above laplaceGradTol at a point with 1e-4 nats left to gain.
+    ## "noise_floor" is the same verdict reached when the line search can no
+    ## longer resolve the objective's own warm-start noise.
+    gain_converged <- identical(laplaceOptimizer, "fisher") &&
+      direct_terminate %in% c("gain", "noise_floor")
+    strict_direct <- isTRUE(directGradScaled < laplaceGradTol) || gain_converged
     ## A single scaled norm sums over every parameter, so it cannot say which
     ## block is responsible and it hides one stuck parameter among thousands.
     ## It also lets a small block with a naturally larger gradient dominate the
@@ -2465,7 +2488,8 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     }
     fit$laplaceStatus <- list(
       converged = strict_direct,
-      reason = if(isTRUE(strict_direct)) "approx_gradient" else "max_iter",
+      reason = if(gain_converged) "predicted_gain" else
+        if(isTRUE(strict_direct)) "approx_gradient" else "max_iter",
       outer_iters = if(!is.null(directFit$optim$iter)) directFit$optim$iter else max(2L, as.integer(laplaceOuterIter)),
       beta_frozen = bigIRT_laplace_beta_frozen(sdat, directFit$optim$layout),
       initialized_from = "prior_anchored",

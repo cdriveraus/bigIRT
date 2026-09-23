@@ -393,20 +393,32 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     ## Newton polish. Settling early used to break out of the loop before it,
     ## returning a fit optimised a hundred times too loosely and unpolished,
     ## which left it just the wrong side of the gradient tolerance.
+    ##
+    ## The polish belongs to the mize path; the Fisher-shaped optimiser has no
+    ## polish and stops on the predicted gain instead, so the same property is
+    ## asserted for each on its own terms.
     set.seed(15)
     s <- simIRT(Nsubs = 2500, Nitems = 100, Nscales = 1, NitemsAnswered = 12L,
       AMean = 1, ASD = .3, BMean = 0, BSD = 0.4, AbilityMean = 0, AbilitySD = 1,
       logitCMean = -20, logitCSD = 0, logitDMean = 20, logitDSD = 0)
-    f <- fitIRT(s$dat, score = "score", id = "id", item = "Item", scale = "Scale",
-      pl = 2L, marginalApprox = "laplace", cores = 1L, verbose = 0L, plot = FALSE,
-      priors = TRUE, ebayes = TRUE, normalise = FALSE, dropPerfectScores = FALSE,
-      keepInternals = TRUE, laplaceKeepCovariance = TRUE)
-    st <- f$laplaceStatus
+    eb_fit <- function(optimizer) fitIRT(s$dat, score = "score", id = "id", item = "Item",
+      scale = "Scale", pl = 2L, marginalApprox = "laplace", cores = 1L, verbose = 0L,
+      plot = FALSE, priors = TRUE, ebayes = TRUE, normalise = FALSE,
+      dropPerfectScores = FALSE, keepInternals = TRUE, laplaceKeepCovariance = TRUE,
+      laplaceOptimizer = optimizer)
+    st <- eb_fit("mize")$laplaceStatus
     expect_true(isTRUE(st$converged))
     ## The final pass must have happened, and been polished.
     expect_gt(st$ebayes_rounds, 0L)
     expect_gt(st$polish_steps, 0L)
     expect_lt(as.numeric(st$last_item_grad_scaled), 1e-4)
+    st <- eb_fit("fisher")$laplaceStatus
+    expect_true(isTRUE(st$converged))
+    expect_gt(st$ebayes_rounds, 0L)
+    ## Full tolerance: the predicted gain it stopped on is below laplaceTol,
+    ## not below the coarse rounds' laplaceTol * ebayesCoarse.
+    expect_identical(st$optimizer_terminate, "gain")
+    expect_lt(as.numeric(st$optimizer_terminate_value), 1e-3)
   })
 
   test_that("the Newton polish also cleans the mean hyperparameters", {

@@ -60,6 +60,7 @@ fitIRT(
   laplaceGradTol = 1e-04,
   laplacePolish = 8L,
   laplacePersonTol = 1e-04,
+  laplaceOptimizer = c("fisher", "mize"),
   laplaceKeepCovariance = FALSE,
   laplaceDiagnostics = FALSE,
   laplacePlot = FALSE,
@@ -299,9 +300,11 @@ inspecting a fit that stopped somewhere unexpected.}
 Laplace backend. This is a fallback limit rather than
 the primary convergence criterion. Default is 500.}
 
-\item{laplaceTol}{Numeric. General outer tolerance for
-\code{marginalApprox="laplace"}, used for relative objective
-improvement and RMS step-size checks. Default is 1e-3.}
+\item{laplaceTol}{Numeric. Outer tolerance for
+\code{marginalApprox="laplace"}. Under \code{laplaceOptimizer = "fisher"}
+it is the predicted remaining gain in log-likelihood, in nats, at which
+the optimiser stops; under \code{"mize"} it is mize's absolute tolerance
+on the change in objective and on the gradient norm. Default is 1e-3.}
 
 \item{laplaceTolScale}{Character. What the objective-change tolerances in
 \code{laplaceTol} are measured against on the Laplace path.
@@ -317,6 +320,18 @@ when comparing fits across designs of very different sizes, but note
 that it is far stricter at large N: a tolerance chosen for
 \code{\"relative\"} should not be carried over unchanged. The scale used
 is recorded in \code{laplaceStatus$tolerance_scale}.}
+
+\item{laplaceOptimizer}{Character. Optimiser for the Laplace backend.
+\code{"fisher"} (default) is L-BFGS whose initial inverse Hessian is
+shaped by the Fisher information of the marginal likelihood, including
+the coupling between items that runs through the persons, and which stops
+when the predicted gain in log-likelihood falls below \code{laplaceTol}
+nats. \code{"mize"} is the previous path: mize's L-BFGS stopping on the
+change in objective, followed by the block-Newton polish. Measured on
+simulated 2PL to 4PL designs, the Fisher path needed about a third of the
+objective evaluations and half the time, and ended closer to the optimum.
+It builds the information as a sparse matrix, and falls back to an
+unscaled L-BFGS when that would exceed about 5e7 nonzeros.}
 
 \item{laplaceGradTol}{Numeric. Tolerance for the item-block gradient,
 measured relative to the objective rather than as a raw norm: the reported
@@ -334,7 +349,8 @@ early on large problems: at eight million responses it reported no further
 progress while a single Newton step still recovered 146 units of objective.
 The curvature is the per-item information already used for standard errors,
 so a step costs one closed-form assembly and a short backtracking search.
-Set to 0 to disable. Default is 8.}
+Set to 0 to disable. Default is 8. Applies to
+\code{laplaceOptimizer = "mize"} only.}
 
 \item{laplacePersonTol}{Numeric. Newton tolerance for person-mode updates in
 \code{"laplace"}. Default is 1e-4.}
