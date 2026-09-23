@@ -34,7 +34,7 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     nitems <- nrow(sim$dat[!duplicated(Item), .(Item)])
     nscales <- length(unique(sim$dat$Scale))
     expect_equal(dim(fit$pars$A), c(nitems, nscales))
-    expect_equal(fit$dat$NitemScales, as.integer(nitems * nscales))
+    expect_equal(fit$prepared$NitemScales, as.integer(nitems * nscales))
   })
 
   test_that("runtime fit supports custom mixed fixed/free loadings", {
@@ -87,10 +87,10 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     )
 
     expect_equal(dim(fit$pars$A), c(nitems, nscales))
-    expect_equal(fit$dat$fixedAlog[idx(1, 1)], 1L)
-    expect_equal(fit$dat$fixedAlog[idx(1, 2)], 1L)
-    expect_equal(fit$dat$fixedAlog[idx(2, 2)], 1L)
-    expect_equal(fit$dat$fixedAlog[idx(4, 2)], 0L)
+    expect_equal(fit$prepared$fixedAlog[idx(1, 1)], 1L)
+    expect_equal(fit$prepared$fixedAlog[idx(1, 2)], 1L)
+    expect_equal(fit$prepared$fixedAlog[idx(2, 2)], 1L)
+    expect_equal(fit$prepared$fixedAlog[idx(4, 2)], 0L)
     expect_true(all(c("A", "A_1", "A_2") %in% colnames(fit$itemPars)))
   })
 
@@ -133,11 +133,11 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
         paste(setdiff(expectedRowEff, names(fit$pars)), collapse = ", ")
       )
     )
-    expect_equal(length(fit$pars$b_row), fit$dat$Nobs)
-    expect_equal(dim(fit$pars$row_loadings), c(fit$dat$Nobs, fit$dat$Nscales))
+    expect_equal(length(fit$pars$b_row), fit$prepared$Nobs)
+    expect_equal(dim(fit$pars$row_loadings), c(fit$prepared$Nobs, fit$prepared$Nscales))
     expect_true(!is.null(fit$rowEffective))
-    expect_equal(length(fit$rowEffective$b), fit$dat$Nobs)
-    expect_equal(dim(fit$rowEffective$loadings), c(fit$dat$Nobs, fit$dat$Nscales))
+    expect_equal(length(fit$rowEffective$b), fit$prepared$Nobs)
+    expect_equal(dim(fit$rowEffective$loadings), c(fit$prepared$Nobs, fit$prepared$Nscales))
     ## Person precision is stored one K by K block per subject, so for a
     ## two-dimensional fit it is a 2 x 2 x Nsubs array and is.matrix is FALSE.
     ## That is the shape the rest of the package relies on -- the normalisation
@@ -146,7 +146,7 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     ## directly rather than through is.matrix, which only held back when a
     ## single dimension collapsed the array to two.
     expect_equal(dim(fit$personPosterior$precision),
-                 c(fit$dat$Nscales, fit$dat$Nscales, fit$dat$Nsubs))
+                 c(fit$prepared$Nscales, fit$prepared$Nscales, fit$prepared$Nsubs))
     expect_true(is.array(fit$personPosterior$covariance) || is.null(fit$personPosterior$covariance))
   })
 }

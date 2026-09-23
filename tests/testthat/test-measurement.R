@@ -45,7 +45,7 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
   test_that("item fit sits near one when the model generated the data", {
     f <- fit_m()
     it <- itemFit(f)
-    expect_equal(nrow(it), as.integer(f$dat$Nitems))
+    expect_equal(nrow(it), as.integer(f$prepared$Nitems))
     expect_true(all(it$n > 0))
     ## Correctly specified data: both statistics should centre on 1.
     expect_gt(median(it$infit), 0.8);  expect_lt(median(it$infit), 1.2)
@@ -89,7 +89,7 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     expect_gt(median(r), 0.8)
     expect_lt(median(r), 1.15)
     ## No item may be sitting at the prior standard deviation.
-    expect_lt(max(ip$se[, "A"]), 0.9 * as.numeric(f$dat$invspASD)[1])
+    expect_lt(max(ip$se[, "A"]), 0.9 * as.numeric(f$prepared$invspASD)[1])
   })
 
   test_that("summary reports convergence, errors, reliability and held-out fit", {

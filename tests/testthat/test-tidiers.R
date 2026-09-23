@@ -27,7 +27,7 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
   test_that("tidy returns one row per item parameter with usable intervals", {
     f <- fit_t()
     ti <- tidyIRT(f, conf.int = TRUE)
-    expect_equal(nrow(ti), as.integer(f$dat$Nitems) * length(unique(ti$term)))
+    expect_equal(nrow(ti), as.integer(f$prepared$Nitems) * length(unique(ti$term)))
     expect_true(all(is.finite(ti$estimate)))
     expect_true(all(is.finite(ti$std.error)))
     expect_true(all(ti$conf.low < ti$estimate & ti$estimate < ti$conf.high))
@@ -69,7 +69,7 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     g <- glanceIRT(f)
     expect_equal(nrow(g), 1L)
     expect_true(is.finite(g$logLik) && is.finite(g$AIC))
-    expect_equal(g$nobs_persons, as.integer(f$dat$Nsubs))
+    expect_equal(g$nobs_persons, as.integer(f$prepared$Nsubs))
     a <- augmentIRT(f)
     expect_equal(nrow(a), length(f$pars$pcorrect))
     ok <- is.finite(a$.fitted) & is.finite(a$.observed)

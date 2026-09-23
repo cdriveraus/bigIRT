@@ -41,7 +41,7 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     m <- as.mirt(f)
     expect_s4_class(m, "SingleGroupClass")
     fit <- mirt::itemfit(m, na.rm = TRUE)
-    expect_equal(nrow(fit), as.integer(f$dat$Nitems))
+    expect_equal(nrow(fit), as.integer(f$prepared$Nitems))
     expect_true(all(is.finite(fit$S_X2)))
     ## Correctly specified data, so most items should not be flagged.
     expect_gt(mean(fit$p.S_X2 > 0.05, na.rm = TRUE), 0.7)

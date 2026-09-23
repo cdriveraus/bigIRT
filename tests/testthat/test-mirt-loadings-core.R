@@ -27,7 +27,7 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
         Ability = Ability,
         p = rep(0.5, standata$Nobs)
       ),
-      dat = standata
+      prepared = standata
     )
   }
 
@@ -52,18 +52,18 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     nscales <- length(unique(sim$dat$Scale))
     idx <- function(itemi, scalei) as.integer((itemi - 1) * nscales + scalei)
 
-    expect_equal(fit$dat$NitemScales, as.integer(nitems * nscales))
-    expect_equal(fit$dat$NfixedA, as.integer(nitems * (nscales - 1)))
-    expect_equal(length(fit$dat$fixedAlog), nitems * nscales)
+    expect_equal(fit$prepared$NitemScales, as.integer(nitems * nscales))
+    expect_equal(fit$prepared$NfixedA, as.integer(nitems * (nscales - 1)))
+    expect_equal(length(fit$prepared$fixedAlog), nitems * nscales)
     expect_equal(dim(fit$pars$A), c(nitems, nscales))
 
     for(i in seq_len(nitems)){
       active_scale <- items$Scale[i]
-      expect_equal(fit$dat$fixedAlog[idx(i, active_scale)], 0L)
+      expect_equal(fit$prepared$fixedAlog[idx(i, active_scale)], 0L)
       inactive <- setdiff(seq_len(nscales), active_scale)
       for(si in inactive){
-        expect_equal(fit$dat$fixedAlog[idx(i, si)], 1L)
-        expect_equal(fit$dat$Adata[idx(i, si)], 0, tolerance = 1e-12)
+        expect_equal(fit$prepared$fixedAlog[idx(i, si)], 1L)
+        expect_equal(fit$prepared$Adata[idx(i, si)], 0, tolerance = 1e-12)
       }
     }
   })
@@ -108,17 +108,17 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
 
     idx <- function(itemi, scalei) as.integer((itemi - 1) * nscales + scalei)
     expect_equal(dim(fit$pars$A), c(nitems, nscales))
-    expect_equal(fit$dat$fixedAlog[idx(1, 1)], 1L)
-    expect_equal(fit$dat$fixedAlog[idx(1, 2)], 1L)
-    expect_equal(fit$dat$fixedAlog[idx(2, 2)], 1L)
-    expect_equal(fit$dat$fixedAlog[idx(5, 1)], 1L)
-    expect_equal(fit$dat$fixedAlog[idx(4, 2)], 0L)
+    expect_equal(fit$prepared$fixedAlog[idx(1, 1)], 1L)
+    expect_equal(fit$prepared$fixedAlog[idx(1, 2)], 1L)
+    expect_equal(fit$prepared$fixedAlog[idx(2, 2)], 1L)
+    expect_equal(fit$prepared$fixedAlog[idx(5, 1)], 1L)
+    expect_equal(fit$prepared$fixedAlog[idx(4, 2)], 0L)
 
-    expect_equal(fit$dat$Adata[idx(1, 1)], 0.7, tolerance = 1e-12)
-    expect_equal(fit$dat$Adata[idx(1, 2)], 0.2, tolerance = 1e-12)
-    expect_equal(fit$dat$Adata[idx(2, 2)], 0.0, tolerance = 1e-12)
-    expect_equal(fit$dat$Adata[idx(5, 1)], 0.33, tolerance = 1e-12)
-    expect_equal(fit$dat$Adata[idx(4, 2)], -99, tolerance = 1e-12)
+    expect_equal(fit$prepared$Adata[idx(1, 1)], 0.7, tolerance = 1e-12)
+    expect_equal(fit$prepared$Adata[idx(1, 2)], 0.2, tolerance = 1e-12)
+    expect_equal(fit$prepared$Adata[idx(2, 2)], 0.0, tolerance = 1e-12)
+    expect_equal(fit$prepared$Adata[idx(5, 1)], 0.33, tolerance = 1e-12)
+    expect_equal(fit$prepared$Adata[idx(4, 2)], -99, tolerance = 1e-12)
 
     expect_true(all(c("A", "A_1", "A_2") %in% colnames(fit$itemPars)))
   })

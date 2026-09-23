@@ -23,8 +23,8 @@ if(identical(Sys.getenv("NOT_CRAN"), "true")& .Machine$sizeof.pointer != 4){
     # plot(fit$pars$p, fit2$pars$p)
 
     testthat::expect_equivalent(
-      exp((sum(log(fit2$pars$p[-trainingSet]))-fit2$optim$f)/fit$dat$Nobs),
-      exp(-fit$optim$f/fit$dat$Nobs),
+      exp((sum(log(fit2$pars$p[-trainingSet]))-fit2$optim$f)/fit$prepared$Nobs),
+      exp(-fit$optim$f/fit$prepared$Nobs),
       tol=1e-4)
 
 
@@ -33,8 +33,8 @@ if(identical(Sys.getenv("NOT_CRAN"), "true")& .Machine$sizeof.pointer != 4){
     fit2 <- fitIRT(dat$dat,cores=2,pl=1,plot=F,verbose=0,priors=T,trainingRows = trainingSet)
 
     testthat::expect_equivalent(
-      exp((sum(log(fit2$pars$p[-trainingSet]))-fit2$optim$f)/fit$dat$Nobs),
-      exp(-fit$optim$f/fit$dat$Nobs),
+      exp((sum(log(fit2$pars$p[-trainingSet]))-fit2$optim$f)/fit$prepared$Nobs),
+      exp(-fit$optim$f/fit$prepared$Nobs),
       tol=1e-4)
 
 

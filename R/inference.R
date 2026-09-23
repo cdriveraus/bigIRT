@@ -526,7 +526,7 @@ logLik.bigIRT_fit <- function(object, effective = TRUE, cores = 1L, ...){
   val <- object$optim$logLik
   if(is.null(val)) val <- object$logLik
   if(is.null(val)) stop("This fit carries no objective value.")
-  sdat <- object$dat
+  sdat <- object$prepared
   penalised <- isTRUE(as.logical(sdat$dopriors))
   N <- as.numeric(sdat$Nsubs); K <- as.numeric(sdat$Nscales)
 
@@ -576,7 +576,7 @@ logLik.bigIRT_fit <- function(object, effective = TRUE, cores = 1L, ...){
 #' @export
 nobs.bigIRT_fit <- function(object, type = c("persons", "responses"), ...){
   type <- match.arg(type)
-  if(identical(type, "persons")) as.integer(object$dat$Nsubs) else as.integer(object$dat$Nobs)
+  if(identical(type, "persons")) as.integer(object$prepared$Nsubs) else as.integer(object$prepared$Nobs)
 }
 
 ## Information criteria for a marginal IRT fit.
@@ -611,7 +611,7 @@ IRTic <- function(fit, cores = 1L){
   edf <- as.numeric(attr(ll, "df"))
   ndf <- as.numeric(attr(ll, "nominal_df"))
   v <- as.numeric(ll)
-  np <- as.integer(fit$dat$Nsubs); nr <- as.integer(fit$dat$Nobs)
+  np <- as.integer(fit$prepared$Nsubs); nr <- as.integer(fit$prepared$Nobs)
   out <- data.frame(
     criterion = c("AIC", "AIC", "BIC", "BIC", "BIC", "BIC"),
     df_type   = c("effective", "nominal", "effective", "nominal", "effective", "nominal"),
@@ -652,7 +652,7 @@ IRTic <- function(fit, cores = 1L){
 #'
 #' @export
 heldoutMetrics <- function(fit, eps = 1e-12){
-  sdat <- fit$dat
+  sdat <- fit$prepared
   ord <- fit$pars$originalRow
   p_in <- fit$pars$pcorrect
   if(is.null(p_in) || is.null(ord))
@@ -730,7 +730,7 @@ looIRT <- function(fit, draws = 500L, persons = NULL, seed = NULL, cores = 1L){
   if(is.null(fit$personPosterior$covariance))
     stop("PSIS-LOO needs the person posterior covariances. Refit with `laplaceKeepCovariance = TRUE`.")
   if(!is.null(seed)) set.seed(seed)
-  sdat <- fit$dat
+  sdat <- fit$prepared
   K <- as.integer(sdat$Nscales)
   mode <- as.matrix(fit$personPosterior$mode)
   Sig <- fit$personPosterior$covariance

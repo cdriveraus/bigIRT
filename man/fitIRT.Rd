@@ -54,8 +54,6 @@ fitIRT(
   estimateAbilityCorr = FALSE,
   laplaceCorrParam = c("stan_corsqrt", "normalized_chol"),
   keepInternals = FALSE,
-  laplaceAdjointScale = 1,
-  laplaceLogdetScale = 1,
   laplaceOuterIter = 500,
   laplaceTol = 0.001,
   laplaceTolScale = c("relative", "per_obs"),
@@ -216,8 +214,21 @@ produce estimates to update the hyperparameters from, so they are run at
 \code{laplaceTol * ebayesCoarse}; the final fit always uses
 \code{laplaceTol}. Default is 100.}
 
-\item{estMeans}{Character vector. Which means to estimate from 'ability', 'A', 'B', 'C', 'D'. Default is c('ability', 'B', 'C', 'D'), with
-discrimination means fixed.}
+\item{estMeans}{Character vector. Which means to estimate, from 'ability',
+'A', 'B', 'C', 'D'. Default is \code{c('A','B','C','D')}: the item means
+are estimated and the ability mean is held at \code{AbilityMeandat}, which
+is 0 unless supplied.
+
+The ability mean and the difficulty mean cannot both be estimated. Adding a
+constant to every ability and the same constant to every difficulty leaves
+every response probability unchanged, so the location of the scale has to
+be pinned by one or the other. The default pins it through the ability
+prior; passing 'ability' here estimates the ability mean instead and
+requires dropping 'B'.
+
+This matters when whole persons are held out of \code{trainingRows}: such a
+person has no likelihood, so their ability is the prior mean, which under
+the default is 0 plus whatever their \code{personPreds} imply.}
 
 \item{priors}{Logical. Whether to use prior distributions. Default is TRUE.}
 
@@ -229,7 +240,28 @@ differentiates through them, so the gradient carries the adjoint term
 rather than treating the modes as fixed. It accepts item predictors,
 person predictors, estimated ability means and estimated latent
 correlations, and its gradient agrees with central finite differences in
-every one of those blocks. Predictor columns are response-row aligned and
+every one of those blocks.
+
+The Laplace curvature at the person mode is the \emph{observed} Hessian,
+the actual second derivative of the log posterior. Fisher information
+was used until September 2026 and was selectable for a while after; it
+is neither now. Two reasons. Laplace approximates one integrand, so it
+needs that integrand's curvature rather than an average over responses
+the person did not give. And the mode adjoint applies the implicit
+function theorem, which needs the inverse of the actual Hessian: with
+Fisher in that role the item gradient missed the true total derivative
+by 1e-3 to 4e-2 for the 3PL and 4PL, at one, two and three dimensions.
+The 2PL is exact either way, because the logit link is canonical and the
+two curvatures are then the same number -- which is why it went unnoticed
+for so long. Fisher information is still used for the Newton step, where
+its guaranteed positive definiteness is what makes the mode solve robust.
+
+Where the data's own contribution to the curvature is not positive
+semidefinite, it is clipped to the nearest matrix that is, rather than
+swapped for Fisher: swapping is discontinuous in the item parameters and
+a line search cannot cope with it. A consequence worth knowing is that
+the reported person posterior SD can never exceed the ability prior SD.
+Predictor columns are response-row aligned and
 can vary within a person or item; the likelihood retains their exact row
 values while reported person/item summaries use within-entity predictor
 means. \code{"laplace_fast"} and \code{"laplace_direct"} are accepted as
@@ -262,27 +294,6 @@ final parameter state and the prior precision array to the returned fit.
 Off by default because these carry copies of the response arrays. Useful
 for verifying analytic gradients against finite differences, and for
 inspecting a fit that stopped somewhere unexpected.}
-
-\item{laplaceAdjointScale}{Numeric. Weight on the mode-adjoint correction in
-the item gradient. The item step evaluates its objective at frozen person
-modes but its gradient carries a correction for how those modes move with
-the item parameters, so the two do not describe quite the same function.
-Against finite differences the correction is roughly an order of magnitude
-too small. Raising this weight improves the Laplace objective monotonically
-and degrades recovery of the generating parameters monotonically, so the
-default of 1 is kept: it is where recovery is best, not where the gradient
-is right. Setting 0 removes the correction, which is worse on both counts.
-Exposed for diagnosis; see the package notes before changing it.}
-
-\item{laplaceLogdetScale}{Numeric. Weight on the Laplace log-determinant,
-applied to the objective and to both of its gradient contributions, so
-value and gradient always describe the same function. 1 is the Laplace
-objective; 0 drops the log-determinant and leaves the joint posterior;
-values between damp the Occam penalty that this term places on
-discrimination. Use this when shrinkage is wanted, in preference to
-detuning \code{laplaceAdjointScale}: damping the gradient alone leaves the
-optimiser minimising something it is not evaluating, and makes the
-convergence diagnostics report on a function that does not exist.}
 
 \item{laplaceOuterIter}{Integer. Maximum number of outer iterations for a
 Laplace backend. This is a fallback limit rather than
@@ -355,7 +366,16 @@ Laplace item step. Default is 10.}
 
 \item{dropPerfectScores}{Logical. Whether to drop perfect scores from each subject and item before estimation. Default is TRUE.}
 
-\item{trainingRows}{Integer vector. Rows of data to use for estimation of parameters. Default is all rows in \code{dat}.}
+\item{trainingRows}{Integer vector. Rows of data to use for estimation of
+parameters. Default is all rows in \code{dat}. Every item must keep at
+least one training response, since there is nothing else from which to
+calibrate it. Persons need not: a person whose responses are all excluded
+has the prior as their posterior, so their fitted ability is exactly the
+prediction from their \code{personPreds} (or the prior mean if there are
+none). Holding out whole persons this way is the design that answers
+whether person covariates say anything about somebody the model has never
+seen -- excluding only some of a person's responses cannot, because their
+own ability parameter is still estimated from the rest.}
 
 \item{init}{Initial values for the fitting algorithm. Default is NA.}
 
@@ -393,8 +413,8 @@ data passed in, so they can be indexed with the same row numbers used
 for \code{trainingRows}; rows removed by \code{dropPerfectScores} are
 \code{NA}. Every other row-level object -- \code{b_row}, \code{c_row},
 \code{d_row}, \code{eta_row}, \code{row_loadings}, \code{row_ability},
-and the contents of \code{fit$dat} -- remains in internal order, because
-the person-covariance routines pair those with \code{fit$dat$id}. Use
+and the contents of \code{fit$prepared} -- remains in internal order, because
+the person-covariance routines pair those with \code{fit$prepared$id}. Use
 \code{fit$pars$originalRow}, which gives the input row index of each
 internal row, to move between the two.
 }

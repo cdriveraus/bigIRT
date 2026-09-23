@@ -362,7 +362,21 @@ IRTcurve <- function(A, B, C = 0, D = 1, theta = seq(-3, 3, .01),
 #'   \item{Ability}{Matrix of true person abilities (`Nsubs x Nscales`).}
 #'   \item{A}{Matrix of true item discriminations (`Nitems x Nscales`).}
 #'   \item{B}{Matrix/vector of true item difficulties. Matrix in legacy mode,
-#'   vector in `mirt=TRUE` mode.}
+#'   vector in `mirt=TRUE` mode.
+#'
+#'   **The two modes use different parameterisations, and `B` is not on the
+#'   same scale as the `B` that [fitIRT()] reports.** Legacy mode generates
+#'   \eqn{p = C + (D-C)\,\mathrm{logistic}(a(\theta - b))}, so `B` is a
+#'   difficulty in the classical sense. `mirt = TRUE` generates
+#'   \eqn{p = C + (D-C)\,\mathrm{logistic}(a'\theta - b)}, so `B` is an
+#'   intercept, which is the convention [fitIRT()] estimates and reports.
+#'
+#'   To compare a legacy simulation against a fit, convert first: the
+#'   generating intercept is `A * B`. Comparing the two unconverted costs an
+#'   error of \eqn{(a-1)b}, which cancels in mean bias, grows with the size
+#'   of the difficulty, and does not shrink as the sample grows, so it looks
+#'   like a calibration failure rather than a units error. [compareIRTmodels()]
+#'   and [extractMIRTpars()] handle the conversion for you.}
 #'   \item{C}{Matrix/vector of true item guessing parameters. Matrix in legacy
 #'   mode, vector in `mirt=TRUE` mode.}
 #'   \item{D}{Matrix/vector of true item upper asymptote parameters. Matrix in legacy
@@ -523,12 +537,19 @@ simIRT <- function(Nsubs=100,Nitems=200,Nscales=1, NitemsAnswered=Nitems,
       Ability = Ability,
       A = A,
       B = B,
+      ## B on the scale fitIRT reports. Under mirt = TRUE generation is
+      ## already logistic(a'theta - b), so the two coincide; the slot exists
+      ## in both modes so that recovery code never has to know which ran.
+      Bintercept = B,
       C = C,
       D = D,
       primaryScale = primaryScale,
       dat = as.data.table(dat)
     )
+    out$itemPars <- bigIRT_sim_itemPars(out$dat, intercept = TRUE)
+    out$personPars <- bigIRT_sim_personPars(out$dat)
     class(out) <- c("bigIRT_simIRT", "list")
+    bigIRT_sim_selfcheck(out, intercept = TRUE)
     return(out)
   }
 
@@ -571,6 +592,10 @@ simIRT <- function(Nsubs=100,Nitems=200,Nscales=1, NitemsAnswered=Nitems,
       D=rep(D[,si],times=Nsubs),
       pcorrect=0,score=0)
 
+    ## pcorrect and score are placeholders here and are filled below. pcorrect
+    ## used to be left at its placeholder, so every legacy simulation returned
+    ## a column of zeros under a name that reads like a probability; the
+    ## mirt=TRUE path always populated it.
     simdat$p= C[simdat$Item-(si-1)*Nitems,si]+
       (D[simdat$Item-(si-1)*Nitems,si]-C[simdat$Item-(si-1)*Nitems,si]) / (1+exp(
         -A[simdat$Item-(si-1)*Nitems,si] * #discrimination of item=
@@ -580,6 +605,7 @@ simIRT <- function(Nsubs=100,Nitems=200,Nscales=1, NitemsAnswered=Nitems,
 
 
 
+    simdat$pcorrect <- simdat$p
     simdat$score <- rbinom(n = nrow(simdat),size = 1,
       prob = simdat$p )
 
@@ -598,7 +624,87 @@ simIRT <- function(Nsubs=100,Nitems=200,Nscales=1, NitemsAnswered=Nitems,
   if(!all(is.na(itemPreds))) dat <- merge.data.table((dat),data.table(Item=1:Nitems,itemPreds),by=c('Item'))
   if(!all(is.na(personPreds))) dat <- merge.data.table((dat),data.table(id=1:Nsubs,personPreds),by=c('id'))
 
-  out <- list(Ability=Ability,A=A,B=B, C=C,D=D,dat=dat)
+  ## Bintercept is B on the scale fitIRT reports. Legacy generation is
+  ## logistic(a (theta - b)), so the generating intercept is a*b. Comparing
+  ## a raw B against a fitted B costs (a-1)b, which cancels in mean bias,
+  ## grows with |b| and does not shrink with N, so it reads as a calibration
+  ## failure rather than a units error. Use Bintercept for recovery work.
+  out <- list(Ability=Ability,A=A,B=B,Bintercept=A*B, C=C,D=D,dat=dat)
+  out$itemPars <- bigIRT_sim_itemPars(dat, intercept = FALSE)
+  out$personPars <- bigIRT_sim_personPars(dat)
   class(out) <- c("bigIRT_simIRT", "list")
+  bigIRT_sim_selfcheck(out, intercept = FALSE)
   return(out)
+}
+
+## Truth tables in the shape fitIRT returns, so that comparing a simulation
+## against a fit is a join rather than a conversion. Both steps of that
+## conversion used to be done by hand at every call site and both had silent
+## failure modes: the units (see Bintercept) and the item ordering (Item is
+## character, so sorting it lexicographically pairs each estimate with the
+## wrong item). Built from `dat`, which carries one row per response with the
+## generating parameters attached, so they cannot drift from what was used.
+##
+## `intercept` says whether dat$B is already on fitIRT's scale: TRUE under
+## mirt = TRUE, FALSE for the legacy path.
+bigIRT_sim_itemPars <- function(dat, intercept){
+  d <- unique(as.data.table(dat)[, c("Item", "A", "B", "C", "D"), with = FALSE],
+              by = "Item")
+  data.table::setorder(d, Item)
+  data.frame(
+    Item = as.character(d$Item),
+    A = as.numeric(d$A),
+    B = if(isTRUE(intercept)) as.numeric(d$B) else as.numeric(d$A) * as.numeric(d$B),
+    C = as.numeric(d$C),
+    D = as.numeric(d$D),
+    stringsAsFactors = FALSE)
+}
+
+bigIRT_sim_personPars <- function(dat){
+  d <- unique(as.data.table(dat)[, c("id", "Ability"), with = FALSE], by = "id")
+  data.table::setorder(d, id)
+  data.frame(id = d$id, X1 = as.numeric(d$Ability), stringsAsFactors = FALSE)
+}
+
+## Does the returned object reproduce the probabilities that generated the
+## scores? A cheap assertion over a sample of rows, run on every simulation.
+##
+## This exists because two defects sat in this function for a long time and
+## neither was visible in any output: `pcorrect` was a column of zeros, and
+## the two generating paths disagreed about whether B was a difficulty or an
+## intercept. A test would only have covered the configurations tested; this
+## covers every configuration anyone runs.
+bigIRT_sim_selfcheck <- function(out, intercept, tol = 1e-7, nmax = 5000L){
+  d <- as.data.table(out$dat)
+  if(!nrow(d)) return(invisible(TRUE))
+  if(!all(c("A", "B", "C", "D", "Ability", "p") %in% names(d))) return(invisible(TRUE))
+  i <- if(nrow(d) > nmax) sample.int(nrow(d), nmax) else seq_len(nrow(d))
+  d <- d[i]
+
+  ## eta is a dot product over dimensions, and dat$A carries only the loading
+  ## on the item's own scale. In legacy mode each item belongs to exactly one
+  ## scale, so the single-scale product is the whole of it; under mirt with
+  ## cross-loadings it is not, and the row loadings A_1..A_K have to be used
+  ## against every ability. Writing the one-dimensional formula for both was
+  ## the first thing this check got wrong, which is a fair demonstration of
+  ## why it is here.
+  aco <- grep("^A_[0-9]+$", names(d), value = TRUE)
+  K <- if(is.null(dim(out$Ability))) 1L else ncol(out$Ability)
+  eta <- if(isTRUE(intercept) && K > 1L && length(aco) == K){
+    rowSums(as.matrix(d[, aco, with = FALSE]) *
+            as.matrix(out$Ability)[d$id, , drop = FALSE]) - d$B
+  } else if(isTRUE(intercept) && K > 1L){
+    return(invisible(TRUE))   # cannot reconstruct eta from what was returned
+  } else if(isTRUE(intercept)) d$A * d$Ability - d$B else d$A * (d$Ability - d$B)
+  p <- d$C + (d$D - d$C) * stats::plogis(eta)
+  bad <- max(abs(d$p - p), na.rm = TRUE)
+  if(!is.finite(bad) || bad > tol)
+    warning(sprintf(paste0("simIRT internal check: the returned columns do not ",
+      "reproduce the generating probabilities (max discrepancy %.3g). The ",
+      "parameters, the abilities and dat$p have gone out of step; recovery ",
+      "comparisons against this object will be wrong."), bad), call. = FALSE)
+  if("pcorrect" %in% names(d) && max(abs(d$pcorrect - d$p), na.rm = TRUE) > tol)
+    warning("simIRT internal check: dat$pcorrect does not match dat$p.",
+      call. = FALSE)
+  invisible(TRUE)
 }

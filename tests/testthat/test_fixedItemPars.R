@@ -56,7 +56,7 @@ if(identical(Sys.getenv("NOT_CRAN"), "true")& .Machine$sizeof.pointer != 4){
 
     # o=order(abs(p-pis),decreasing = T)
     #
-    # fit$dat$item[o[1:20]]
+    # fit$prepared$item[o[1:20]]
     # cbind(p,pis)[o[1:20],]
 
     # apply(fit$pars$invspAbeta,1,mean)

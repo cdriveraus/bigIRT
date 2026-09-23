@@ -156,7 +156,7 @@ reliability <- function(fit){
 #' @seealso [empiricalICC()]
 #' @export
 itemFit <- function(fit, training_only = TRUE){
-  sdat <- fit$dat
+  sdat <- fit$prepared
   ord <- fit$pars$originalRow
   p_in <- fit$pars$pcorrect
   if(is.null(p_in) || is.null(ord)) stop("This fit carries no per-response predictions.")
@@ -232,7 +232,7 @@ itemFit <- function(fit, training_only = TRUE){
 #' @export
 empiricalICC <- function(fit, items = NULL, bins = 10L, scale_index = 1L,
                          training_only = TRUE){
-  sdat <- fit$dat
+  sdat <- fit$prepared
   ord <- fit$pars$originalRow
   p_in <- fit$pars$pcorrect
   if(is.null(p_in) || is.null(ord)) stop("This fit carries no per-response predictions.")

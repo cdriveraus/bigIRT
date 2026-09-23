@@ -95,15 +95,15 @@ wleSEnumeric <- function(theta, A, B, C, score){
 #' str(wle)
 wleIRT <- function(fit){
 
-  wle <- matrix(NA,nrow=fit$dat$Nsubs,ncol=fit$dat$Nscales)
-  wleSE <- matrix(NA,nrow=fit$dat$Nsubs,ncol=fit$dat$Nscales)
+  wle <- matrix(NA,nrow=fit$prepared$Nsubs,ncol=fit$prepared$Nscales)
+  wleSE <- matrix(NA,nrow=fit$prepared$Nsubs,ncol=fit$prepared$Nscales)
   use_matrix_a <- !is.null(dim(fit$pars$A)) && length(dim(fit$pars$A)) == 2
 
   for(i in 1:nrow(wle)){
     for(j in 1:ncol(wle)){
-      row_sel <- fit$dat$id %in% i & fit$dat$scale %in% j
-      item_sel <- fit$dat$item[row_sel]
-      score_sel <- fit$dat$score[row_sel]
+      row_sel <- fit$prepared$id %in% i & fit$prepared$scale %in% j
+      item_sel <- fit$prepared$item[row_sel]
+      score_sel <- fit$prepared$score[row_sel]
       if(!length(item_sel)) next
       A_sel <- if(use_matrix_a) fit$pars$A[cbind(item_sel, j)] else fit$itemPars$A[item_sel]
       B_sel <- fit$itemPars$B[item_sel]

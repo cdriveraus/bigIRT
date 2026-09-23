@@ -17,32 +17,32 @@ a_matrix_to_vector <- function(x){
 
 checkP <- function(fit){
   ## Recomputes the per-response probabilities in R, to check the Stan/C++ ones.
-  ## Everything here is indexed in fit$dat's internal (person-sorted) order, but
+  ## Everything here is indexed in fit$prepared's internal (person-sorted) order, but
   ## the result is returned in the caller's input row order so that it lines up
   ## element-for-element with fit$pars$p.  Without that final mapping the two
   ## agree only when the input happened to be sorted by person already.
-  p=rep(NA,fit$dat$Nobs)
+  p=rep(NA,fit$prepared$Nobs)
   use_matrix_a <- !is.null(dim(fit$pars$A)) && length(dim(fit$pars$A)) == 2
   for(i in 1:length(p)){
     if(use_matrix_a){
-      aload <- fit$pars$A[fit$dat$item[i],]
-      eta <- sum(aload * fit$pars$Ability[fit$dat$id[i],]) - fit$itemPars$B[fit$dat$item[i]]
-      pmid <- fit$itemPars$C[fit$dat$item[i]] + (fit$itemPars$D[fit$dat$item[i]] - fit$itemPars$C[fit$dat$item[i]]) * inv_logit(eta)
+      aload <- fit$pars$A[fit$prepared$item[i],]
+      eta <- sum(aload * fit$pars$Ability[fit$prepared$id[i],]) - fit$itemPars$B[fit$prepared$item[i]]
+      pmid <- fit$itemPars$C[fit$prepared$item[i]] + (fit$itemPars$D[fit$prepared$item[i]] - fit$itemPars$C[fit$prepared$item[i]]) * inv_logit(eta)
       p[i] <- pmid
     } else {
     ## The package convention is eta = A.theta - B, as in the branch above;
     ## this branch previously wrote A*(theta - B), a different model.  It is
     ## currently unreachable because pars$A is always stored as a matrix.
-    eta <- fit$itemPars$A[fit$dat$item[i]] *
-      fit$personPars[fit$dat$id[i], 1+fit$dat$scale[i]] -
-      fit$itemPars$B[fit$dat$item[i]]
-    p[i] <- fit$itemPars$C[fit$dat$item[i]] +
-      (fit$itemPars$D[fit$dat$item[i]] - fit$itemPars$C[fit$dat$item[i]]) * inv_logit(eta)
+    eta <- fit$itemPars$A[fit$prepared$item[i]] *
+      fit$personPars[fit$prepared$id[i], 1+fit$prepared$scale[i]] -
+      fit$itemPars$B[fit$prepared$item[i]]
+    p[i] <- fit$itemPars$C[fit$prepared$item[i]] +
+      (fit$itemPars$D[fit$prepared$item[i]] - fit$itemPars$C[fit$prepared$item[i]]) * inv_logit(eta)
     }
 
-    if(fit$dat$score[i]==0) p[i]= 1.0-p[i];
+    if(fit$prepared$score[i]==0) p[i]= 1.0-p[i];
   }
-  orig <- as.integer(fit$dat$originalRow)
+  orig <- as.integer(fit$prepared$originalRow)
   if(length(orig) == length(p) && !anyNA(orig)){
     out <- rep(NA_real_, max(orig))
     out[orig] <- p
@@ -139,7 +139,7 @@ checkP <- function(fit){
 #
 #   } #end internal genq function
 #
-#   e <- list2env(c(fit$pars,fit$dat))
+#   e <- list2env(c(fit$pars,fit$prepared))
 #   environment(genq) <- e
 #   genq()
 # }
@@ -400,10 +400,25 @@ extractMIRTpars <- function(object, score_method = "EAP"){
       D <- rep(1, total_items)
       item_names <- character(total_items)
       idx <- 1L
+      ## PARAMETERISATION. The two simIRT paths do not agree about B, and
+      ## everything downstream here works in intercepts.
+      ##
+      ##   mirt = TRUE   generates logistic(a'theta - b), so B is already an
+      ##                 intercept and is taken as given in the branch above.
+      ##   legacy        generates logistic(a (theta - b)), so B is a
+      ##                 difficulty and the intercept is a*b.
+      ##
+      ## Passing the difficulty through unconverted compared a difficulty
+      ## against fitIRT's intercept, which inflated difficulty RMSE by about
+      ## a factor of two and a half. It is invisible in mean bias, grows with
+      ## |b|, and does not shrink with N, so it reads as a calibration
+      ## failure rather than a units error. Verified against the simulator's
+      ## own probabilities: dat$p matches logistic(A*(Ability - B)) to 2e-09
+      ## in legacy mode and logistic(A*Ability - B) to 2e-09 under mirt.
       for(k in seq_len(K)){
         rows <- idx:(idx + nitems_per_scale - 1L)
         A[rows, k] <- A_in[, k]
-        B[rows] <- B_in[, k]
+        B[rows] <- A_in[, k] * B_in[, k]
         C[rows] <- C_in[, k]
         item_names[rows] <- paste0("S", factor_names[k], "_I", seq_len(nitems_per_scale))
         idx <- idx + nitems_per_scale
@@ -1004,7 +1019,7 @@ bigIRT_sigma_templates <- function(fit, sdat, posterior, layout, jitter = 1e-6, 
   fullSamples <- lapply(seq_len(Nsamp), function(si){
     fullPar <- fit$optim$par
     sampleSlice <- matrix(abilitySamples[,,si], nrow = sdat$Nsubs, ncol = sdat$Nscales)
-    fullPar[layout$ability] <- sampleSlice[fit$dat$Abilityparsindex > 0]
+    fullPar[layout$ability] <- sampleSlice[fit$prepared$Abilityparsindex > 0]
     fullPar
   })
 
@@ -1126,7 +1141,7 @@ plotLaplaceDiagnostics <- function(fit, logGrad = TRUE, showTiming = TRUE){
 #' @export
 print.bigIRT_fit <- function(x, ...){
   backend <- x$backend %||% x$call$marginalApprox %||% "none"
-  dat <- x$dat
+  dat <- x$prepared
   cat(sprintf("bigIRT fit: %s backend | %s persons, %s items, %s dimensions\n",
     backend, dat$Nsubs %||% NA_integer_, dat$Nitems %||% NA_integer_, dat$Nscales %||% NA_integer_))
   if(!is.null(x$optim$logLik)) cat(sprintf("Objective: %.6f\n", x$optim$logLik))
@@ -1154,8 +1169,8 @@ summary.bigIRT_fit <- function(object, se = TRUE, ...){
   ic <- tryCatch(IRTic(object), error = function(e) NULL)
   out <- list(
     call = object$call, backend = object$backend, status = object$laplaceStatus,
-    n = c(persons = as.integer(object$dat$Nsubs), items = as.integer(object$dat$Nitems),
-          responses = as.integer(object$dat$Nobs), dimensions = as.integer(object$dat$Nscales)),
+    n = c(persons = as.integer(object$prepared$Nsubs), items = as.integer(object$prepared$Nitems),
+          responses = as.integer(object$prepared$Nobs), dimensions = as.integer(object$prepared$Nscales)),
     item_summary = if(nrow(items)) summary(items[, intersect(c("A", "B", "C", "D"), names(items)), drop = FALSE]) else NULL,
     ability_summary = if(length(ability)) summary(ability) else NULL,
     se_summary = if(!is.null(info)) apply(info$se, 2, stats::median, na.rm = TRUE) else NULL,
@@ -1381,7 +1396,28 @@ bigIRT_validate_fit_inputs <- function(dat, score, id, item, scale, pl, controls
 #'   rather than treating the modes as fixed. It accepts item predictors,
 #'   person predictors, estimated ability means and estimated latent
 #'   correlations, and its gradient agrees with central finite differences in
-#'   every one of those blocks. Predictor columns are response-row aligned and
+#'   every one of those blocks.
+#'
+#'   The Laplace curvature at the person mode is the \emph{observed} Hessian,
+#'   the actual second derivative of the log posterior. Fisher information
+#'   was used until September 2026 and was selectable for a while after; it
+#'   is neither now. Two reasons. Laplace approximates one integrand, so it
+#'   needs that integrand's curvature rather than an average over responses
+#'   the person did not give. And the mode adjoint applies the implicit
+#'   function theorem, which needs the inverse of the actual Hessian: with
+#'   Fisher in that role the item gradient missed the true total derivative
+#'   by 1e-3 to 4e-2 for the 3PL and 4PL, at one, two and three dimensions.
+#'   The 2PL is exact either way, because the logit link is canonical and the
+#'   two curvatures are then the same number -- which is why it went unnoticed
+#'   for so long. Fisher information is still used for the Newton step, where
+#'   its guaranteed positive definiteness is what makes the mode solve robust.
+#'
+#'   Where the data's own contribution to the curvature is not positive
+#'   semidefinite, it is clipped to the nearest matrix that is, rather than
+#'   swapped for Fisher: swapping is discontinuous in the item parameters and
+#'   a line search cannot cope with it. A consequence worth knowing is that
+#'   the reported person posterior SD can never exceed the ability prior SD.
+#'   Predictor columns are response-row aligned and
 #'   can vary within a person or item; the likelihood retains their exact row
 #'   values while reported person/item summaries use within-entity predictor
 #'   means. \code{"laplace_fast"} and \code{"laplace_direct"} are accepted as
@@ -1446,25 +1482,6 @@ bigIRT_validate_fit_inputs <- function(dat, score, id, item, scale, pl, controls
 #'   that it is far stricter at large N: a tolerance chosen for
 #'   \code{\"relative\"} should not be carried over unchanged. The scale used
 #'   is recorded in \code{laplaceStatus$tolerance_scale}.
-#' @param laplaceLogdetScale Numeric. Weight on the Laplace log-determinant,
-#'   applied to the objective and to both of its gradient contributions, so
-#'   value and gradient always describe the same function. 1 is the Laplace
-#'   objective; 0 drops the log-determinant and leaves the joint posterior;
-#'   values between damp the Occam penalty that this term places on
-#'   discrimination. Use this when shrinkage is wanted, in preference to
-#'   detuning \code{laplaceAdjointScale}: damping the gradient alone leaves the
-#'   optimiser minimising something it is not evaluating, and makes the
-#'   convergence diagnostics report on a function that does not exist.
-#' @param laplaceAdjointScale Numeric. Weight on the mode-adjoint correction in
-#'   the item gradient. The item step evaluates its objective at frozen person
-#'   modes but its gradient carries a correction for how those modes move with
-#'   the item parameters, so the two do not describe quite the same function.
-#'   Against finite differences the correction is roughly an order of magnitude
-#'   too small. Raising this weight improves the Laplace objective monotonically
-#'   and degrades recovery of the generating parameters monotonically, so the
-#'   default of 1 is kept: it is where recovery is best, not where the gradient
-#'   is right. Setting 0 removes the correction, which is worse on both counts.
-#'   Exposed for diagnosis; see the package notes before changing it.
 #' @param keepInternals Logical. Attach the prepared data (\code{sdat}), the
 #'   final parameter state and the prior precision array to the returned fit.
 #'   Off by default because these carry copies of the response arrays. Useful
@@ -1550,8 +1567,8 @@ bigIRT_validate_fit_inputs <- function(dat, score, id, item, scale, pl, controls
 #'   for \code{trainingRows}; rows removed by \code{dropPerfectScores} are
 #'   \code{NA}. Every other row-level object -- \code{b_row}, \code{c_row},
 #'   \code{d_row}, \code{eta_row}, \code{row_loadings}, \code{row_ability},
-#'   and the contents of \code{fit$dat} -- remains in internal order, because
-#'   the person-covariance routines pair those with \code{fit$dat$id}. Use
+#'   and the contents of \code{fit$prepared} -- remains in internal order, because
+#'   the person-covariance routines pair those with \code{fit$prepared$id}. Use
 #'   \code{fit$pars$originalRow}, which gives the input row index of each
 #'   internal row, to move between the two.
 #' @export
@@ -1606,7 +1623,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   marginalApprox=c("none","laplace","laplace_fast","laplace_direct"),
   estimateAbilityCorr=FALSE,
   laplaceCorrParam=c("stan_corsqrt","normalized_chol"),
-  keepInternals=FALSE,laplaceAdjointScale=1,laplaceLogdetScale=1,laplaceOuterIter=500,laplaceTol=1e-3,laplaceTolScale=c("relative","per_obs"),laplaceGradTol=1e-4,laplacePolish=8L,laplacePersonTol=1e-4,
+  keepInternals=FALSE,laplaceOuterIter=500,laplaceTol=1e-3,laplaceTolScale=c("relative","per_obs"),laplaceGradTol=1e-4,laplacePolish=8L,laplacePersonTol=1e-4,
   laplaceKeepCovariance=FALSE,laplaceDiagnostics=FALSE,laplacePlot=FALSE,laplacePlotEvery=1L,
   laplaceJitter=1e-6,noptimsteps=10,
   normalise=FALSE,normaliseScale=1,normaliseMean=0,
@@ -1663,12 +1680,34 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     }
   })
 
-  old_adjoint <- getOption("bigIRT.adjoint_scale", 1)
-  old_logdet <- getOption("bigIRT.logdet_scale", 1)
-  options(bigIRT.adjoint_scale = laplaceAdjointScale,
-          bigIRT.logdet_scale = laplaceLogdetScale)
-  on.exit(options(bigIRT.adjoint_scale = old_adjoint,
-                  bigIRT.logdet_scale = old_logdet), add = TRUE)
+  ## Partial eigenvalue clipping is the one place where the log-determinant
+  ## gradient is zeroed without log|H| being exactly flat. It needs K > 1,
+  ## and it does happen during fitting -- a few person-evaluations per fit at
+  ## three dimensions -- but it is harmless at that rate: with it active for
+  ## 2 of 300 persons the item gradient still matched central differences at
+  ## 1.7e-7, indistinguishable from the unclipped 1e-7.
+  ##
+  ## So the count is recorded rather than warned about, and the warning is
+  ## reserved for clipping being pervasive rather than incidental. The
+  ## threshold is deliberately loose: more partial clips than there are
+  ## persons means it averaged at least one per person across the fit, which
+  ## is orders above anything measured. bigIRT_laplace_clip_counts() has the
+  ## running totals for anyone who wants them.
+  bigIRT_laplace_clip_counts(reset = TRUE)
+  on.exit({
+    .clip <- tryCatch(bigIRT_laplace_clip_counts(reset = FALSE),
+                      error = function(e) c(full = 0L, partial = 0L))
+    ## sdat is only populated if the fit got that far; treat a missing Nsubs
+    ## as zero so an early failure cannot turn this into a second error.
+    .ns <- suppressWarnings(as.integer(sdat$Nsubs)[1])
+    if(length(.ns) == 0L || is.na(.ns)) .ns <- 0L
+    if(isTRUE(.clip[["partial"]] > max(100L, .ns)))
+      warning(sprintf(paste0("Laplace curvature was partially clipped %d times, ",
+        "against %d persons. At that rate the log-determinant gradient may be ",
+        "materially approximate; treat item standard errors and convergence ",
+        "diagnostics with care. Rates this high were never seen in simulation."),
+        .clip[["partial"]], .ns), call. = FALSE)
+  }, add = TRUE)
   sdat <-list() #initialize standata object
   basetol=tol
   marginalApprox <- match.arg(marginalApprox)
@@ -2324,7 +2363,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     finalPosterior <- directFit$eval$posterior
     state$AbilityBase <- finalPosterior$theta_mode
 
-    fit <- list(pars = list(), optim = list(), dat = sdat)
+    fit <- list(pars = list(), optim = list(), prepared = sdat)
     fit$pars <- bigIRT_laplace_constrained_pars(state, sdat, posterior = finalPosterior)
     fit$optim <- list(
       method = "laplace",
@@ -2337,7 +2376,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
       iter = directFit$optim$iter,
       terminate = directFit$optim$terminate
     )
-    fit$dat <- sdat
+    fit$prepared <- sdat
     fit <- apply_fit_dimnames(fit)
     if(isTRUE(keepInternals)){
       ## Same payload the alternating backend used to expose, so callers that
@@ -2708,39 +2747,39 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
 
   ###Covariate effect summary
   fit$covariateEffects <- list()
-  if(fit$dat$NpersonPreds > 0){
+  if(fit$prepared$NpersonPreds > 0){
     colnames(fit$pars$Abilitybeta) <- colnames(personPreds)
     fit$covariateEffects$Ability <- fit$pars$Abilitybeta
     ability_sd <- apply(as.matrix(fit$pars$Ability), 2, sd)
     ability_sd[!is.finite(ability_sd) | ability_sd == 0] <- 1
-    pred_sd <- apply(fit$dat$personPreds, 2, sd)
+    pred_sd <- apply(fit$prepared$personPreds, 2, sd)
     fit$covariateEffects$AbilityStd <- sweep(fit$pars$Abilitybeta, 1, ability_sd, "/")
     fit$covariateEffects$AbilityStd <- sweep(fit$covariateEffects$AbilityStd, 2, pred_sd, "*")
   }
-  if(fit$dat$NAitemPreds > 0 && pl > 1){
+  if(fit$prepared$NAitemPreds > 0 && pl > 1){
     dimnames(fit$pars$Abeta)[[2]] <- (AitemPreds)
     fit$covariateEffects$A <- fit$pars$Abeta
-    fit$covariateEffects$AStd <- t(t(fit$pars$Abeta) * apply(fit$dat$itemPreds[,fit$dat$AitemPreds,drop=FALSE],2,sd) / sd(fit$pars$A))
+    fit$covariateEffects$AStd <- t(t(fit$pars$Abeta) * apply(fit$prepared$itemPreds[,fit$prepared$AitemPreds,drop=FALSE],2,sd) / sd(fit$pars$A))
   }
-  if(fit$dat$NBitemPreds > 0){
+  if(fit$prepared$NBitemPreds > 0){
     dimnames(fit$pars$Bbeta)[[2]] <- (BitemPreds)
     fit$covariateEffects$B<- fit$pars$Bbeta
-    fit$covariateEffects$BStd <- t(t(fit$pars$Bbeta) * apply(fit$dat$itemPreds[,fit$dat$BitemPreds,drop=FALSE],2,sd) / sd(fit$pars$B))
+    fit$covariateEffects$BStd <- t(t(fit$pars$Bbeta) * apply(fit$prepared$itemPreds[,fit$prepared$BitemPreds,drop=FALSE],2,sd) / sd(fit$pars$B))
   }
-  if(fit$dat$NCitemPreds > 0 && pl > 2){
+  if(fit$prepared$NCitemPreds > 0 && pl > 2){
     dimnames(fit$pars$Cbeta)[[2]] <- (CitemPreds)
     fit$covariateEffects$C<- fit$pars$Cbeta
-    fit$covariateEffects$CStd <- t(t(fit$pars$Cbeta) * apply(fit$dat$itemPreds[,fit$dat$CitemPreds,drop=FALSE],2,sd) / sd(fit$pars$C))
+    fit$covariateEffects$CStd <- t(t(fit$pars$Cbeta) * apply(fit$prepared$itemPreds[,fit$prepared$CitemPreds,drop=FALSE],2,sd) / sd(fit$pars$C))
   }
-  if(fit$dat$NDitemPreds > 0 && pl > 3){
+  if(fit$prepared$NDitemPreds > 0 && pl > 3){
     dimnames(fit$pars$Dbeta)[[2]] <- (DitemPreds)
     fit$covariateEffects$D<- fit$pars$Dbeta
-    fit$covariateEffects$DStd <- t(t(fit$pars$Dbeta) * apply(fit$dat$itemPreds[,fit$dat$DitemPreds,drop=FALSE],2,sd) / sd(fit$pars$D))
+    fit$covariateEffects$DStd <- t(t(fit$pars$Dbeta) * apply(fit$prepared$itemPreds[,fit$prepared$DitemPreds,drop=FALSE],2,sd) / sd(fit$pars$D))
   }
 
   if(all(c("b_row", "c_row", "d_row", "row_loadings") %in% names(fit$pars))){
     fit$rowEffective <- list(
-      id = fit$dat$id,
+      id = fit$prepared$id,
       theta_mean = fit$pars$Ability,
       b = fit$pars$b_row,
       c = fit$pars$c_row,

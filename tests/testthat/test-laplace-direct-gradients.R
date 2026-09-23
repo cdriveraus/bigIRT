@@ -110,6 +110,66 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     expect_lt(slot_relerr(d, d$layout$ability_mean), 1e-6)
   })
 
+  ## Everything above runs pl = 2 on 2PL data, so none of it reaches the C or
+  ## D slots, and none of it could have detected the curvature bug that the
+  ## next test guards: for the 2PL the observed Hessian and Fisher
+  ## information are the same number, so the adjoint got the right matrix by
+  ## accident.
+  direct_evaluator_pl <- function(sim, pl) {
+    f <- fitIRT(dat = sim$dat, pl = pl, cores = 1, priors = TRUE,
+      ebayes = FALSE, dropPerfectScores = FALSE, normalise = FALSE,
+      marginalApprox = "laplace_fast", laplaceOuterIter = 2, verbose = 0,
+      plot = FALSE, keepInternals = TRUE)
+    sdat <- f$internals$sdat
+    st <- bigIRT:::bigIRT_laplace_initial_state(sdat, eps = 1e-6,
+      corr_paramization = "normalized_chol")
+    pp <- bigIRT:::bigIRT_laplace_prior_mats(sdat, jitter = 1e-6)$precision_array
+    lay <- bigIRT:::bigIRT_laplace_direct_layout(sdat, estimateAbilityCorr = FALSE)
+    ilay <- lay[setdiff(names(lay), c("corr", "ability_mean", "ability_beta"))]
+    ctx <- bigIRT:::bigIRT_laplace_item_context(sdat, layout = ilay)
+    ctx$grain_size <- bigIRT:::bigIRT_laplace_subject_grain(sdat$Nsubs, 1L)
+    ctx$direct_layout <- lay
+    ctx$estimateAbilityCorr <- FALSE
+    ctx$corr_paramization <- "normalized_chol"
+    st$laplaceCorrParam <- "normalized_chol"
+    list(layout = lay,
+         par = bigIRT:::bigIRT_laplace_pack_direct_state(st, sdat, layout = lay),
+         eval = function(v) bigIRT:::bigIRT_laplace_direct_objective(par = v,
+           state = st, sdat = sdat, prior_precision = pp,
+           theta_init = st$AbilityBase, jitter = 1e-6, max_attempts = 8L,
+           max_iter = 4000L, tol = 1e-13, keep_covariance = TRUE, context = ctx))
+  }
+
+  test_that("3PL and 4PL item gradients match finite differences, 1 to 3 dimensions", {
+    ## Everything above runs pl = 2 on 2PL data. That exercises neither the C
+    ## and D slots nor the curvature that feeds the mode adjoint, and for
+    ## years it passed at 2e-8 while the 3PL and 4PL gradient was wrong by
+    ## 1e-3 to 4e-2. The cause was Fisher information being inverted where
+    ## the implicit function theorem needs the actual Hessian; the 2PL could
+    ## not see it because there the two curvatures are the same number.
+    ##
+    ## Fisher is no longer used for the Laplace curvature, so this asserts
+    ## the property directly. If it ever fails, something has put an
+    ## expected-information quantity back into log|H| or the adjoint.
+    for (K in 1:3) {
+      for (pl in c(3L, 4L)) {
+        set.seed(5200 + 10 * K + pl)
+        sim <- simIRT(Nsubs = 250, Nitems = 20 * K, Nscales = K,
+          NitemsAnswered = rep(12L, K), AMean = 1, ASD = .3, BMean = 0,
+          BSD = 1, logitCMean = -1.4, logitCSD = .25,
+          logitDMean = if (pl >= 4) 2.5 else 20,
+          logitDSD = if (pl >= 4) .25 else 0)
+        d <- direct_evaluator_pl(sim, pl)
+        for (nm in if (pl >= 4) c("A", "B", "C", "D") else c("A", "B", "C")) {
+          slots <- d$layout[[nm]]
+          if (is.null(slots) || !length(slots)) next
+          expect_lt(slot_relerr(d, head(slots, 3L)), 1e-6,
+                    label = sprintf("K=%d pl=%d slot=%s", K, pl, nm))
+        }
+      }
+    }
+  })
+
   test_that("laplace results do not depend on response row order", {
     ## Per-person and per-item sums were built with rowsum(reorder = FALSE),
     ## which returns groups in the order they are encountered rather than in

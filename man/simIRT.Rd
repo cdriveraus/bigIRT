@@ -115,7 +115,21 @@ A list with:
 \item{Ability}{Matrix of true person abilities (\verb{Nsubs x Nscales}).}
 \item{A}{Matrix of true item discriminations (\verb{Nitems x Nscales}).}
 \item{B}{Matrix/vector of true item difficulties. Matrix in legacy mode,
-vector in \code{mirt=TRUE} mode.}
+vector in \code{mirt=TRUE} mode.
+
+\strong{The two modes use different parameterisations, and \code{B} is not on the
+same scale as the \code{B} that \code{\link[=fitIRT]{fitIRT()}} reports.} Legacy mode generates
+\eqn{p = C + (D-C)\,\mathrm{logistic}(a(\theta - b))}, so \code{B} is a
+difficulty in the classical sense. \code{mirt = TRUE} generates
+\eqn{p = C + (D-C)\,\mathrm{logistic}(a'\theta - b)}, so \code{B} is an
+intercept, which is the convention \code{\link[=fitIRT]{fitIRT()}} estimates and reports.
+
+To compare a legacy simulation against a fit, convert first: the
+generating intercept is \code{A * B}. Comparing the two unconverted costs an
+error of \eqn{(a-1)b}, which cancels in mean bias, grows with the size
+of the difficulty, and does not shrink as the sample grows, so it looks
+like a calibration failure rather than a units error. \code{\link[=compareIRTmodels]{compareIRTmodels()}}
+and \code{\link[=extractMIRTpars]{extractMIRTpars()}} handle the conversion for you.}
 \item{C}{Matrix/vector of true item guessing parameters. Matrix in legacy
 mode, vector in \code{mirt=TRUE} mode.}
 \item{D}{Matrix/vector of true item upper asymptote parameters. Matrix in legacy

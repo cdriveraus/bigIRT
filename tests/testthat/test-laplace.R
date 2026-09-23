@@ -123,7 +123,7 @@ test_that("laplace uses correctly expanded joint covariate rows", {
     noptimsteps = 6, verbose = 0, plot = FALSE
   )
   fit_one <- do.call(fitIRT, c(fit_args, list(cores = 1L)))
-  context <- bigIRT:::bigIRT_laplace_row_context(fit_one$dat)
+  context <- bigIRT:::bigIRT_laplace_row_context(fit_one$prepared)
   item_groups <- split(seq_along(context$items), context$items)
   person_groups <- split(seq_along(context$ids), context$ids)
   expect_true(all(vapply(item_groups, function(ii)
@@ -151,7 +151,7 @@ test_that("laplace gradient differentiates through resolved person modes", {
     dropPerfectScores = FALSE, normalise = FALSE,
     marginalApprox = "laplace_direct", estimateAbilityCorr = FALSE,
     laplaceOuterIter = 2, noptimsteps = 3, verbose = 0, plot = FALSE)
-  sdat <- fit$dat
+  sdat <- fit$prepared
   state <- bigIRT:::bigIRT_laplace_initial_state(sdat)
   layout <- bigIRT:::bigIRT_laplace_direct_layout(sdat, estimateAbilityCorr = FALSE)
   item_layout <- layout[setdiff(names(layout), c("corr", "ability_mean", "ability_beta"))]
@@ -215,9 +215,9 @@ test_that("laplace returns posterior outputs and finite MIRT parameters", {
   expect_true(is.matrix(fit$pars$A))
   expect_true(all(is.finite(fit$pars$A)))
   expect_true(all(fit$pars$A >= 0))
-  expect_equal(dim(fit$pars$row_loadings), c(fit$dat$Nobs, fit$dat$Nscales))
-  expect_equal(dim(fit$personPosterior$mode), c(fit$dat$Nsubs, fit$dat$Nscales))
-  expect_equal(dim(fit$personPosterior$precision), c(fit$dat$Nscales, fit$dat$Nscales, fit$dat$Nsubs))
+  expect_equal(dim(fit$pars$row_loadings), c(fit$prepared$Nobs, fit$prepared$Nscales))
+  expect_equal(dim(fit$personPosterior$mode), c(fit$prepared$Nsubs, fit$prepared$Nscales))
+  expect_equal(dim(fit$personPosterior$precision), c(fit$prepared$Nscales, fit$prepared$Nscales, fit$prepared$Nsubs))
   expect_false("samples" %in% names(fit$personPosterior))
 })
 

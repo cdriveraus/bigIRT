@@ -189,7 +189,7 @@ c(by_hand = brier, heldoutMetrics = heldoutMetrics(fit)$brier)
 #>      0.1919634      0.1919634
 ```
 
-Other row-level output (`b_row`, `eta_row`, `row_ability`, `fit$dat`)
+Other row-level output (`b_row`, `eta_row`, `row_ability`, `fit$prepared`)
 stays in the internal person-sorted order. `fit$pars$originalRow` maps
 between the two.
 

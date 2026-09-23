@@ -62,7 +62,7 @@ getcxxfun <- function(object) {
 
 upars_names<-function(fit){
 
-  n<-with(fit$dat,{
+  n<-with(fit$prepared,{
     n<-c()
     freeA <- (if(!is.null(NitemScales)) NitemScales else (Nitems * Nscales)) - NfixedA
     if(freeA) n <- c(n,paste0('a',1:freeA))
@@ -84,7 +84,7 @@ upars_names<-function(fit){
 
 scoreIRT <- function(fit, verbose=1L){
 
-  standata=fit$dat
+  standata=fit$prepared
   standata$rowIndexPar=1L
   standata$dopriors=0L
   smf <- stan_reinitsf(stanmodels$irt,standata)
@@ -387,7 +387,7 @@ optimIRT <- function(standata, cores=6,split=TRUE,
     parcov=parcov,
     stanfit=smf,
     pars=rstan::constrain_pars(object = smf, final_full_par),
-    dat=standata))
+    prepared=standata))
 
 }
 

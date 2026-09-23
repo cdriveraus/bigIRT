@@ -47,9 +47,21 @@ tidyIRT <- function(x, conf.int = FALSE, conf.level = 0.95, method = "profile",
     item = item, term = b, estimate = as.numeric(ip[[b]]),
     stringsAsFactors = FALSE)))
   out$std.error <- NA_real_
+  ## Standard errors need the prepared data, and they are only computed when
+  ## asked for. Returning a column of NAs without saying why is the same trap
+  ## as a column of zeros: the caller reads the name, not the values.
+  ## itemInformation() already errors clearly in this situation; say the same
+  ## thing here rather than handing back silence.
+  if(isTRUE(conf.int) && is.null(x$internals))
+    warning("No standard errors: this fit carries no prepared data. ",
+      "Refit with `keepInternals = TRUE`.", call. = FALSE)
+  if(!isTRUE(conf.int))
+    message("`std.error` is NA: call tidyIRT(conf.int = TRUE) on a fit made ",
+      "with `keepInternals = TRUE` to compute standard errors and intervals.")
   info <- if(isTRUE(conf.int) && !is.null(x$internals))
     tryCatch(itemInformation(x, cores = cores, method = method),
-      error = function(e) NULL) else NULL
+      error = function(e) { warning("Standard errors could not be computed: ",
+        conditionMessage(e), call. = FALSE); NULL }) else NULL
   if(!is.null(info)){
     ## itemInformation works on the free parameters, which are not the
     ## parameters reported here: discrimination is estimated as the softplus
@@ -109,10 +121,10 @@ glanceIRT <- function(x, ...){
     df = if(!is.null(ll)) as.numeric(attr(ll, "df")) else NA_real_,
     AIC = if(!is.null(ll)) tryCatch(AIC(x), error = function(e) NA_real_) else NA_real_,
     BIC = if(!is.null(ll)) tryCatch(BIC(x), error = function(e) NA_real_) else NA_real_,
-    nobs_persons = as.integer(x$dat$Nsubs),
-    nobs_responses = as.integer(x$dat$Nobs),
-    nitems = as.integer(x$dat$Nitems),
-    ndim = as.integer(x$dat$Nscales),
+    nobs_persons = as.integer(x$prepared$Nsubs),
+    nobs_responses = as.integer(x$prepared$Nobs),
+    nitems = as.integer(x$prepared$Nitems),
+    ndim = as.integer(x$prepared$Nscales),
     converged = isTRUE(st$converged),
     termination = st$reason %||% NA_character_,
     reliability = if(!is.null(rel)) rel$empirical[1] else NA_real_,
@@ -138,7 +150,7 @@ glanceIRT <- function(x, ...){
 #'
 #' @export
 augmentIRT <- function(x, ...){
-  sdat <- x$dat
+  sdat <- x$prepared
   ord <- x$pars$originalRow
   if(is.null(ord)) stop("This fit carries no row mapping.")
   n <- length(x$pars$pcorrect)

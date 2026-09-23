@@ -36,8 +36,8 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     )
 
     out <- wleIRT(fit)
-    expect_equal(dim(out$wle), c(fit$dat$Nsubs, fit$dat$Nscales))
-    expect_equal(dim(out$wleSE), c(fit$dat$Nsubs, fit$dat$Nscales))
+    expect_equal(dim(out$wle), c(fit$prepared$Nsubs, fit$prepared$Nscales))
+    expect_equal(dim(out$wleSE), c(fit$prepared$Nsubs, fit$prepared$Nscales))
 
     ## Most people should have an estimate on each scale. Some may not, and a
     ## person with no interior root is reported as NA rather than as a number.

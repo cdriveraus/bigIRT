@@ -28,7 +28,7 @@ if(identical(Sys.getenv("NOT_CRAN"), "true")& .Machine$sizeof.pointer != 4){
       normalise = T,ebayes = F,ebayesmultiplier = 2)
 
     s=bigIRT:::scoreIRT(fit)
-    score = cbind(data.table(id=fit$dat$id,Item=dat$Item[fit$dat$originalRow],response=fit$dat$score,
+    score = cbind(data.table(id=fit$prepared$id,Item=dat$Item[fit$prepared$originalRow],response=fit$prepared$score,
       abilityest=fit$pars$AbilityNobs, Aest=fit$pars$A, Best=fit$pars$B, Cest=fit$pars$C),s)
     score[,abilityG:=rowSums(.SD),.SDcols=colnames(score)[grep('^ability\\d+',colnames(score))]]
     score[,AG:=rowSums(.SD),.SDcols=colnames(score)[grep('^a\\d+',colnames(score))]]

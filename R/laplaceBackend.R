@@ -1,4 +1,30 @@
 
+## The Laplace approximation uses the OBSERVED curvature at the person mode:
+## the actual second derivative of the log posterior, not Fisher information.
+## Fisher was selectable via laplaceInfo until September 2026 and is not any
+## more -- there was no regime in which it was the right choice here, and it
+## made the item gradient miss the true total derivative by 1e-3 to 4e-2 for
+## the 3PL and 4PL (the 2PL is exact either way, which is why it went unseen
+## for so long). See the note at the top of src/laplace_backend.cpp and
+## tests/testthat/test-laplace-direct-gradients.R.
+##
+## Fisher information is still used, and must be: the Newton step uses it,
+## and that is what guarantees a positive definite step away from the mode.
+
+## Counts of persons whose data curvature was clipped to positive
+## semidefinite, since the last reset. "full" means every eigenvalue was
+## clipped, so log|H| is exactly constant in the item parameters and zeroing
+## its gradient contribution is exact -- always the case when K = 1.
+## "partial" needs K > 1 and is the only case where that zeroing is an
+## approximation, so fitIRT reports it rather than passing over it.
+bigIRT_laplace_clip_counts <- function(reset = FALSE)
+  .Call(`_bigIRT_laplace_clip_counts_cpp_impl`, as.logical(reset))
+
+## Raw row terms, for the tests only.
+bigIRT_laplace_row_terms_debug <- function(y, eta, c, d = 1)
+  .Call(`_bigIRT_laplace_row_terms_debug_cpp_impl`,
+        as.numeric(y), as.numeric(eta), as.numeric(c), as.numeric(d))
+
 bigIRT_laplace_item_objective_cpp_impl <- function(id, score, row_ability,
   b, c, d, loadings, prior_precision, jitter, max_attempts, grain_size = 64L){
   .Call(
@@ -1762,11 +1788,27 @@ bigIRT_laplace_row_gradient_pieces <- function(sdat, posterior, row_effective, r
   p <- pmin(pmax(c_row + u * gg, 1e-12), 1 - 1e-12)
   s <- u * qq
   r <- pmax(p * (1 - p), 1e-12)
-  grad_eta <- ((y - p) / r) * s
+  co <- (y - p) / r
+  grad_eta <- co * s
   dq_deta <- qq * (1 - 2 * gg)
   ds_deta <- u * dq_deta
   dr_deta <- s * (1 - 2 * p)
-  dw_deta <- (2 * s * ds_deta * r - s^2 * dr_deta) / (r^2)
+
+  ## The observed curvature and its eta derivative, mirroring
+  ## bigirt_row_terms() in src/laplace_backend.cpp. This used to be Fisher
+  ## information, s^2/r, and its derivative; it has to track the C++ or the
+  ## parity test in test-inference.R fails, which is how the mismatch after
+  ## the curvature change was caught.
+  d2q_deta <- dq_deta * (1 - 2 * gg) - 2 * qq^2
+  d2s_deta <- u * d2q_deta
+  d2r_deta <- ds_deta * (1 - 2 * p) - 2 * s^2
+  e <- y - p
+  Nn <- -s * r - e * dr_deta
+  dco <- Nn / r^2
+  dNn <- -ds_deta * r - e * d2r_deta
+  d2co <- (dNn * r - 2 * Nn * dr_deta) / r^3
+  w_obs <- -(dco * s + co * ds_deta)
+  dw_deta <- -(d2co * s + 2 * dco * ds_deta + co * d2s_deta)
 
   ## aSa = a' Sigma a per response, assembled from the K^2 posterior blocks.
   Sig <- posterior$covariance
@@ -1776,8 +1818,10 @@ bigIRT_laplace_row_gradient_pieces <- function(sdat, posterior, row_effective, r
 
   ## hess_w is the weight each response puts into the person precision,
   ## H_i = sum_j hess_w_ij lo_ij lo_ij' + Q. The within-person beta gradient
-  ## needs it separately; the person-level accumulation does not.
-  list(grad_eta = grad_eta, slope_w = dw_deta * aSa, hess_w = s^2 / r,
+  ## needs it separately; the person-level accumulation does not. It is the
+  ## observed curvature, matching the C++; Fisher information s^2/r is only
+  ## used for the Newton step, which this path is not part of.
+  list(grad_eta = grad_eta, slope_w = dw_deta * aSa, hess_w = w_obs,
        loadings = lo, ids = ids)
 }
 
@@ -2149,6 +2193,14 @@ bigIRT_laplace_eb_update <- function(state, sdat, context, row_effective, row_co
   p <- pmin(pmax(cr + u * gg, 1e-12), 1 - 1e-12)
   s <- u * qq
   r <- pmax(p * (1 - p), 1e-12)
+  ## Fisher information, and deliberately so. This is information about an
+  ## ITEM parameter, feeding Var(theta_j|data) = 1/(I_j + 1/tau^2) in an
+  ## empirical-Bayes hyperparameter update -- a different object from the
+  ## person-level Laplace curvature, which is the observed Hessian. Its
+  ## guaranteed positivity is what keeps that reciprocal well behaved, and
+  ## the shrinkage it produces is a prior the model states rather than an
+  ## artefact of an approximation. Do not "correct" it to match the Laplace
+  ## curvature.
   w <- s^2 / r                       # information in eta
 
   sum_by <- function(x, ref, n){

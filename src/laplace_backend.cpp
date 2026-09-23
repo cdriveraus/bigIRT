@@ -1,6 +1,7 @@
 #include <RcppEigen.h>
 #include <RcppParallel.h>
 #include <chrono>
+#include <atomic>
 #include <algorithm>
 #include <vector>
 #include <memory>
@@ -84,6 +85,34 @@ inline double bigirt_clamp_prob(const double p) {
   return p;
 }
 
+// TWO DIFFERENT CURVATURES LIVE IN THIS FILE. Do not collapse them.
+//
+//   w  = s^2/r          Fisher (expected) information. Always positive, so
+//                       prior + sum(w a a') is always positive definite.
+//                       This is what the NEWTON STEP uses, and that is the
+//                       only reason the mode solve is guaranteed to take an
+//                       uphill step from anywhere. Keep it.
+//
+//   wl = -d2(ll)/deta2  the observed Hessian. This is what the LAPLACE
+//                       APPROXIMATION uses: log|H|, the reported person
+//                       covariance, the latent-correlation M-step.
+//
+// They are the same number for the 2PL, because the logit link is canonical
+// there and the second derivative of the log-likelihood contains no y. For
+// the 3PL and 4PL they differ, and the difference matters twice over.
+// Statistically, Laplace approximates one integrand, so it needs that
+// integrand's curvature rather than an average over responses the person did
+// not give. Mechanically, the mode adjoint applies the implicit function
+// theorem and needs the inverse of the actual Hessian: feeding it the Fisher
+// surrogate made the item gradient miss the true total derivative by 1e-3 to
+// 4e-2 for the 3PL and 4PL, at one, two and three dimensions, while the 2PL
+// stayed exact and hid it. See tests/testthat/test-laplace-direct-gradients.R.
+//
+// Fisher curvature was selectable until September 2026 and is no longer:
+// there was no regime in which it was the right choice for the Laplace part,
+// and carrying it meant carrying backend state that could disagree with the
+// fit that produced it.
+
 struct BigIRTRowTerms {
   double eta;
   double g;
@@ -94,10 +123,14 @@ struct BigIRTRowTerms {
   double r;
   double coeff;
   double ll;
+  // Fisher information, for the Newton step only (see the note above).
   double w;
-  double dw_deta;
-  double dw_dc;
-  double dw_dd;
+  // The observed curvature and its three derivatives: what the Laplace
+  // approximation and its gradient use.
+  double wl;
+  double dwl_deta;
+  double dwl_dc;
+  double dwl_dd;
   double grad_eta;
   double grad_c;
   double grad_d;
@@ -123,17 +156,14 @@ inline BigIRTRowTerms bigirt_row_terms(const double y, const double eta,
   const double dq_deta = out.q * (1.0 - 2.0 * out.g);
   const double ds_deta = out.u * dq_deta;
   const double dr_deta = out.s * (1.0 - 2.0 * out.p);
-  out.dw_deta = (2.0 * out.s * ds_deta * out.r - out.s * out.s * dr_deta) / (out.r * out.r);
 
   const double dp_dc = 1.0 - out.g;
   const double ds_dc = -out.q;
   const double dr_dc = dp_dc * (1.0 - 2.0 * out.p);
-  out.dw_dc = (2.0 * out.s * ds_dc * out.r - out.s * out.s * dr_dc) / (out.r * out.r);
 
   const double dp_dd = out.g;
   const double ds_dd = out.q;
   const double dr_dd = dp_dd * (1.0 - 2.0 * out.p);
-  out.dw_dd = (2.0 * out.s * ds_dd * out.r - out.s * out.s * dr_dd) / (out.r * out.r);
 
   out.grad_eta = out.coeff * out.s;
   out.grad_c = out.coeff * (1.0 - out.g);
@@ -144,7 +174,134 @@ inline BigIRTRowTerms bigirt_row_terms(const double y, const double eta,
   out.dgrad_eta_deta = dcoeff_deta * out.s + out.coeff * ds_deta;
   out.dgrad_eta_dc = dcoeff_dc * out.s + out.coeff * ds_dc;
   out.dgrad_eta_dd = dcoeff_dd * out.s + out.coeff * ds_dd;
+
+  {
+    // Observed information. dgrad_eta_deta is already d2(ll)/deta2, so the
+    // curvature itself is free; only its three derivatives cost anything,
+    // and they are one order further in the same recursion. Verified against
+    // complex-step differentiation to 4e-15 relative.
+    const double e = y - out.p;
+    const double r2 = out.r * out.r;
+    const double d2q_deta = dq_deta * (1.0 - 2.0 * out.g) - 2.0 * out.q * out.q;
+    const double d2s_deta = out.u * d2q_deta;
+    const double d2r_deta = ds_deta * (1.0 - 2.0 * out.p) - 2.0 * out.s * out.s;
+    const double Nn = dcoeff_deta * r2;          // numerator of dcoeff_deta
+    const double dNn = -ds_deta * out.r - e * d2r_deta;   // the s*dr terms cancel
+    const double d2coeff_deta = (dNn * out.r - 2.0 * Nn * dr_deta) / (r2 * out.r);
+
+    out.wl = -out.dgrad_eta_deta;
+    out.dwl_deta = -(d2coeff_deta * out.s + 2.0 * dcoeff_deta * ds_deta +
+                     out.coeff * d2s_deta);
+
+    // u = d - c, so du/dc = -1 and du/dd = +1; dp/dc = 1-g, dp/dd = g. The
+    // sigmoid blocks g, q and dq_deta do not depend on c or d.
+    const double drv_c = ds_dc * (1.0 - 2.0 * out.p) - 2.0 * out.s * dp_dc;
+    const double Nv_c = -ds_dc * out.r - out.s * dr_dc + dp_dc * dr_deta - e * drv_c;
+    const double d2coeff_dc = (Nv_c * r2 - Nn * 2.0 * out.r * dr_dc) / (r2 * r2);
+    out.dwl_dc = -(d2coeff_dc * out.s + dcoeff_deta * ds_dc +
+                   dcoeff_dc * ds_deta + out.coeff * (-dq_deta));
+
+    const double drv_d = ds_dd * (1.0 - 2.0 * out.p) - 2.0 * out.s * dp_dd;
+    const double Nv_d = -ds_dd * out.r - out.s * dr_dd + dp_dd * dr_deta - e * drv_d;
+    const double d2coeff_dd = (Nv_d * r2 - Nn * 2.0 * out.r * dr_dd) / (r2 * r2);
+    out.dwl_dd = -(d2coeff_dd * out.s + dcoeff_deta * ds_dd +
+                   dcoeff_dd * ds_deta + out.coeff * dq_deta);
+  }
   return out;
+}
+
+// Raw row terms, for the tests. Nothing in the fitting path calls this.
+extern "C" SEXP _bigIRT_laplace_row_terms_debug_cpp_impl(
+    SEXP ySEXP, SEXP etaSEXP, SEXP cSEXP, SEXP dSEXP) {
+  BEGIN_RCPP
+  const BigIRTRowTerms rt = bigirt_row_terms(
+    Rcpp::as<double>(ySEXP), Rcpp::as<double>(etaSEXP),
+    Rcpp::as<double>(cSEXP), Rcpp::as<double>(dSEXP));
+  return Rcpp::List::create(
+    Rcpp::Named("ll") = rt.ll, Rcpp::Named("p") = rt.p,
+    Rcpp::Named("grad_eta") = rt.grad_eta, Rcpp::Named("grad_c") = rt.grad_c,
+    Rcpp::Named("grad_d") = rt.grad_d, Rcpp::Named("w") = rt.w,
+    Rcpp::Named("wl") = rt.wl,
+    Rcpp::Named("dwl_deta") = rt.dwl_deta, Rcpp::Named("dwl_dc") = rt.dwl_dc,
+    Rcpp::Named("dwl_dd") = rt.dwl_dd,
+    Rcpp::Named("dgrad_eta_deta") = rt.dgrad_eta_deta);
+  END_RCPP
+}
+
+// Is the data's own contribution to the curvature positive semidefinite?
+//
+// At a true mode the FULL Hessian must be, but the likelihood part alone need
+// not be. On a flat shoulder the observed curvature from the data can be net
+// negative, leaving a Gaussian propped up only by the prior and far wider
+// than the posterior it is approximating. Measured on a simulated 4PL fit,
+// one person in 800 came back with a posterior SD of 2.72 where quadrature
+// said 0.81 (Fisher said 0.50). Fisher information cannot do this, being
+// positive term by term, so those persons fall back to it.
+//
+// For K = 1 this reduces to
+// "the summed observed information from the responses is not negative".
+inline bool bigirt_like_curvature_ok(const MatrixXd& like) {
+  if (like.rows() == 0) return true;
+  Eigen::LDLT<MatrixXd> ldl(like);
+  if (ldl.info() != Eigen::Success) return false;
+  return ldl.vectorD().minCoeff() >= 0.0;
+}
+
+// Nearest positive semidefinite matrix, by clipping negative eigenvalues.
+//
+// This replaces an earlier design that switched the whole person over to the
+// Fisher curvature instead. That switch was discontinuous: at the boundary
+// the data curvature passes through zero, so log|H| stepped from log|prior|
+// to log|prior + W_fisher|. Measured by scanning one item difficulty across a
+// crossing, that is a jump of about 0.8 nats in a person's contribution --
+// 1765 times the ordinary step between adjacent points -- and the gradient
+// carries no term for it, which is precisely what a line search cannot cope
+// with. Clipping is continuous in W, so the objective is continuous, and
+// where clipping is active log|H| is locally flat in the item parameters, so
+// the matching gradient contribution is zero.
+//
+// Only reached when the LDLT test above fails, so the eigen solve costs
+// nothing on the overwhelming majority of persons.
+// Clipping counters. When every eigenvalue is clipped the curvature becomes
+// the prior alone, log|H| is exactly constant in the item parameters, and
+// zeroing its gradient contribution is exact -- that is always the case for
+// K = 1. When only SOME are clipped, which needs K > 1, zeroing the whole
+// contribution is an approximation: the value stays continuous but the
+// gradient does not match it in the unclipped directions.
+//
+// That case was never observed -- zero occurrences in 4,800 simulated
+// persons at K = 1, 2 and 3, with the worst data-curvature eigenvalue still
+// at +0.43 -- so it is counted and reported rather than silently
+// approximated. If it ever fires on real data, fitIRT says so.
+static std::atomic<long> bigirt_laplace_clip_full{0};
+static std::atomic<long> bigirt_laplace_clip_partial{0};
+
+extern "C" SEXP _bigIRT_laplace_clip_counts_cpp_impl(SEXP resetSEXP) {
+  BEGIN_RCPP
+  const long f = bigirt_laplace_clip_full.load();
+  const long p = bigirt_laplace_clip_partial.load();
+  if (Rcpp::as<bool>(resetSEXP)) {
+    bigirt_laplace_clip_full.store(0);
+    bigirt_laplace_clip_partial.store(0);
+  }
+  return Rcpp::IntegerVector::create(
+    Rcpp::Named("full") = static_cast<int>(f),
+    Rcpp::Named("partial") = static_cast<int>(p));
+  END_RCPP
+}
+
+inline MatrixXd bigirt_psd_clip(const MatrixXd& W) {
+  Eigen::SelfAdjointEigenSolver<MatrixXd> es(W);
+  if (es.info() != Eigen::Success) {
+    bigirt_laplace_clip_full.fetch_add(1);
+    return MatrixXd::Zero(W.rows(), W.cols());
+  }
+  VectorXd lam = es.eigenvalues();
+  int nclipped = 0;
+  for (int i = 0; i < lam.size(); ++i) if (lam(i) < 0.0) { lam(i) = 0.0; ++nclipped; }
+  if (nclipped == lam.size()) bigirt_laplace_clip_full.fetch_add(1);
+  else if (nclipped > 0) bigirt_laplace_clip_partial.fetch_add(1);
+  return es.eigenvectors() * lam.asDiagonal() * es.eigenvectors().transpose();
 }
 
 inline MatrixXd bigirt_matrix_from_array(const Rcpp::NumericVector& arr, const int K, const int idx) {
@@ -429,8 +586,13 @@ extern "C" SEXP _bigIRT_laplace_person_step_cpp_impl(
           if (free_mask(subj, k) != 0) active.push_back(k);
         }
 
+        // laplace_curv selects the curvature accumulated into prec_out: the
+        // Newton iterations pass false and keep Fisher scoring, which is what
+        // guarantees a positive definite factorisation away from the mode;
+        // the final evaluation passes true, so the Hessian that goes into
+        // log|H| and the reported covariance is the integrand's own.
         auto logpost_and_grad = [&](const VectorXd& theta_eval, VectorXd& grad_out,
-          MatrixXd& prec_out, double& lp_out) {
+          MatrixXd& prec_out, double& lp_out, const bool laplace_curv) {
           grad_out = -prior_prec * (theta_eval - mu);
           prec_out = prior_prec;
           lp_out = -0.5 * (theta_eval - mu).dot(prior_prec * (theta_eval - mu));
@@ -442,6 +604,7 @@ extern "C" SEXP _bigIRT_laplace_person_step_cpp_impl(
             for (int k = 0; k < K; ++k) eta += loadings(obs, k) * ability(k);
             BigIRTRowTerms rt = bigirt_row_terms(static_cast<double>(score[obs]), eta, c[obs], d[obs]);
             lp_out += rt.ll;
+            const double w_use = laplace_curv ? rt.wl : rt.w;
             for (int k = 0; k < K; ++k) {
               grad_out(k) += rt.grad_eta * loadings(obs, k);
             }
@@ -451,7 +614,7 @@ extern "C" SEXP _bigIRT_laplace_person_step_cpp_impl(
               for (int cc = 0; cc < K; ++cc) {
                 const double ac = loadings(obs, cc);
                 if (ac == 0.0) continue;
-                prec_out(r, cc) += rt.w * ar * ac;
+                prec_out(r, cc) += w_use * ar * ac;
               }
             }
           }
@@ -460,7 +623,7 @@ extern "C" SEXP _bigIRT_laplace_person_step_cpp_impl(
         VectorXd grad(K);
         MatrixXd prec(K, K);
         double lp = NA_REAL;
-        logpost_and_grad(theta, grad, prec, lp);
+        logpost_and_grad(theta, grad, prec, lp, false);
 
         bool subj_converged = active.empty();
         int subj_status = subj_converged ? 0 : 1;
@@ -513,7 +676,7 @@ extern "C" SEXP _bigIRT_laplace_person_step_cpp_impl(
             for (size_t ai = 0; ai < active.size(); ++ai) {
               theta_try(active[ai]) = theta(active[ai]) + damping * step(ai);
             }
-            logpost_and_grad(theta_try, grad_try, prec_try, lp_try);
+            logpost_and_grad(theta_try, grad_try, prec_try, lp_try, false);
             if (R_finite(lp_try) && lp_try >= lp - 1e-10) {
               accepted = true;
               break;
@@ -527,7 +690,12 @@ extern "C" SEXP _bigIRT_laplace_person_step_cpp_impl(
           lp = lp_try;
         }
 
-        logpost_and_grad(theta, grad, prec, lp);
+        logpost_and_grad(theta, grad, prec, lp, true);
+        {
+          const MatrixXd like = prec - prior_prec;
+          if (!bigirt_like_curvature_ok(like))
+            prec = prior_prec + bigirt_psd_clip(like);
+        }
         if (!R_finite(lp) && subj_status < 3) subj_status = 3;
         objective[subj] = lp;
         niter[subj] = used_iter;
@@ -559,6 +727,34 @@ extern "C" SEXP _bigIRT_laplace_person_step_cpp_impl(
             break;
           }
           chol_jitter *= 10.0;
+        }
+        if (!success) {
+          // The observed Hessian is positive semidefinite at a true mode, but
+          // a solve that stopped short of one can leave it indefinite. Fall
+          // back to the Fisher curvature, which is positive by construction,
+          // rather than to the meaningless identity below.
+          logpost_and_grad(theta, grad, prec, lp, false);
+          for (int k = 0; k < K; ++k) {
+            if (free_mask(subj, k) == 0) {
+              for (int kk = 0; kk < K; ++kk) {
+                prec(k, kk) = 0.0;
+                prec(kk, k) = 0.0;
+              }
+              prec(k, k) = 1.0 / jitter;
+            }
+          }
+          chol_jitter = jitter;
+          for (int attempt = 0; attempt < max_attempts; ++attempt) {
+            MatrixXd try_prec = prec;
+            try_prec.diagonal().array() += chol_jitter;
+            llt_full.compute(try_prec);
+            if (llt_full.info() == Eigen::Success) {
+              prec = try_prec;
+              success = true;
+              break;
+            }
+            chol_jitter *= 10.0;
+          }
         }
         if (!success) {
           status_code[subj] = 5;
@@ -666,10 +862,10 @@ extern "C" SEXP _bigIRT_laplace_person_row_terms_cpp_impl(
     double r = p * (1.0 - p);
     if(r < lo_p) r = lo_p;
     const double grad_eta = ((y[i] - p) / r) * s;
-    const double dq_deta = q * (1.0 - 2.0 * g);
-    const double ds_deta = u * dq_deta;
-    const double dr_deta = s * (1.0 - 2.0 * p);
-    const double dw_deta = (2.0 * s * ds_deta * r - s * s * dr_deta) / (r * r);
+
+    // Taken from the shared row terms: the observed curvature depends on
+    // the response, where the Fisher one this loop used to compute did not.
+    const double dw_deta = bigirt_row_terms(y[i], eta[i], crow[i], drow[i]).dwl_deta;
 
     // aSa = a' Sigma a for this response, from the K^2 blocks of this person.
     double aSa = 0.0;
@@ -822,8 +1018,7 @@ struct BigIRTLaplacePersonBetaWorker : public RcppParallel::Worker {
         double r = pp * (1.0 - pp);
         if(r < lo_p) r = lo_p;
         const double grad_eta = ((y[i] - pp) / r) * sc;
-        const double dq = q * (1.0 - 2.0 * g);
-        const double dw_deta = (2.0 * sc * (u * dq) * r - sc * sc * (sc * (1.0 - 2.0 * pp))) / (r * r);
+        const double dw_deta = bigirt_row_terms(y[i], eta[i], crow[i], drow[i]).dwl_deta;
         double aSa = 0.0;
         for(int k = 0; k < K; ++k) {
           const double lk = lo(i, k);
@@ -859,8 +1054,9 @@ struct BigIRTLaplacePersonBetaWorker : public RcppParallel::Worker {
         double r = pp * (1.0 - pp);
         if(r < lo_p) r = lo_p;
         const double grad_eta = ((y[i] - pp) / r) * sc;
-        const double dq = q * (1.0 - 2.0 * g);
-        const double dw_deta = (2.0 * sc * (u * dq) * r - sc * sc * (sc * (1.0 - 2.0 * pp))) / (r * r);
+        const BigIRTRowTerms rt_i = bigirt_row_terms(y[i], eta[i], crow[i], drow[i]);
+        const double dw_deta = rt_i.dwl_deta;
+        const double hess_w = rt_i.wl;
         double aSa = 0.0, q_row = 0.0;
         for(int k = 0; k < K; ++k) {
           const double lk = lo(i, k);
@@ -868,7 +1064,7 @@ struct BigIRTLaplacePersonBetaWorker : public RcppParallel::Worker {
           if(lk == 0.0) continue;
           for(int l = 0; l < K; ++l) aSa += lk * lo(i, l) * sigma[base + k + (R_xlen_t)K * l];
         }
-        const double core = grad_eta - 0.5 * dw_deta * aSa + 0.5 * (sc * sc / r) * q_row;
+        const double core = grad_eta - 0.5 * dw_deta * aSa + 0.5 * hess_w * q_row;
         for(int a = 0; a < P; ++a) {
           const double xa = x(i, vary[a]);
           if(xa == 0.0) continue;
@@ -982,11 +1178,10 @@ extern "C" SEXP _bigIRT_laplace_person_beta_fused_cpp_impl(
     double r = pp * (1.0 - pp);
     if(r < lo_p) r = lo_p;
     const double grad_eta = ((y[i] - pp) / r) * sc;
-    const double dq_deta = q * (1.0 - 2.0 * g);
-    const double ds_deta = u * dq_deta;
-    const double dr_deta = sc * (1.0 - 2.0 * pp);
-    const double dw_deta = (2.0 * sc * ds_deta * r - sc * sc * dr_deta) / (r * r);
-    const double hess_w = sc * sc / r;
+
+    const BigIRTRowTerms rt_i = bigirt_row_terms(y[i], eta[i], crow[i], drow[i]);
+    const double dw_deta = rt_i.dwl_deta;
+    const double hess_w = rt_i.wl;
 
     const R_xlen_t base = (R_xlen_t)K * K * subj;
     double aSa = 0.0;
@@ -1109,11 +1304,10 @@ extern "C" SEXP _bigIRT_laplace_ability_beta_rows_cpp_impl(
     double r = pp * (1.0 - pp);
     if(r < lo_p) r = lo_p;
     const double grad_eta = ((y[i] - pp) / r) * sc;
-    const double dq_deta = q * (1.0 - 2.0 * g);
-    const double ds_deta = u * dq_deta;
-    const double dr_deta = sc * (1.0 - 2.0 * pp);
-    const double dw_deta = (2.0 * sc * ds_deta * r - sc * sc * dr_deta) / (r * r);
-    const double hess_w = sc * sc / r;
+
+    const BigIRTRowTerms rt_i = bigirt_row_terms(y[i], eta[i], crow[i], drow[i]);
+    const double dw_deta = rt_i.dwl_deta;
+    const double hess_w = rt_i.wl;
 
     // aSa = a' Sigma a, and q_row = c_i' Sigma_i a, over the same K^2 blocks.
     const R_xlen_t base = (R_xlen_t)K * K * subj;
@@ -1263,6 +1457,7 @@ struct BigIRTLaplaceItemObjectiveWorker : public RcppParallel::Worker {
           Q(r, cidx) = prior_precision[r + K * cidx + K * K * static_cast<int>(subj)];
         }
       }
+      const MatrixXd Q_prior = Q;
 
       const std::vector<int>& obs_idx = obs_by_subj[subj];
       std::vector<BigIRTRowTerms> row_terms(obs_idx.size());
@@ -1275,7 +1470,7 @@ struct BigIRTLaplaceItemObjectiveWorker : public RcppParallel::Worker {
         row_terms[oi] = rt;
         eta[obs] = eta_obs;
         p_row[obs] = rt.p;
-        w_row[obs] = rt.w;
+        w_row[obs] = rt.wl;
         loglik += rt.ll;
         for (int r = 0; r < K; ++r) {
           const double ar = loadings(obs, r);
@@ -1283,8 +1478,23 @@ struct BigIRTLaplaceItemObjectiveWorker : public RcppParallel::Worker {
           for (int cidx = 0; cidx < K; ++cidx) {
             const double ac = loadings(obs, cidx);
             if (ac == 0.0) continue;
-            Q(r, cidx) += rt.w * ar * ac;
+            Q(r, cidx) += rt.wl * ar * ac;
           }
+        }
+      }
+
+      // Same guard as the person kernels, reached from identical inputs so it
+      // reaches the identical decision: if the data's own curvature is not
+      // positive semidefinite this person falls back to Fisher. `guarded`
+      // also switches the gradient terms below, so the value and the gradient
+      // continue to describe one function.
+      bool guarded = false;
+      {
+        const MatrixXd like = Q - Q_prior;
+        if (!bigirt_like_curvature_ok(like)) {
+          guarded = true;
+          Q = Q_prior + bigirt_psd_clip(like);
+          for (std::size_t oi = 0; oi < obs_idx.size(); ++oi) w_row[obs_idx[oi]] = 0.0;
         }
       }
 
@@ -1324,13 +1534,20 @@ struct BigIRTLaplaceItemObjectiveWorker : public RcppParallel::Worker {
         const VectorXd Sa = Sigma * a;
         const double aSa = a.dot(Sa);
         const BigIRTRowTerms& rt = row_terms[oi];
+        // Where the curvature was clipped, log|H| is locally flat in the
+        // item parameters, so its gradient contribution -- including the
+        // mode adjoint, which is itself a derivative of log|H| -- is zero.
+        const double gw       = guarded ? 0.0 : rt.wl;
+        const double gdw_deta = guarded ? 0.0 : rt.dwl_deta;
+        const double gdw_dc   = guarded ? 0.0 : rt.dwl_dc;
+        const double gdw_dd   = guarded ? 0.0 : rt.dwl_dd;
         for (int k = 0; k < K; ++k) {
           grad_loadings(obs, k) =
-            rt.grad_eta * z(k) - 0.5 * (rt.dw_deta * z(k) * aSa + 2.0 * rt.w * Sa(k));
+            rt.grad_eta * z(k) - 0.5 * (gdw_deta * z(k) * aSa + 2.0 * gw * Sa(k));
         }
-        grad_b[obs] = -rt.grad_eta + 0.5 * rt.dw_deta * aSa;
-        grad_c[obs] = rt.grad_c - 0.5 * rt.dw_dc * aSa;
-        grad_d[obs] = rt.grad_d - 0.5 * rt.dw_dd * aSa;
+        grad_b[obs] = -rt.grad_eta + 0.5 * gdw_deta * aSa;
+        grad_c[obs] = rt.grad_c - 0.5 * gdw_dc * aSa;
+        grad_d[obs] = rt.grad_d - 0.5 * gdw_dd * aSa;
       }
     }
   }
@@ -1649,6 +1866,7 @@ struct BigIRTLaplaceItemBlockWorker : public RcppParallel::Worker {
           Q(r, cidx) = prior_precision[r + K * cidx + K * K * static_cast<int>(subj)];
         }
       }
+      const MatrixXd Q_prior = Q;
 
       const std::vector<int>& obs_idx = obs_by_subj[subj];
       std::vector<BigIRTRowTerms> row_terms(obs_idx.size());
@@ -1717,8 +1935,22 @@ struct BigIRTLaplaceItemBlockWorker : public RcppParallel::Worker {
           for (int cidx = 0; cidx < K; ++cidx) {
             const double ac = row_a[oi](cidx);
             if (ac == 0.0) continue;
-            Q(r, cidx) += rt.w * ar * ac;
+            Q(r, cidx) += rt.wl * ar * ac;
           }
+        }
+      }
+
+      // Same guard as the person kernels, reached from identical inputs so it
+      // reaches the identical decision: if the data's own curvature is not
+      // positive semidefinite this person falls back to Fisher. `guarded`
+      // also switches the adjoint and gradient terms below, so the value and
+      // the gradient continue to describe one function.
+      bool guarded = false;
+      {
+        const MatrixXd like = Q - Q_prior;
+        if (!bigirt_like_curvature_ok(like)) {
+          guarded = true;
+          Q = Q_prior + bigirt_psd_clip(like);
         }
       }
 
@@ -1756,7 +1988,8 @@ struct BigIRTLaplaceItemBlockWorker : public RcppParallel::Worker {
         const VectorXd& a = row_a[oi];
         const VectorXd Sa = Sigma * a;
         const double aSa = a.dot(Sa);
-        for (int k = 0; k < K; ++k) trace_by_theta(k) += row_terms[oi].dw_deta * a(k) * aSa;
+        for (int k = 0; k < K; ++k) trace_by_theta(k) +=
+          (guarded ? 0.0 : row_terms[oi].dwl_deta) * a(k) * aSa;
       }
       // Scaling here carries logdet_scale into every adjoint term at once,
       // since they all reach the gradient through mode_adjoint or ua.
@@ -1773,11 +2006,18 @@ struct BigIRTLaplaceItemBlockWorker : public RcppParallel::Worker {
         const VectorXd Sa = Sigma * a;
         const double aSa = a.dot(Sa);
         const BigIRTRowTerms& rt = row_terms[oi];
+        // Where the curvature was clipped, log|H| is locally flat in the
+        // item parameters, so its gradient contribution -- including the
+        // mode adjoint, which is itself a derivative of log|H| -- is zero.
+        const double gw       = guarded ? 0.0 : rt.wl;
+        const double gdw_deta = guarded ? 0.0 : rt.dwl_deta;
+        const double gdw_dc   = guarded ? 0.0 : rt.dwl_dc;
+        const double gdw_dd   = guarded ? 0.0 : rt.dwl_dd;
         const double ua = mode_adjoint.dot(a);
 
         for (int k = 0; k < K; ++k) {
           const double g_load = rt.grad_eta * z(k) -
-            logdet_scale * 0.5 * (rt.dw_deta * z(k) * aSa + 2.0 * rt.w * Sa(k)) -
+            logdet_scale * 0.5 * (gdw_deta * z(k) * aSa + 2.0 * gw * Sa(k)) -
             0.5 * (mode_adjoint(k) * rt.grad_eta + ua * rt.dgrad_eta_deta * z(k));
           const double g_raw = g_load * row_a_mult[oi](k);
           if (A_ref(obs, k) > 0) grad_A[static_cast<std::size_t>(A_ref(obs, k) - 1)] += g_raw;
@@ -1785,17 +2025,17 @@ struct BigIRTLaplaceItemBlockWorker : public RcppParallel::Worker {
           add_beta_grad(grad_A_beta, nA_beta_row, pA, A_pred, obs, a_beta_idx, g_raw);
         }
 
-        const double g_b = -rt.grad_eta + logdet_scale * 0.5 * rt.dw_deta * aSa +
+        const double g_b = -rt.grad_eta + logdet_scale * 0.5 * gdw_deta * aSa +
           0.5 * ua * rt.dgrad_eta_deta;
         if (B_ref[obs] > 0) grad_B[static_cast<std::size_t>(B_ref[obs] - 1)] += g_b;
         add_beta_grad(grad_B_beta, nB_beta_row, pB, B_pred, obs, b_beta_idx, g_b);
 
-        const double g_c_raw = (rt.grad_c - logdet_scale * 0.5 * rt.dw_dc * aSa -
+        const double g_c_raw = (rt.grad_c - logdet_scale * 0.5 * gdw_dc * aSa -
           0.5 * ua * rt.dgrad_eta_dc) * row_c_mult[oi];
         if (C_ref[obs] > 0) grad_C[static_cast<std::size_t>(C_ref[obs] - 1)] += g_c_raw;
         add_beta_grad(grad_C_beta, nC_beta_row, pC, C_pred, obs, c_beta_idx, g_c_raw);
 
-        const double g_d_raw = (rt.grad_d - logdet_scale * 0.5 * rt.dw_dd * aSa -
+        const double g_d_raw = (rt.grad_d - logdet_scale * 0.5 * gdw_dd * aSa -
           0.5 * ua * rt.dgrad_eta_dd) * row_d_mult[oi];
         if (D_ref[obs] > 0) grad_D[static_cast<std::size_t>(D_ref[obs] - 1)] += g_d_raw;
         add_beta_grad(grad_D_beta, nD_beta_row, pD, D_pred, obs, d_beta_idx, g_d_raw);
@@ -2452,8 +2692,10 @@ extern "C" SEXP _bigIRT_laplace_person_step_block_cpp_impl(
           }
         }
 
+        // See the serial person kernel: false during the Newton iterations
+        // (Fisher scoring), true for the final Hessian.
         auto logpost_and_grad = [&](const VectorXd& theta_eval, VectorXd& grad_out,
-          MatrixXd& prec_out, double& lp_out) {
+          MatrixXd& prec_out, double& lp_out, const bool laplace_curv) {
           grad_out = -prior_prec * (theta_eval - mu);
           prec_out = prior_prec;
           lp_out = -0.5 * (theta_eval - mu).dot(prior_prec * (theta_eval - mu));
@@ -2465,6 +2707,7 @@ extern "C" SEXP _bigIRT_laplace_person_step_block_cpp_impl(
             for (int k = 0; k < K; ++k) eta += loadings[oi](k) * ability(k);
             BigIRTRowTerms rt = bigirt_row_terms(static_cast<double>(score[obs]), eta, c_row[oi], d_row[oi]);
             lp_out += rt.ll;
+            const double w_use = laplace_curv ? rt.wl : rt.w;
             for (int k = 0; k < K; ++k) grad_out(k) += rt.grad_eta * loadings[oi](k);
             for (int r = 0; r < K; ++r) {
               const double ar = loadings[oi](r);
@@ -2472,7 +2715,7 @@ extern "C" SEXP _bigIRT_laplace_person_step_block_cpp_impl(
               for (int cc = 0; cc < K; ++cc) {
                 const double ac = loadings[oi](cc);
                 if (ac == 0.0) continue;
-                prec_out(r, cc) += rt.w * ar * ac;
+                prec_out(r, cc) += w_use * ar * ac;
               }
             }
           }
@@ -2481,7 +2724,7 @@ extern "C" SEXP _bigIRT_laplace_person_step_block_cpp_impl(
         VectorXd grad(K);
         MatrixXd prec(K, K);
         double lp = NA_REAL;
-        logpost_and_grad(theta, grad, prec, lp);
+        logpost_and_grad(theta, grad, prec, lp, false);
 
         bool subj_converged = active.empty();
         // Status codes match the serial kernel: 0 resolved, 1 not converged,
@@ -2536,7 +2779,7 @@ extern "C" SEXP _bigIRT_laplace_person_step_block_cpp_impl(
           for (int bt = 0; bt < 12; ++bt) {
             theta_try = theta;
             for (size_t ai = 0; ai < active.size(); ++ai) theta_try(active[ai]) = theta(active[ai]) + damping * step(ai);
-            logpost_and_grad(theta_try, grad_try, prec_try, lp_try);
+            logpost_and_grad(theta_try, grad_try, prec_try, lp_try, false);
             if (R_finite(lp_try) && lp_try >= lp - 1e-10) {
               accepted = true;
               break;
@@ -2550,7 +2793,12 @@ extern "C" SEXP _bigIRT_laplace_person_step_block_cpp_impl(
           lp = lp_try;
         }
 
-        logpost_and_grad(theta, grad, prec, lp);
+        logpost_and_grad(theta, grad, prec, lp, true);
+        {
+          const MatrixXd like = prec - prior_prec;
+          if (!bigirt_like_curvature_ok(like))
+            prec = prior_prec + bigirt_psd_clip(like);
+        }
         objective[subj] = lp;
         if (subj_converged && subj_status == 1) subj_status = 0;
         niter[subj] = used_iter;
@@ -2582,6 +2830,33 @@ extern "C" SEXP _bigIRT_laplace_person_step_block_cpp_impl(
             break;
           }
           chol_jitter *= 10.0;
+        }
+        if (!success) {
+          // As in the serial kernel: retry with the Fisher curvature before
+          // giving up, so an indefinite observed Hessian on one person cannot
+          // abort the fit.
+          logpost_and_grad(theta, grad, prec, lp, false);
+          for (int k = 0; k < K; ++k) {
+            if (free_mask(subj, k) == 0) {
+              for (int kk = 0; kk < K; ++kk) {
+                prec(k, kk) = 0.0;
+                prec(kk, k) = 0.0;
+              }
+              prec(k, k) = 1.0 / jitter;
+            }
+          }
+          chol_jitter = jitter;
+          for (int attempt = 0; attempt < max_attempts; ++attempt) {
+            MatrixXd try_prec = prec;
+            try_prec.diagonal().array() += chol_jitter;
+            llt_full.compute(try_prec);
+            if (llt_full.info() == Eigen::Success) {
+              prec = try_prec;
+              success = true;
+              break;
+            }
+            chol_jitter *= 10.0;
+          }
         }
         if (!success) Rcpp::stop("Cholesky failed while finalizing person precision.");
 
@@ -2918,19 +3193,19 @@ extern "C" SEXP _bigIRT_laplace_item_objective_fixed_cov_cpp_impl(
     BigIRTRowTerms rt = bigirt_row_terms(static_cast<double>(score[obs]), eta_obs, c[obs], d[obs]);
     const VectorXd Sa = Sigma * a;
     const double aSa = a.dot(Sa);
-    objective += rt.ll - 0.5 * rt.w * aSa;
+    objective += rt.ll - 0.5 * rt.wl * aSa;
     eta[obs] = eta_obs;
     p_row[obs] = rt.p;
-    w_row[obs] = rt.w;
+    w_row[obs] = rt.wl;
 
     for (int k = 0; k < K; ++k) {
       grad_loadings(obs, k) =
         rt.grad_eta * z(k) -
-        0.5 * (rt.dw_deta * z(k) * aSa + 2.0 * rt.w * Sa(k));
+        0.5 * (rt.dwl_deta * z(k) * aSa + 2.0 * rt.wl * Sa(k));
     }
-    grad_b[obs] = -rt.grad_eta + 0.5 * rt.dw_deta * aSa;
-    grad_c[obs] = rt.grad_c - 0.5 * rt.dw_dc * aSa;
-    grad_d[obs] = rt.grad_d - 0.5 * rt.dw_dd * aSa;
+    grad_b[obs] = -rt.grad_eta + 0.5 * rt.dwl_deta * aSa;
+    grad_c[obs] = rt.grad_c - 0.5 * rt.dwl_dc * aSa;
+    grad_d[obs] = rt.grad_d - 0.5 * rt.dwl_dd * aSa;
   }
 
   return Rcpp::List::create(
@@ -3157,8 +3432,10 @@ extern "C" SEXP _bigIRT_laplace_direct_objective_cpp_impl(
       if (free_mask(subj, k) != 0) active.push_back(k);
     }
 
+    // See the serial person kernel: false during the Newton iterations
+    // (Fisher scoring), true for the final Hessian.
     auto logpost_and_grad = [&](const VectorXd& theta_eval, VectorXd& grad_out,
-      MatrixXd& prec_out, double& lp_out) {
+      MatrixXd& prec_out, double& lp_out, const bool laplace_curv) {
       grad_out = -prior_prec * (theta_eval - mu);
       prec_out = prior_prec;
       lp_out = -0.5 * (theta_eval - mu).dot(prior_prec * (theta_eval - mu));
@@ -3170,6 +3447,7 @@ extern "C" SEXP _bigIRT_laplace_direct_objective_cpp_impl(
         for (int k = 0; k < K; ++k) eta += loadings(obs, k) * ability(k);
         BigIRTRowTerms rt = bigirt_row_terms(static_cast<double>(score[obs]), eta, c[obs], d[obs]);
         lp_out += rt.ll;
+        const double w_use = laplace_curv ? rt.wl : rt.w;
         for (int k = 0; k < K; ++k) grad_out(k) += rt.grad_eta * loadings(obs, k);
         for (int r = 0; r < K; ++r) {
           const double ar = loadings(obs, r);
@@ -3177,7 +3455,7 @@ extern "C" SEXP _bigIRT_laplace_direct_objective_cpp_impl(
           for (int cc = 0; cc < K; ++cc) {
             const double ac = loadings(obs, cc);
             if (ac == 0.0) continue;
-            prec_out(r, cc) += rt.w * ar * ac;
+            prec_out(r, cc) += w_use * ar * ac;
           }
         }
       }
@@ -3186,7 +3464,7 @@ extern "C" SEXP _bigIRT_laplace_direct_objective_cpp_impl(
     VectorXd grad(K);
     MatrixXd prec(K, K);
     double lp = NA_REAL;
-    logpost_and_grad(theta, grad, prec, lp);
+    logpost_and_grad(theta, grad, prec, lp, false);
 
     bool subj_converged = active.empty();
     int used_iter = 0;
@@ -3233,7 +3511,7 @@ extern "C" SEXP _bigIRT_laplace_direct_objective_cpp_impl(
       for (int bt = 0; bt < 12; ++bt) {
         theta_try = theta;
         for (size_t ai = 0; ai < active.size(); ++ai) theta_try(active[ai]) = theta(active[ai]) + damping * step(ai);
-        logpost_and_grad(theta_try, grad_try, prec_try, lp_try);
+        logpost_and_grad(theta_try, grad_try, prec_try, lp_try, false);
         if (R_finite(lp_try) && lp_try >= lp - 1e-10) {
           accepted = true;
           break;
@@ -3247,7 +3525,12 @@ extern "C" SEXP _bigIRT_laplace_direct_objective_cpp_impl(
       lp = lp_try;
     }
 
-    logpost_and_grad(theta, grad, prec, lp);
+    logpost_and_grad(theta, grad, prec, lp, true);
+    {
+      const MatrixXd like = prec - prior_prec;
+      if (!bigirt_like_curvature_ok(like))
+        prec = prior_prec + bigirt_psd_clip(like);
+    }
     niter[subj] = used_iter;
     converged[subj] = subj_converged;
     for (int k = 0; k < K; ++k) theta_mode(subj, k) = theta(k);
@@ -3275,6 +3558,32 @@ extern "C" SEXP _bigIRT_laplace_direct_objective_cpp_impl(
         break;
       }
       chol_jitter *= 10.0;
+    }
+    if (!success) {
+      // Retry with the Fisher curvature before giving up (see the serial
+      // person kernel).
+      logpost_and_grad(theta, grad, prec, lp, false);
+      for (int k = 0; k < K; ++k) {
+        if (free_mask(subj, k) == 0) {
+          for (int kk = 0; kk < K; ++kk) {
+            prec(k, kk) = 0.0;
+            prec(kk, k) = 0.0;
+          }
+          prec(k, k) = 1.0 / jitter;
+        }
+      }
+      chol_jitter = jitter;
+      for (int attempt = 0; attempt < max_attempts; ++attempt) {
+        MatrixXd try_prec = prec;
+        try_prec.diagonal().array() += chol_jitter;
+        llt_full.compute(try_prec);
+        if (llt_full.info() == Eigen::Success) {
+          prec = try_prec;
+          success = true;
+          break;
+        }
+        chol_jitter *= 10.0;
+      }
     }
     if (!success) Rcpp::stop("Cholesky failed while finalizing direct Laplace precision.");
 

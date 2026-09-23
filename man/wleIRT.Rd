@@ -20,10 +20,7 @@ A list with:
 Computes the WLE and SE for each subject and scale in a bigIRT model.
 }
 \examples{
-# enough items and people for the item parameters to be determined; a 2PL
-# fitted to twenty items and sixty people can return discriminations large
-# enough that the weighted likelihood gradient is not computable
-sim <- simIRT(Nsubs = 300, Nitems = 40, Nscales = 1)
+sim <- simIRT(Nsubs = 60, Nitems = 20, Nscales = 1)
 fit <- fitIRT(sim$dat, pl = 2, cores = 1, dropPerfectScores = FALSE)
 wle <- wleIRT(fit)
 str(wle)

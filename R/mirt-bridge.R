@@ -20,7 +20,7 @@
 
 ## Wide response matrix from a fit, persons by items, NA where unanswered.
 bigIRT_wide_responses <- function(fit, max_cells = 5e7){
-  sdat <- fit$dat
+  sdat <- fit$prepared
   ns <- as.integer(sdat$Nsubs); ni <- as.integer(sdat$Nitems)
   if(as.numeric(ns) * as.numeric(ni) > max_cells)
     stop(sprintf(paste0("A wide matrix for this fit would be %d x %d = %.1f billion cells. ",

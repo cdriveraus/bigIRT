@@ -48,4 +48,4 @@ Biarch: true
 SystemRequirements: GNU make
 URL: https://github.com/cdriveraus/bigIRT
 BugReports: https://github.com/cdriveraus/bigIRT/issues
-Config/roxygen2/version: 8.0.0
+Config/roxygen2/version: 8.1.0

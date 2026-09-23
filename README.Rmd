@@ -147,7 +147,7 @@ brier <- mean((dat$score[heldout] - fit$pars$pcorrect[heldout])^2)
 c(by_hand = brier, heldoutMetrics = heldoutMetrics(fit)$brier)
 ```
 
-Other row-level output (`b_row`, `eta_row`, `row_ability`, `fit$dat`) stays in
+Other row-level output (`b_row`, `eta_row`, `row_ability`, `fit$prepared`) stays in
 the internal person-sorted order. `fit$pars$originalRow` maps between the two.
 
 ### Arguments worth knowing

@@ -59,8 +59,8 @@ if(identical(Sys.getenv("NOT_CRAN"), "true")& .Machine$sizeof.pointer != 4){
      # plot(parsfit$B,parstrue$B)
     # abline(0,1)
 
-    lmf=lm(fit$pars$Abilitypars ~ fit$dat$personPreds[!duplicated(fit$dat$id),])
-    lm(parstrue$Ability ~ fit$dat$personPreds[!duplicated(fit$dat$id),])
+    lmf=lm(fit$pars$Abilitypars ~ fit$prepared$personPreds[!duplicated(fit$prepared$id),])
+    lm(parstrue$Ability ~ fit$prepared$personPreds[!duplicated(fit$prepared$id),])
     testthat::expect_equivalent(
       c(predBetaStd),
       c(fit$covariateEffects$AbilityStd),

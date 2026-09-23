@@ -29,7 +29,7 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     f <- fit_small()
     ii <- itemInformation(f)
     expect_true(all(c("B", "A") %in% ii$active))
-    expect_equal(nrow(ii$se), as.integer(f$dat$Nitems))
+    expect_equal(nrow(ii$se), as.integer(f$prepared$Nitems))
     expect_true(all(is.finite(ii$se)))
     expect_true(all(ii$se > 0))
     ## Effective parameters cannot exceed the nominal count, and with priors
@@ -104,9 +104,9 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     ll <- logLik(f)
     ## Person parameters are integrated out of the marginal objective, so the
     ## degrees of freedom must not scale with the number of people.
-    expect_lt(attr(ll, "df"), as.integer(f$dat$Nsubs))
+    expect_lt(attr(ll, "df"), as.integer(f$prepared$Nsubs))
     expect_lte(attr(ll, "df"), attr(ll, "nominal_df") + 1e-8)
-    expect_equal(attr(ll, "nobs"), as.integer(f$dat$Nsubs))
+    expect_equal(attr(ll, "nobs"), as.integer(f$prepared$Nsubs))
     expect_equal(AIC(f), -2 * as.numeric(ll) + 2 * attr(ll, "df"), tolerance = 1e-8)
     ic <- IRTic(f)
     expect_true(all(c("AIC", "BIC") %in% ic$criterion))
@@ -251,7 +251,7 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
       dd$context$row_context, impl = "R")
     expect_equal(a$score, b$score, tolerance = 1e-12)
     expect_equal(a$slope, b$slope, tolerance = 1e-12)
-    expect_equal(dim(a$score), c(as.integer(f$dat$Nsubs), 2L))
+    expect_equal(dim(a$score), c(as.integer(f$prepared$Nsubs), 2L))
   })
 
   test_that("the kernel's row-effective values match the R construction", {
@@ -338,7 +338,7 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     expect_gt(length(unique(rc$B_beta_row)), 1L)
     ## And they must actually estimate the effect, not merely run.
     bb <- as.numeric(f$pars$Bbeta)
-    expect_equal(length(bb), as.integer(f$dat$Nitems))
+    expect_equal(length(bb), as.integer(f$prepared$Nitems))
     expect_equal(mean(bb), beta_true, tolerance = 0.1)
   })
 

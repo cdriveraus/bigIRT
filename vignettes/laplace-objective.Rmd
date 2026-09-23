@@ -403,6 +403,14 @@ When each person has enough information, the posterior becomes more concentrated
 
 ## Approximate direct gradient
 
+> **Update, September 2026.**
+> The gradient is the exact total derivative of the direct Laplace objective,
+> to about 1e-7 against central differences with the person modes re-solved at
+> tolerance 1e-13, for `pl` 2, 3 and 4 and for one, two and three dimensions.
+> See the Resolution section, and the update note before "Measured behaviour of
+> the frozen-posterior gradient" for the curvature change that this depended on.
+
+
 The main limitation is still that the gradient is not the exact derivative of the direct Laplace objective.
 
 ## Sensitivity of $c$ and $d$
@@ -551,6 +559,35 @@ Its main strength is that the value stays close to the intended direct Laplace t
 Its main weakness is that the gradient is only approximate.
 
 In many large-data settings that is a useful compromise, but it should be understood as an approximation strategy rather than an exact optimizer for the direct Laplace objective.
+
+>
+>
+>
+>
+>
+> **Update, September 2026 -- read with the Resolution section below.**
+> The "Resolution" section near the end of this note already retracts the
+> under-weighted-adjoint reading that follows: the adjoint was correct, and the
+> finite differences that appeared to condemn it were taken of the wrong
+> function. Two things have changed since that was written.
+>
+> *The 3PL and 4PL gradient was still wrong, for a different reason.* Every
+> gradient check in this note and in the test suite ran `pl = 2`, where the
+> observed Hessian and Fisher information are the same number, so none of them
+> could see it. The mode adjoint applies the implicit function theorem and needs
+> the inverse of the actual Hessian; the code inverted Fisher information. For
+> the 3PL and 4PL the assembled item gradient missed the true total derivative
+> by 1e-3 to 4e-2 relative, at one, two and three dimensions. The Laplace
+> curvature is now the observed Hessian and the gradient matches at 1e-7. Fisher
+> information is still used for the Newton step, where its positive definiteness
+> is what makes the mode solve robust.
+>
+> *`laplaceAdjointScale` and `laplaceLogdetScale` no longer exist.* They were
+> inert in the shipped path -- the backend hardcodes both to 1.0 where the direct
+> path calls the item block objective from C++ -- and fits at 0, 1, 8.4 and 20
+> were bit-identical, so they were removed. The weight studies below cannot be
+> reproduced through `fitIRT`, and it is not established whether they were
+> produced by a code state in which the knob was live.
 
 # Measured behaviour of the frozen-posterior gradient
 
@@ -757,8 +794,9 @@ standard deviation 0.00.
 
 ## What this retracts
 
-- The adjoint correction is not under-weighted. `laplaceAdjointScale = 1` is the
-  correct value and needs no change.
+- The adjoint correction is not under-weighted. Weight 1 is the correct value.
+  (`laplaceAdjointScale` was removed in September 2026: it was inert in the
+  shipped path, so the weight is fixed at 1 and is no longer settable.)
 - The under-weighting was not acting as a regulariser, so there was never a
   bias-variance trade to explain, and it is unsurprising that no explicit
   regulariser could reproduce it.

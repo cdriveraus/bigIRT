@@ -42,9 +42,9 @@ run_laplace_case <- function(name, seed, ...){
   data.table(
     scenario = name,
     Nobs = nrow(dat),
-    Nsubs = fit$dat$Nsubs,
-    Nitems = fit$dat$Nitems,
-    Nscales = fit$dat$Nscales,
+    Nsubs = fit$prepared$Nsubs,
+    Nitems = fit$prepared$Nitems,
+    Nscales = fit$prepared$Nscales,
     outer_iter = nrow(dx),
     converged = isTRUE(fit$laplaceStatus$converged),
     reason = as.character(fit$laplaceStatus$reason),
