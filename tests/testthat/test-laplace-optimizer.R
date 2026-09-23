@@ -97,6 +97,19 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     }
   })
 
+  test_that("without a usable metric the Fisher path hands over to mize", {
+    ## An information matrix too dense to hold is refused, and then there is no
+    ## reliable predicted gain either, so the fit must run the mize path with
+    ## its polish rather than an unshaped L-BFGS stopping on a number it
+    ## cannot estimate.
+    old <- options(bigIRT.fisher_max_nnz = 1)
+    on.exit(options(old))
+    f <- opt_fit(pl = 2, ns = 600, ni = 12)
+    expect_false(identical(f$laplaceStatus$optimizer_terminate, "gain"))
+    expect_gt(f$laplaceStatus$polish_steps, 0L)
+    expect_true(isTRUE(f$laplaceStatus$converged))
+  })
+
   test_that("the Fisher optimiser reaches the mize optimum in fewer evaluations", {
     for(cfg in list(list(pl = 2, preds = FALSE, K = 1), list(pl = 3, preds = FALSE, K = 1),
                     list(pl = 2, preds = TRUE, K = 1), list(pl = 2, preds = FALSE, K = 2))){

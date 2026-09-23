@@ -1574,6 +1574,28 @@ bigIRT_laplace_optimize_direct <- function(state, sdat, prior_precision,
   target_gr <- function(par){
     target_fg(par)$gr
   }
+  minv <- NULL
+  if(identical(optimizer, "fisher") && !isTRUE(stochastic)){
+    fg_f <- function(par){
+      r <- get_eval(par)
+      list(f = -r$value, g = -r$approx_grad, ev = r, x = par)
+    }
+    gfun <- function(par) -get_eval(par)$approx_grad
+    solver <- function(e) bigIRT_laplace_fisher_solver(e$ev, e$x, e$g, sdat, context,
+      direct_layout, gfun)
+    minv <- solver(fg_f(init))
+    ## Finite-difference columns move the cache and the warm start; put both
+    ## back at the point the optimiser is about to use.
+    get_eval(init)
+    ## No metric -- the information would be too dense to hold, or could not
+    ## be factored -- means no reliable predicted gain either, so run the mize
+    ## path with its polish rather than an unshaped L-BFGS that would stop on
+    ## a number it cannot estimate.
+    if(is.null(minv)){
+      optimizer <- "mize"
+      if(as.integer(verbose) >= 1L) message("Laplace: Fisher metric unavailable; using the mize optimiser.")
+    }
+  }
   if(isTRUE(stochastic)){
     target <- function(par){
       res <- get_eval(par)
@@ -1592,26 +1614,14 @@ bigIRT_laplace_optimize_direct <- function(state, sdat, prior_precision,
       what = if(length(fit$itervalues) < as.integer(niter)) "sgd_converged" else "sgd_max_iter",
       val = if(length(fit$itervalues)) tail(fit$itervalues, 1L) else NA_real_
     )
-  } else if(identical(optimizer, "fisher")){
+  } else if(identical(optimizer, "fisher") && !is.null(minv)){
     ## L-BFGS shaped by the person-coupled Fisher information; see
     ## R/laplaceOptimizer.R. `tol` is the predicted gain, in nats, below which
     ## it stops.
-    fg_f <- function(par){
-      r <- get_eval(par)
-      list(f = -r$value, g = -r$approx_grad, ev = r, x = par)
-    }
-    gfun <- function(par) -get_eval(par)$approx_grad
-    solver <- function(e) bigIRT_laplace_fisher_solver(e$ev, e$x, e$g, sdat, context,
-      direct_layout, gfun)
-    e0 <- fg_f(init)
-    minv <- solver(e0)
-    ## Finite-difference columns move the cache and the warm start; put both
-    ## back at the point the optimiser is about to use.
-    get_eval(init)
     refresh <- function(e){ m <- solver(e); get_eval(e$x); m }
     fit <- bigIRT_laplace_lbfgs(init, fg_f, minv = minv, maxit = as.integer(niter),
-      gain_tol = tol, refresh = if(is.null(minv)) NULL else refresh)
-    fit$metric <- if(is.null(minv)) "none" else "fisher"
+      gain_tol = tol, refresh = refresh)
+    fit$metric <- "fisher"
   } else {
     fit <- mize::mize(
       init,

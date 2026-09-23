@@ -1506,8 +1506,8 @@ bigIRT_validate_fit_inputs <- function(dat, score, id, item, scale, pl, controls
 #'   change in objective, followed by the block-Newton polish. Measured on
 #'   simulated 2PL to 4PL designs, the Fisher path needed about a third of the
 #'   objective evaluations and half the time, and ended closer to the optimum.
-#'   It builds the information as a sparse matrix, and falls back to an
-#'   unscaled L-BFGS when that would exceed about 5e7 nonzeros.
+#'   It builds the information as a sparse matrix, and falls back to
+#'   \code{"mize"} when that would exceed about 5e7 nonzeros.
 #' @param laplaceGradTol Numeric. Tolerance for the item-block gradient,
 #'   measured relative to the objective rather than as a raw norm: the reported
 #'   norm is divided by the same denominator \code{laplaceTolScale} selects for

@@ -122,13 +122,15 @@ bigIRT_laplace_row_derivatives <- function(ev, sdat, context, layout){
 ## V'V - (W'V)' I_pp^-1 (W'V), positive semidefinite because the joint one is.
 ## The ability mean enters the person prior only, so it adds I_mm = N P0 and
 ## I_pm = -P0 per person. Priors are quadratic and added exactly. Returns NULL
-## when the coupling would be too dense to hold (`max_nnz`).
-bigIRT_laplace_fisher_info <- function(ev, sdat, context, layout, max_nnz = 5e7){
+## when the coupling would be too dense to hold (`max_nnz`), and the caller
+## then uses the mize path.
+bigIRT_laplace_fisher_info <- function(ev, sdat, context, layout,
+  max_nnz = getOption("bigIRT.fisher_max_nnz", 5e7)){
   D <- bigIRT_laplace_row_derivatives(ev, sdat, context, layout)
   n <- D$n; N <- D$N; K <- D$K; P0 <- D$P0
   ## An upper bound on the coupling's nonzeros: no more than n^2, and no more
   ## than the sum over persons of the square of the parameters their rows
-  ## touch. Beyond `max_nnz` the caller falls back to no metric.
+  ## touch. Beyond `max_nnz` the caller falls back to the mize path.
   touch <- tabulate(as.integer(context$row_context$ids), nbins = N)
   per_row <- max(1, Matrix::nnzero(D$V) / max(1, nrow(D$V)))
   if(min(as.numeric(n)^2, sum((as.numeric(touch) * per_row)^2)) > max_nnz)
