@@ -26,7 +26,28 @@ VARIANTS <- list(
   ## References: run far past any practical stopping rule, to find the optimum
   ## every variant is scored against.
   ref = list(proto = list(metric = TRUE, stop = "gain", gain_tol = 1e-9,
-    maxit_mult = 10, polish_steps = 40L, polish_tol = 1e-12))
+    maxit_mult = 10, polish_steps = 40L, polish_tol = 1e-12)),
+  ## Fisher scoring on the item block with the person-coupled information
+  ## (fisher.R), from the start, to a predicted gain of 1e-6 nats. No polish:
+  ## the polish is a weaker version of the same step.
+  nt = list(proto = list(method = "newton", gain_tol = 1e-6, polish_steps = 0L)),
+  ## L-BFGS (info metric) to a predicted gain of 1 nat, then Fisher scoring.
+  lb_nt = list(proto = list(method = "hybrid", metric = TRUE, stop = "gain",
+    gain_tol = 1, nt_gain_tol = 1e-6, polish_steps = 0L)),
+  ## L-BFGS with H0 = gamma F^-1: the Fisher matrix sets the shape. Measured
+  ## condition of F^-1 H at the optimum 2.5 (2PL + covariates) and 4.6 (3PL),
+  ## against 13.5 and 106 for the block-diagonal metric -- a good
+  ## preconditioner but not a Newton Hessian (eigenvalues up to 2.3), which is
+  ## what the secant pairs correct. Stops on the predicted gain; no polish.
+  lb_fisher = list(proto = list(metric = "fisher", stop = "gain", gain_tol = 1e-3,
+    polish_steps = 0L)),
+  ## The same, with the person modes solved to 1e-6 instead of 1e-4, which
+  ## takes the warm-start noise in the objective from ~1e-3 to ~1e-5 nats.
+  lb_fisher_pt6 = list(proto = list(metric = "fisher", stop = "gain", gain_tol = 1e-4,
+    polish_steps = 0L), fit = list(laplacePersonTol = 1e-6)),
+  base_pt6 = list(fit = list(laplacePersonTol = 1e-6)),
+  lb_info_pt6 = list(proto = list(metric = TRUE, stop = "gain", gain_tol = 1e-4),
+    fit = list(laplacePersonTol = 1e-6))
 )
 
 variant_fit_args <- function(v) VARIANTS[[v]]$fit %||% list()
@@ -48,7 +69,21 @@ install_variant <- function(v){
   if(!is.null(spec$proto)){
     options(bigirt.proto = spec$proto)
     ns <- asNamespace("bigIRT")
+    ## All three are evaluated in the package namespace so they can call its
+    ## internals; they are then reached through the global bindings, which is
+    ## why the metric and L-BFGS are rebound here as well.
     environment(proto_optimize_direct) <- ns
+    environment(proto_metric) <- ns
+    environment(proto_lbfgs) <- ns
+    environment(proto_fisher_hessian) <- ns
+    environment(proto_newton) <- ns
+    environment(proto_fd_columns) <- ns
+    assign("proto_fisher_hessian", proto_fisher_hessian, envir = globalenv())
+    assign("proto_newton", proto_newton, envir = globalenv())
+    assign("proto_fd_columns", proto_fd_columns, envir = globalenv())
+    assign("proto_metric", proto_metric, envir = globalenv())
+    assign("proto_lbfgs", proto_lbfgs, envir = globalenv())
+    assign("proto_optimize_direct", proto_optimize_direct, envir = globalenv())
     unlockBinding("bigIRT_laplace_optimize_direct", ns)
     assign("bigIRT_laplace_optimize_direct", proto_optimize_direct, envir = ns)
     lockBinding("bigIRT_laplace_optimize_direct", ns)
@@ -220,7 +255,7 @@ proto_optimize_direct <- function(state, sdat, prior_precision,
   init <- bigIRT_laplace_pack_direct_state(state, sdat, layout = direct_layout)
   if(!is.null(P$polish_steps)) polish_steps <- P$polish_steps
   if(!is.null(P$polish_tol)) polish_tol <- P$polish_tol
-  use_metric <- isTRUE(P$metric)
+  use_metric <- isTRUE(P$metric) || identical(P$metric, "fisher")
   kc <- keep_covariance || use_metric || polish_steps > 0L
   theta_warm <- state$AbilityBase
   eval_count <- 0L
@@ -238,7 +273,7 @@ proto_optimize_direct <- function(state, sdat, prior_precision,
   }
   fg <- function(par){
     r <- ev_at(par)
-    list(f = -r$value, g = -r$approx_grad, ev = r)
+    list(f = -r$value, g = -r$approx_grad, ev = r, x = par)
   }
   ## Coordinates with no analytic curvature: one forward difference of the
   ## gradient each, at the start. They are few (covariate coefficients and
@@ -246,7 +281,41 @@ proto_optimize_direct <- function(state, sdat, prior_precision,
   n <- length(init)
   other <- c(direct_layout$ability_beta, direct_layout$corr, direct_layout$ability_mean)
   minv <- NULL; refresh <- NULL; t_metric <- 0
-  if(use_metric){
+  hess <- function(ev, x, g){
+    H <- proto_fisher_hessian(ev, sdat, context, direct_layout)
+    und <- attr(H, "undescribed")
+    if(length(und)) H <- proto_fd_columns(H, x, g, function(xp) -ev_at(xp)$approx_grad, und)
+    H
+  }
+  ## H0 = gamma F^-1, F the person-coupled Fisher information (fisher.R),
+  ## refreshed at the accepted point every `refresh_every` iterations.
+  fisher_solve <- function(ev, x){
+    H <- hess(ev, x, -ev$approx_grad)
+    H <- (H + t(H)) / 2
+    ch <- tryCatch(chol(H), error = function(e) NULL)
+    if(is.null(ch)){
+      eg <- eigen(H, symmetric = TRUE)
+      lam <- pmax(eg$values, 1e-8 * max(abs(eg$values)))
+      V <- eg$vectors
+      return(function(v) as.numeric(V %*% (crossprod(V, v) / lam)))
+    }
+    function(v) backsolve(ch, forwardsolve(t(ch), v))
+  }
+  if(identical(P$metric, "fisher")){
+    ev0 <- ev_at(init)
+    tm <- proc.time()[["elapsed"]]
+    minv <- fisher_solve(ev0, init)
+    t_metric <- proc.time()[["elapsed"]] - tm
+    ev_at(init)
+    refresh <- function(en){
+      tm <- proc.time()[["elapsed"]]
+      m <- tryCatch(fisher_solve(en$ev, en$x), error = function(e) NULL)
+      t_metric <<- t_metric + proc.time()[["elapsed"]] - tm
+      ev_at(en$x)
+      m
+    }
+  }
+  if(isTRUE(P$metric)){
     ev0 <- ev_at(init)
     od <- rep(NA_real_, n)
     for(j in other){
@@ -269,11 +338,28 @@ proto_optimize_direct <- function(state, sdat, prior_precision,
     }
   }
   maxit <- as.integer(niter * (P$maxit_mult %||% 1))
-  fit <- proto_lbfgs(init, fg, minv = minv, memory = P$memory %||% 30L, maxit = maxit,
-    stop = P$stop %||% "pkg", abs_tol = tol, grad_tol = tol,
-    gain_tol = P$gain_tol %||% 0.1, refresh = refresh,
-    refresh_every = if(use_metric) (P$refresh_every %||% 10L) else 0L)
+  method <- P$method %||% "lbfgs"
+  hess_sec <- 0
+  if(method %in% c("lbfgs", "hybrid")){
+    fit <- proto_lbfgs(init, fg, minv = minv, memory = P$memory %||% 30L, maxit = maxit,
+      stop = P$stop %||% "pkg", abs_tol = tol, grad_tol = tol,
+      gain_tol = P$gain_tol %||% 0.1, refresh = refresh,
+      refresh_every = if(use_metric) (P$refresh_every %||% 10L) else 0L)
+  }
   evals_lbfgs <- eval_count
+  if(method == "newton"){
+    fit <- proto_newton(init, fg, hess, maxit = P$nt_maxit %||% 50L,
+      gain_tol = P$gain_tol %||% 1e-6)
+    hess_sec <- fit$hess_sec
+  }
+  if(method == "hybrid"){
+    lb <- fit
+    fit <- proto_newton(lb$par, fg, hess, maxit = P$nt_maxit %||% 50L,
+      gain_tol = P$nt_gain_tol %||% 1e-6)
+    hess_sec <- fit$hess_sec
+    fit$iter <- lb$iter + fit$iter
+    fit$backtracks <- lb$backtracks + fit$backtracks
+  }
   ## The package's Newton polish, reusing the accepted evaluation as the next
   ## base point rather than evaluating it twice.
   polish <- list(steps = 0L, gain = 0)
@@ -307,7 +393,7 @@ proto_optimize_direct <- function(state, sdat, prior_precision,
   fit$logLik <- final$value
   fit$timings <- final$timings
   fit$proto <- list(evals_lbfgs = evals_lbfgs, backtracks = fit$backtracks,
-    metric_sec = t_metric, lbfgs_terminate = fit$terminate$what)
+    metric_sec = t_metric, hess_sec = hess_sec, lbfgs_terminate = fit$terminate$what)
   ## fitIRT copies only named fields out of $optim, so leave this where the
   ## harness can find it.
   assign("PROTO_EXTRA", fit$proto, envir = globalenv())
