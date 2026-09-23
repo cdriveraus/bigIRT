@@ -68,6 +68,41 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     }
   })
 
+  test_that("Fisher row derivatives cover item-covariate coefficients, shared and item-specific", {
+    for(specific in c(FALSE, TRUE)){
+      set.seed(9)
+      ip <- matrix(rnorm(12 * 2, 0, .5), 12, 2)
+      s <- simIRT(Nsubs = 500, Nitems = 12, AMean = 1.2, ASD = .2, BSD = .5,
+        logitCMean = -1.5, logitCSD = .3, itemPreds = ip,
+        AitemPredEffects = matrix(c(.2, -.1), 1, 2), BitemPredEffects = matrix(c(.5, .3), 1, 2))
+      f <- suppressWarnings(fitIRT(s$dat, pl = 3, marginalApprox = "laplace", cores = 1,
+        ebayes = FALSE, keepInternals = TRUE, AitemPreds = c("V1", "V2"),
+        BitemPreds = c("V1", "V2"), CitemPreds = "V1", itemSpecificBetas = specific))
+      d <- bigIRT:::bigIRT_direct_eval_from_fit(f, keep_covariance = TRUE)
+      D <- bigIRT:::bigIRT_laplace_row_derivatives(d$eval, d$sdat, d$context, d$layout)
+      ps <- attr(d$layout, "par_scale")
+      th <- d$eval$posterior$theta_mode
+      rowp <- function(par){
+        st <- bigIRT:::bigIRT_laplace_unpack_direct_state(par, d$state, d$sdat, layout = d$layout,
+          corr_paramization = d$context$corr_paramization)
+        re <- bigIRT:::bigIRT_laplace_row_effective(state = st, sdat = d$sdat, thetaBase = th,
+          rows = d$context$train_rows, context = d$context$row_context)
+        g <- stats::plogis(as.numeric(re$eta_row))
+        as.numeric(re$c_row) + (as.numeric(re$d_row) - as.numeric(re$c_row)) * g
+      }
+      p0 <- rowp(d$par); w <- 1 / sqrt(p0 * (1 - p0)); h <- 1e-6
+      cols <- unique(c(head(d$layout$A_beta, 3), head(d$layout$B_beta, 3), head(d$layout$C_beta, 3),
+        d$layout$A[1], d$layout$C[1]))
+      expect_gt(length(cols), 4L)
+      for(j in cols){
+        xp <- d$par; xm <- d$par
+        xp[j] <- xp[j] + h / ps[j]; xm[j] <- xm[j] - h / ps[j]
+        fd <- (rowp(xp) - rowp(xm)) / (2 * h) * w
+        expect_lt(max(abs(as.numeric(D$V[, j]) - fd)) / max(abs(fd)), 1e-5)
+      }
+    }
+  })
+
   test_that("Fisher information agrees with the numerical Hessian up to the log-determinant terms", {
     for(cfg in list(list(pl = 2, preds = TRUE, estMeans = c("A", "B", "C", "D")),
                     list(pl = 2, preds = FALSE, estMeans = c("A", "ability")))){

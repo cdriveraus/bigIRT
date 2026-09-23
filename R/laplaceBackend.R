@@ -1620,7 +1620,8 @@ bigIRT_laplace_optimize_direct <- function(state, sdat, prior_precision,
     ## it stops.
     refresh <- function(e){ m <- solver(e); get_eval(e$x); m }
     fit <- bigIRT_laplace_lbfgs(init, fg_f, minv = minv, maxit = as.integer(niter),
-      gain_tol = tol, refresh = refresh)
+      gain_tol = tol, refresh = refresh,
+      refresh_every = as.integer(getOption("bigIRT.fisher_refresh", 10L)))
     fit$metric <- "fisher"
   } else {
     fit <- mize::mize(
