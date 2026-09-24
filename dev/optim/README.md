@@ -71,11 +71,14 @@ themselves within 0.4 SE of a 65,536-point optimum, mean 0.0), N = 2,000,
 | 3PL | 5 (vs 65,536) | -1.60 / 6.2 | -0.18 / 0.8 | -0.09 / 0.3 | -0.04 / 0.21 | | 3.7 / 14 / 1,651 s |
 | 3PL | 9 | -1.05 / 5.7 | -0.11 / 0.9 | -0.09 / 0.7 | -0.02 / 0.5 | | 8 / 84 / 1,027 s |
 | 4PL | 5 | -3.77 / 10.1 | -0.87 / 3.4 | -0.56 / 2.6 | -0.39 / 1.95 | -0.24 / 1.34 | 7.8 / 24 / 788 s |
+| 4PL | 9 | -1.73 / 7.0 | | | -0.19 / 1.02 | | 17.6 / 87 / 992 s |
 
 At K = 5 the 16,384-point optimum itself sits -0.01 / 0.21 from the
 65,536-point one, so pairs 7 + t3 there is as close as the usual reference.
 Difficulties behave the same way (3PL K = 9, pairs 7 + t3: -0.01 / 0.36;
-3PL K = 5: -0.09 / 0.31; 4PL K = 5: -0.08 / 1.03). No refinement with this rule ran away or was reverted
+3PL K = 5: -0.09 / 0.31; 4PL K = 5: -0.08 / 1.03; 4PL K = 9: -0.03 / 0.63,
+where Laplace left the asymptotes 8.3 (c) and 9.5 (d) SE off and the rule
+0.63 and 0.79). No refinement with this rule ran away or was reverted
 (30-60 evaluations each). On the 4PL the pairwise optimum does not improve
 past 7 nodes (9 and 11: -0.49, -0.47), so what is left there is truncation;
 each added order closes about half of it. Sharing nodes between groups cut
@@ -89,8 +92,9 @@ optimum 7 SE away): K = 5 3PL rmse 0.004-0.007 against laplace2's 0.009-0.013
 (candidate 2 below) cut the error at the Laplace optimum but not elsewhere,
 and was not built.
 
-Still open: the 4PL residual (-0.39 / 1.95 at K = 5 with the default); a
-5-node correction halves it at twice the cost. Only one seed per cell.
+Still open: the 4PL residual (-0.39 / 1.95 at K = 5, -0.19 / 1.02 at K = 9
+with the default); a 5-node correction halves it at twice the cost. Only one
+seed per cell.
 
 ### What was ruled out on the way
 

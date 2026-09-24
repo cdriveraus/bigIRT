@@ -64,6 +64,8 @@ bigIRT_agq_default_nodes <- function(K) c(9L, 7L, 5L)[min(max(as.integer(K), 1L)
 ##   4PL K = 5: pairs 7 -0.56 / 2.6, and no better at 9 or 11 nodes (the
 ##              truncation, not the quadrature); pairs 7 + t3 -0.39 / 1.95;
 ##              pairs 7 + t5 -0.24 / 1.34 (47 s, reference 788 s).
+##   4PL K = 9: Laplace -1.73 / 7.0 (asymptotes up to 9.5); pairs 7 + t3
+##              -0.19 / 1.02 (87 s, Laplace 18 s, reference 992 s).
 ## No refinement with this rule ran away or was reverted by the guard.
 ##
 ## With `points`: that many quasi-Monte Carlo points with equal weights --
