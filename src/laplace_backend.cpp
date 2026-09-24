@@ -2495,39 +2495,39 @@ extern "C" SEXP _bigIRT_laplace_person_step_block_cpp_impl(
 
   struct BigIRTLaplacePersonBlockWorker : public RcppParallel::Worker {
     const std::vector< std::vector<int> >& obs_by_subj;
-    RcppParallel::RVector<int> score;
-    RcppParallel::RMatrix<double> theta_init;
-    RcppParallel::RMatrix<double> person_pred;
-    RcppParallel::RMatrix<int> fixed_ability;
-    RcppParallel::RMatrix<double> fixed_ability_value;
-    RcppParallel::RMatrix<int> A_ref;
-    RcppParallel::RMatrix<double> A_fixed_value;
-    RcppParallel::RMatrix<int> A_beta_row;
-    RcppParallel::RMatrix<double> A_pred;
-    RcppParallel::RVector<int> B_ref;
-    RcppParallel::RVector<double> B_fixed_value;
-    RcppParallel::RVector<int> B_beta_row;
-    RcppParallel::RMatrix<double> B_pred;
-    RcppParallel::RVector<int> C_ref;
-    RcppParallel::RVector<double> C_fixed_value;
-    RcppParallel::RVector<int> C_beta_row;
-    RcppParallel::RMatrix<double> C_pred;
-    RcppParallel::RVector<int> D_ref;
-    RcppParallel::RVector<double> D_fixed_value;
-    RcppParallel::RVector<int> D_beta_row;
-    RcppParallel::RMatrix<double> D_pred;
-    RcppParallel::RMatrix<double> Abilitybeta;
-    RcppParallel::RVector<double> invspApars;
-    RcppParallel::RMatrix<double> invspAbeta;
-    RcppParallel::RVector<double> Bpars;
-    RcppParallel::RMatrix<double> Bbeta;
-    RcppParallel::RVector<double> logitCpars;
-    RcppParallel::RMatrix<double> logitCbeta;
-    RcppParallel::RVector<double> logitDpars;
-    RcppParallel::RMatrix<double> logitDbeta;
-    RcppParallel::RMatrix<double> prior_mean;
-    RcppParallel::RVector<double> prior_precision;
-    RcppParallel::RMatrix<int> free_mask;
+    BigIRTOwnedVector<int> score;
+    BigIRTOwnedMatrix<double> theta_init;
+    BigIRTOwnedMatrix<double> person_pred;
+    BigIRTOwnedMatrix<int> fixed_ability;
+    BigIRTOwnedMatrix<double> fixed_ability_value;
+    BigIRTOwnedMatrix<int> A_ref;
+    BigIRTOwnedMatrix<double> A_fixed_value;
+    BigIRTOwnedMatrix<int> A_beta_row;
+    BigIRTOwnedMatrix<double> A_pred;
+    BigIRTOwnedVector<int> B_ref;
+    BigIRTOwnedVector<double> B_fixed_value;
+    BigIRTOwnedVector<int> B_beta_row;
+    BigIRTOwnedMatrix<double> B_pred;
+    BigIRTOwnedVector<int> C_ref;
+    BigIRTOwnedVector<double> C_fixed_value;
+    BigIRTOwnedVector<int> C_beta_row;
+    BigIRTOwnedMatrix<double> C_pred;
+    BigIRTOwnedVector<int> D_ref;
+    BigIRTOwnedVector<double> D_fixed_value;
+    BigIRTOwnedVector<int> D_beta_row;
+    BigIRTOwnedMatrix<double> D_pred;
+    BigIRTOwnedMatrix<double> Abilitybeta;
+    BigIRTOwnedVector<double> invspApars;
+    BigIRTOwnedMatrix<double> invspAbeta;
+    BigIRTOwnedVector<double> Bpars;
+    BigIRTOwnedMatrix<double> Bbeta;
+    BigIRTOwnedVector<double> logitCpars;
+    BigIRTOwnedMatrix<double> logitCbeta;
+    BigIRTOwnedVector<double> logitDpars;
+    BigIRTOwnedMatrix<double> logitDbeta;
+    BigIRTOwnedMatrix<double> prior_mean;
+    BigIRTOwnedVector<double> prior_precision;
+    BigIRTOwnedMatrix<int> free_mask;
     const int K;
     const double jitter;
     const int max_attempts;
@@ -2615,8 +2615,8 @@ extern "C" SEXP _bigIRT_laplace_person_step_block_cpp_impl(
       return std::log1p(std::exp(x));
     }
 
-    inline double add_beta_term(const int row_idx, const RcppParallel::RMatrix<double>& pred,
-      const RcppParallel::RMatrix<double>& beta, const int beta_row) const {
+    inline double add_beta_term(const int row_idx, const BigIRTOwnedMatrix<double>& pred,
+      const BigIRTOwnedMatrix<double>& beta, const int beta_row) const {
       if (beta_row <= 0 || pred.ncol() == 0 || beta.nrow() == 0) return 0.0;
       const int brow = beta_row - 1;
       double out = 0.0;
@@ -2630,7 +2630,9 @@ extern "C" SEXP _bigIRT_laplace_person_step_block_cpp_impl(
         const int subj = static_cast<int>(subj_idx);
         VectorXd theta(K);
         VectorXd mu(K);
-        MatrixXd prior_prec = bigirt_matrix_from_array_parallel(prior_precision, K, subj);
+        MatrixXd prior_prec(K, K);
+        for (int r = 0; r < K; ++r) for (int c = 0; c < K; ++c)
+          prior_prec(r, c) = prior_precision[r + K * c + K * K * subj];
         std::vector<int> active;
         active.reserve(K);
         for (int k = 0; k < K; ++k) {
@@ -2692,12 +2694,16 @@ extern "C" SEXP _bigIRT_laplace_person_step_block_cpp_impl(
           }
         }
 
-        // See the serial person kernel: false during the Newton iterations
-        // (Fisher scoring), true for the final Hessian.
+        // `prec_out` is Fisher (laplace_curv false) or the observed curvature
+        // (true, the final Hessian). `obs_out`, when given, receives the
+        // observed curvature as well, from the same pass: the Newton loop
+        // prefers it wherever it is positive definite (see below).
         auto logpost_and_grad = [&](const VectorXd& theta_eval, VectorXd& grad_out,
-          MatrixXd& prec_out, double& lp_out, const bool laplace_curv) {
+          MatrixXd& prec_out, double& lp_out, const bool laplace_curv,
+          MatrixXd* obs_out = nullptr) {
           grad_out = -prior_prec * (theta_eval - mu);
           prec_out = prior_prec;
+          if (obs_out) *obs_out = prior_prec;
           lp_out = -0.5 * (theta_eval - mu).dot(prior_prec * (theta_eval - mu));
           for (std::size_t oi = 0; oi < obs_idx.size(); ++oi) {
             const int obs = obs_idx[oi];
@@ -2716,6 +2722,7 @@ extern "C" SEXP _bigIRT_laplace_person_step_block_cpp_impl(
                 const double ac = loadings[oi](cc);
                 if (ac == 0.0) continue;
                 prec_out(r, cc) += w_use * ar * ac;
+                if (obs_out) (*obs_out)(r, cc) += rt.wl * ar * ac;
               }
             }
           }
@@ -2723,8 +2730,9 @@ extern "C" SEXP _bigIRT_laplace_person_step_block_cpp_impl(
 
         VectorXd grad(K);
         MatrixXd prec(K, K);
+        MatrixXd prec_obs(K, K);
         double lp = NA_REAL;
-        logpost_and_grad(theta, grad, prec, lp, false);
+        logpost_and_grad(theta, grad, prec, lp, false, &prec_obs);
 
         bool subj_converged = active.empty();
         // Status codes match the serial kernel: 0 resolved, 1 not converged,
@@ -2745,10 +2753,44 @@ extern "C" SEXP _bigIRT_laplace_person_step_block_cpp_impl(
           }
 
           MatrixXd sub_prec(active.size(), active.size());
+          MatrixXd sub_obs(active.size(), active.size());
           VectorXd sub_grad(active.size());
           for (size_t r = 0; r < active.size(); ++r) {
             sub_grad(r) = grad(active[r]);
-            for (size_t cc = 0; cc < active.size(); ++cc) sub_prec(r, cc) = prec(active[r], active[cc]);
+            for (size_t cc = 0; cc < active.size(); ++cc) {
+              sub_prec(r, cc) = prec(active[r], active[cc]);
+              sub_obs(r, cc) = prec_obs(active[r], active[cc]);
+            }
+          }
+
+          // Newton on the observed curvature where it is positive definite.
+          // Fisher scoring alone converges only linearly for the 3PL and 4PL,
+          // where the two differ (5.7 iterations per person on average at
+          // tolerance 1e-6); near the mode the observed Hessian is the actual
+          // second derivative and converges quadratically. Away from it, where
+          // the observed curvature can be indefinite, or if its step finds no
+          // ascent, the Fisher step below is taken instead -- the mode solved
+          // for is the same either way, only the path to it changes.
+          {
+            Eigen::LLT<MatrixXd> llt_obs(sub_obs);
+            if (llt_obs.info() == Eigen::Success) {
+              const VectorXd step_obs = llt_obs.solve(sub_grad);
+              double damping_obs = 1.0;
+              VectorXd theta_o = theta, grad_o(K);
+              MatrixXd prec_o(K, K), obs_o(K, K);
+              double lp_o = lp;
+              bool ok_obs = false;
+              for (int bt = 0; bt < 4 && !ok_obs; ++bt) {
+                theta_o = theta;
+                for (size_t ai = 0; ai < active.size(); ++ai) theta_o(active[ai]) = theta(active[ai]) + damping_obs * step_obs(ai);
+                logpost_and_grad(theta_o, grad_o, prec_o, lp_o, false, &obs_o);
+                if (R_finite(lp_o) && lp_o >= lp - 1e-10) ok_obs = true; else damping_obs *= 0.5;
+              }
+              if (ok_obs) {
+                theta = theta_o; grad = grad_o; prec = prec_o; prec_obs = obs_o; lp = lp_o;
+                continue;
+              }
+            }
           }
 
           Eigen::LLT<MatrixXd> llt;
@@ -2775,11 +2817,12 @@ extern "C" SEXP _bigIRT_laplace_person_step_block_cpp_impl(
           VectorXd theta_try = theta;
           VectorXd grad_try(K);
           MatrixXd prec_try(K, K);
+          MatrixXd prec_obs_try(K, K);
           double lp_try = lp;
           for (int bt = 0; bt < 12; ++bt) {
             theta_try = theta;
             for (size_t ai = 0; ai < active.size(); ++ai) theta_try(active[ai]) = theta(active[ai]) + damping * step(ai);
-            logpost_and_grad(theta_try, grad_try, prec_try, lp_try, false);
+            logpost_and_grad(theta_try, grad_try, prec_try, lp_try, false, &prec_obs_try);
             if (R_finite(lp_try) && lp_try >= lp - 1e-10) {
               accepted = true;
               break;
@@ -2790,6 +2833,7 @@ extern "C" SEXP _bigIRT_laplace_person_step_block_cpp_impl(
           theta = theta_try;
           grad = grad_try;
           prec = prec_try;
+          prec_obs = prec_obs_try;
           lp = lp_try;
         }
 
@@ -2892,13 +2936,12 @@ extern "C" SEXP _bigIRT_laplace_person_step_block_cpp_impl(
     prior_mean, prior_precision, free_mask, K, jitter, max_attempts, max_iter, tol,
     keep_covariance, theta_mode, precision, precision_chol, logdet_precision, niter, converged, status_code, objective, covariance
   );
-  const bool has_item_predictors =
-    A_pred.ncol() > 0 || B_pred.ncol() > 0 || C_pred.ncol() > 0 || D_pred.ncol() > 0;
-  if (has_item_predictors) {
-    worker(0, static_cast<std::size_t>(Nsubs));
-  } else {
-    RcppParallel::parallelFor(static_cast<std::size_t>(0), static_cast<std::size_t>(Nsubs), worker, grain_size);
-  }
+  // Parallel whatever the covariates. This used to run serially whenever
+  // item predictors were present: the worker read its inputs through
+  // RcppParallel's RVector/RMatrix views, which exited the process on Windows
+  // in predictor-bearing fits. The inputs are now owned copies (as in the item
+  // kernel), and the outputs are written per subject, disjointly.
+  RcppParallel::parallelFor(static_cast<std::size_t>(0), static_cast<std::size_t>(Nsubs), worker, grain_size);
 
   if (keep_covariance) {
     return Rcpp::List::create(
