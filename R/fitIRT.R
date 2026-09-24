@@ -1520,12 +1520,17 @@ bigIRT_validate_fit_inputs <- function(dat, score, id, item, scale, pl, controls
 #'   Laplace approximation. The refinement starts from the Laplace optimum and
 #'   uses the same optimiser, so it is a short continuation, not a second fit.
 #'   \code{"auto"} (default): with free asymptotes (3PL, 4PL), by quadrature
-#'   up to three dimensions and not at all beyond (with a warning); without,
-#'   by \code{"laplace2"} from two dimensions on, where Laplace put 2PL
-#'   loadings 0.12 to 0.22 standard errors low on simulated data. \code{"agq"} always refines by quadrature (beyond
-#'   three dimensions with quasi-Monte Carlo points, see \code{agqPoints},
-#'   which need many points to be reliable: a 256-point refinement at nine
-#'   dimensions was measured running away). \code{"laplace2"} refines by the
+#'   at any dimension; without, by \code{"laplace2"} from two dimensions on,
+#'   where Laplace put 2PL loadings 0.12 to 0.22 standard errors low on
+#'   simulated data. \code{"agq"} always refines by quadrature: a product
+#'   Gauss-Hermite rule up to three dimensions, and beyond that an expansion
+#'   of each person's log integral in product rules on every pair (and,
+#'   coarsely, every triple) of dimensions, which on 3PL data at nine
+#'   dimensions, where Laplace was up to seven standard errors off, came
+#'   within 0.5 of a 16,384-point reference at a twelfth of its cost, and on
+#'   4PL data at five dimensions (Laplace 13 off) within 2 (quasi-Monte Carlo points instead,
+#'   with \code{agqPoints}, need many thousands to be reliable: a 256-point
+#'   refinement at nine dimensions was measured running away). \code{"laplace2"} refines by the
 #'   second-order Laplace approximation, each person's Laplace value plus its
 #'   leading correction from the third and fourth derivatives, which costs the
 #'   same at any dimension; at nine dimensions with cross loadings it cut the
@@ -1541,13 +1546,18 @@ bigIRT_validate_fit_inputs <- function(dat, score, id, item, scale, pl, controls
 #'   it alone. The reported \code{logLik} is then the quadrature marginal;
 #'   \code{laplaceStatus} records both values and what the refinement did.
 #' @param agqNodes Integer. Gauss-Hermite nodes per dimension for
-#'   \code{laplaceRefine} with up to three dimensions. The product rule costs
+#'   \code{laplaceRefine}. Up to three dimensions the product rule costs
 #'   \code{agqNodes^K} likelihood passes per person, so the default falls with
-#'   dimension: 9, 7 and 5 for one, two and three dimensions.
-#' @param agqPoints Integer. Beyond three dimensions the product rule is out of
-#'   reach, and the refinement uses this many quasi-Monte Carlo points per
-#'   person instead, in antithetic pairs, as importance sampling through the
-#'   Laplace Gaussian. Default 256.
+#'   dimension: 9, 7 and 5 for one, two and three dimensions. Beyond three,
+#'   the pairwise expansion costs about \code{K^2 agqNodes^2 / 2} nodes per
+#'   person, default 7, plus a three-way correction at 3 nodes per dimension
+#'   (\code{options(bigIRT.agq_nodes3 = 0)} drops it), about 2,200 nodes in
+#'   all at nine dimensions.
+#' @param agqPoints Integer. If given, beyond three dimensions the refinement
+#'   uses this many quasi-Monte Carlo points per person instead of the
+#'   pairwise expansion, in antithetic pairs, as importance sampling through
+#'   the Laplace Gaussian. Held fixed during the fit they can be exploited
+#'   unless there are many thousands. Default \code{NULL}.
 #' @param laplaceGradTol Numeric. Tolerance for the item-block gradient,
 #'   measured relative to the objective rather than as a raw norm: the reported
 #'   norm is divided by the same denominator \code{laplaceTolScale} selects for
@@ -2317,14 +2327,14 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     ##        dimension is within 0.1; second-order Laplace diverged on one of
     ##        two such fits, its correction unbounded where the 3PL curvature
     ##        is not positive.
-    ##   3PL  K >= 4: no rule measured safe yet, so Laplace, with a warning.
-    auto_kind <- if(!free_asymptotes) { if(sdat$Nscales >= 2L) "laplace2" else "none" } else
-      if(sdat$Nscales <= 3L) "agq" else "none"
-    if(identical(laplaceRefine, "auto") && free_asymptotes && sdat$Nscales >= 4L)
-      warning(paste0("Free asymptotes at ", sdat$Nscales, " dimensions: the Laplace estimates are ",
-        "not refined. At two and three dimensions Laplace put 3PL discriminations and ",
-        "difficulties 1 to 2 standard errors low on simulated data; laplaceRefine = \"agq\" ",
-        "with agqPoints of several thousand refines at higher cost."), call. = FALSE)
+    ##   3PL  K = 5 and 9: Laplace -1.1 to -1.6 on average, up to 7 (loadings
+    ##        16% low at K = 9). Second-order Laplace and fixed QMC points
+    ##        were exploited (49 and 145 SE off); the anchored-ANOVA expansion
+    ##        in low-dimensional quadrature rules (bigIRT_anova_rule,
+    ##        dev/optim/pairs_fit.R) was not: at K = 9 within 0.5 SE, at 10
+    ##        times Laplace's time and a twelfth of the reference's.
+    ##   4PL  K = 5: Laplace up to 13 SE off; the same rule within 2.
+    auto_kind <- if(!free_asymptotes) { if(sdat$Nscales >= 2L) "laplace2" else "none" } else "agq"
     refine_kind <- switch(laplaceRefine, none = "none", agq = "agq", laplace2 = "laplace2",
       auto = auto_kind)
     agq_rule <- switch(refine_kind, none = NULL,

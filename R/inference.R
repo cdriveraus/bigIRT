@@ -31,7 +31,9 @@ bigIRT_direct_eval_from_fit <- function(fit, keep_covariance = TRUE, cores = 1L,
   if(identical(fit$laplaceStatus$marginal, "laplace2")) ctx$laplace2 <- TRUE
   if(identical(fit$laplaceStatus$marginal, "agq"))
     ctx$agq <- bigIRT_agq_rules(sdat$Nscales, nodes = fit$laplaceStatus$agq_rule$nodes,
-      points = fit$laplaceStatus$agq_rule$points, inflate = fit$laplaceStatus$agq_rule$inflate)
+      points = fit$laplaceStatus$agq_rule$points, inflate = fit$laplaceStatus$agq_rule$inflate,
+      pairs = isTRUE(fit$laplaceStatus$agq_rule$pairs),
+      nodes3 = fit$laplaceStatus$agq_rule$nodes3 %||% 0L)
   par <- bigIRT_laplace_pack_direct_state(state, sdat, layout = layout)
   ev <- bigIRT_laplace_direct_objective(
     par = par, state = state, sdat = sdat,

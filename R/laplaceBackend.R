@@ -1877,7 +1877,8 @@ bigIRT_laplace_optimize_direct <- function(state, sdat, prior_precision,
     context$agq_centre <- NULL
     fit$refine <- list(approx = if(inherits(refine, "bigIRT_agq_rules")) "agq" else "laplace2",
       nodes = paste(refine$desc, collapse = ","),
-      rule = list(nodes = refine$nodes, points = refine$points, inflate = refine$inflate),
+      rule = list(nodes = refine$nodes, points = refine$points, inflate = refine$inflate,
+        pairs = isTRUE(refine$pairs), nodes3 = refine$nodes3),
       iter = rf$iter, evals = eval_count - lap_evals, terminate = rf$terminate,
       rounds = rounds, fixed_nodes = fixed_nodes,
       laplace_value = lap_value, agq_start = -e_r$f, agq_end = -rf$f,
@@ -1905,6 +1906,7 @@ bigIRT_laplace_optimize_direct <- function(state, sdat, prior_precision,
       rl <- bigIRT_laplace_lbfgs(lap_par, fg_f, minv = solver(e_l), maxit = as.integer(niter),
         gain_tol = tol, refresh = function(e){ m <- solver(e); get_eval(e$x); m },
         refresh_every = as.integer(getOption("bigIRT.fisher_refresh", 10L)))
+      fit$refine$rejected_par <- rf$par   # where the refinement went, for diagnosis
       fit$par <- rl$par; fit$iter <- rl$iter; fit$terminate <- rl$terminate
       fit$refine$reverted <- TRUE
     }

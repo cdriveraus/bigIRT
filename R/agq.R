@@ -44,21 +44,54 @@ bigIRT_agq_default_nodes <- function(K) c(9L, 7L, 5L)[min(max(as.integer(K), 1L)
 ## (3^9 = 19,683 nodes per person at nine dimensions), and the fully symmetric
 ## and sparse-grid rules that stay polynomial in d have negative weights from
 ## about four dimensions on, which an exponentiated integrand does not
-## forgive. So from four dimensions: `points` quasi-Monte Carlo points with
-## equal weights -- importance sampling through the Laplace Gaussian --
-## taken in antithetic pairs z, -z, which integrates every odd-order term of
-## the integrand's departure from that Gaussian exactly. The points are a
-## Halton sequence with a fixed Cranley-Patterson shift, so the rule, and the
-## objective, are the same at every evaluation.
+## forgive.
+##
+## So from four dimensions, by default (`pairs`), the anchored-ANOVA
+## expansion of the log integral (bigIRT_anova_rule): Gauss-Hermite rules
+## with `nodes` per dimension (default 7) on every coordinate plane and line
+## of the whitened space, plus a coarse three-way correction on every cube
+## (`nodes3`, default 3), combined with signed coefficients (see
+## agq_backend.cpp). Each piece is a low-dimensional rule of the kind that is
+## not exploited at K <= 3, and the pairwise part is already exact for the
+## fourth-order term of the integrand's departure from the Laplace Gaussian.
+## Cost grows as d^2 Q^2 / 2 + d^3 (Q3 - 1)^3 / 6 distinct nodes a person
+## (2,185 at d = 9). Measured against 16,384-point QMC optima
+## (dev/optim/pairs_fit.R; that reference is itself within 0.4 SE of a
+## 65,536-point one), on data with cross loadings where Laplace was up to 7
+## (3PL) and 13 (4PL) SE off, in loadings, mean / worst:
+##   3PL K = 9: pairs 5 -0.11 / 0.87; pairs 7 + t3 -0.02 / 0.50 (84 s,
+##              Laplace 8 s, reference 1,027 s)
+##   4PL K = 5: pairs 7 -0.56 / 2.6, and no better at 9 or 11 nodes (the
+##              truncation, not the quadrature); pairs 7 + t3 -0.39 / 1.95;
+##              pairs 7 + t5 -0.24 / 1.34 (47 s, reference 788 s).
+## No refinement with this rule ran away or was reverted by the guard.
+##
+## With `points`: that many quasi-Monte Carlo points with equal weights --
+## importance sampling through the Laplace Gaussian -- taken in antithetic
+## pairs z, -z, which integrates every odd-order term of the integrand's
+## departure from that Gaussian exactly. The points are a Halton sequence
+## with a fixed Cranley-Patterson shift, so the rule, and the objective, are
+## the same at every evaluation. Held fixed, they are exploitable at any count
+## an optimiser can afford: 256 points at nine dimensions ran away, and 4,096
+## left a correlation 145 SE off.
 ##
 ## `inflate` widens the quasi-Monte Carlo proposal to s times the Laplace
 ## scale. The kernel's formula stays exact: with Z = s z the weights become
 ## -log M + d log s - (s^2 - 1)|z|^2 / 2.
-bigIRT_agq_rules <- function(K, nodes = NULL, points = NULL, inflate = NULL){
+bigIRT_agq_rules <- function(K, nodes = NULL, points = NULL, inflate = NULL, pairs = is.null(points),
+  nodes3 = bigIRT_agq_default_nodes3()){
   K <- as.integer(K)
   Z <- vector("list", K); W <- vector("list", K); desc <- character(K)
+  grp <- vector("list", K); coef <- vector("list", K)
   for(d in seq_len(K)){
     Q <- if(!is.null(nodes)) as.integer(nodes) else bigIRT_agq_default_nodes(d)
+    if(isTRUE(pairs) && d >= 4L){
+      Q <- if(!is.null(nodes)) as.integer(nodes) else 7L
+      ex <- bigIRT_anova_rule(d, Q, as.integer(nodes3 %||% 0L))
+      Z[[d]] <- ex$Z; W[[d]] <- ex$log_weights; grp[[d]] <- ex$members; coef[[d]] <- ex$coefs
+      desc[d] <- sprintf("pairs%d%s^%d", Q, if(isTRUE(nodes3 > 0)) sprintf("+t%d", nodes3) else "", d)
+      next
+    }
     if(d <= 3L && (is.null(points) || Q^d <= 2L * as.integer(points))){
       r <- bigIRT_gh_rule(Q)
       g <- as.matrix(expand.grid(rep(list(seq_len(Q)), d)))
@@ -76,9 +109,64 @@ bigIRT_agq_rules <- function(K, nodes = NULL, points = NULL, inflate = NULL){
       desc[d] <- sprintf("qmc%d%s", nrow(z), if(s != 1) sprintf("x%.2g", s) else "")
     }
   }
-  structure(list(Z = Z, log_weights = W, desc = desc, nodes = nodes, points = points,
-    inflate = inflate), class = "bigIRT_agq_rules")
+  structure(list(Z = Z, log_weights = W, groups = grp, coefs = coef, desc = desc,
+    nodes = nodes, points = points, inflate = inflate, pairs = isTRUE(pairs),
+    nodes3 = if(isTRUE(pairs)) as.integer(nodes3 %||% 0L) else NULL),
+    class = "bigIRT_agq_rules")
 }
+
+## The anchored-ANOVA (cut-HDMR) expansion of a d-dimensional log integral,
+## as groups for the quadrature kernel. Truncated at order s, with every
+## subset u of the coordinates integrated by a Q^|u| product rule on the
+## coordinates in u (the others at the anchor, zero):
+##   log I ~ sum_{|u| <= s} (-1)^(s - |u|) C(d - |u| - 1, s - |u|) log I_u.
+## The rule here is the order-2 expansion at Q nodes plus, if Q3 > 0, the
+## order-3 correction (order 3 minus order 2) at Q3 nodes: pairs resolved
+## finely, and the three-way interactions a pairwise expansion misses taken
+## coarsely. The correction's coefficients sum to zero, the whole rule's to
+## one, and identical groups (same subset, same rule) are merged by adding
+## their coefficients. Nodes shared between groups are stored once.
+##
+## Why the correction: on 4PL data at five dimensions the pairwise optimum
+## stopped improving past 7 nodes (loadings still 0.47 SE low on average
+## against a 16,384-point reference), the signature of truncation rather
+## than quadrature error; the 3-node three-way correction halved the
+## per-person error there (dev/optim/mdim_pairs.R).
+bigIRT_anova_rule <- function(d, Q, Q3 = 0L){
+  terms <- list()   # key -> list(u, Q, coef)
+  add_order <- function(s, q, sign){
+    for(t in 0:min(s, d)){
+      cf <- sign * (-1)^(s - t) * choose(d - t - 1, s - t)
+      if(cf == 0) next
+      us <- if(t == 0L) list(integer(0)) else lapply(seq_len(choose(d, t)), function(j) utils::combn(d, t)[, j])
+      for(u in us){
+        key <- if(t == 0L) "anchor" else paste(q, paste(u, collapse = "."))
+        if(is.null(terms[[key]])) terms[[key]] <<- list(u = u, Q = q, coef = 0)
+        terms[[key]]$coef <<- terms[[key]]$coef + cf
+      }
+    }
+  }
+  add_order(2L, Q, 1)
+  if(Q3 > 0L){ add_order(3L, Q3, 1); add_order(2L, Q3, -1) }
+  terms <- Filter(function(x) abs(x$coef) > 1e-12, terms)
+  zs <- vector("list", length(terms)); ws <- zs; gs <- zs
+  for(g in seq_along(terms)){
+    u <- terms[[g]]$u; t <- length(u)
+    if(t == 0L){ zs[[g]] <- matrix(0, 1L, d); ws[[g]] <- 0; gs[[g]] <- g; next }
+    r <- bigIRT_gh_rule(terms[[g]]$Q)
+    ix <- as.matrix(expand.grid(rep(list(seq_along(r$nodes)), t)))
+    z <- matrix(0, nrow(ix), d); z[, u] <- r$nodes[ix]
+    zs[[g]] <- z; ws[[g]] <- rowSums(matrix(r$log_weights[ix], ncol = t)); gs[[g]] <- rep(g, nrow(ix))
+  }
+  Zf <- do.call(rbind, zs)
+  key <- apply(round(Zf, 12), 1, paste, collapse = ",")
+  list(Z = Zf[!duplicated(key), , drop = FALSE],
+    members = cbind(match(key, key[!duplicated(key)]), unlist(gs)),
+    log_weights = unlist(ws), coefs = vapply(terms, function(x) x$coef, 1))
+}
+
+## Nodes for the three-way correction of the pairwise expansion (0: none).
+bigIRT_agq_default_nodes3 <- function() as.integer(getOption("bigIRT.agq_nodes3", 3L))
 
 ## Measured at nine dimensions (dev/optim/mdim_study.R): 1.15 gave the
 ## smallest error at 256, 1024 and 4096 points; 1.5 was worse than none.
@@ -125,6 +213,9 @@ bigIRT_agq_fg_cpp_impl <- function(id, score, theta_mode, precision,
     bigirt_int_matrix(free_mask, nrow(theta_mode), K),
     lapply(rule$Z, function(z) matrix(as.numeric(z), nrow = nrow(z))),
     lapply(rule$log_weights, as.numeric),
+    if(any(!vapply(rule$groups, is.null, TRUE))) lapply(rule$groups, function(g)
+      if(is.null(g)) NULL else matrix(as.integer(g), ncol = 2L)) else NULL,
+    if(any(!vapply(rule$groups, is.null, TRUE))) lapply(rule$coefs, function(g) if(is.null(g)) NULL else as.numeric(g)) else NULL,
     as.logical(want_person)[1], as.integer(grain_size))
 }
 

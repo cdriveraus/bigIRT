@@ -124,7 +124,24 @@ inline AgqRow agq_row(const double y, const double eta, const double c, const do
 // rule is one such rule; so is a set of quasi-Monte Carlo points with equal
 // weights, for which the formula above is importance sampling through the
 // Laplace Gaussian. Weights must be positive.
-struct AgqRule { int M = 1, d = 0; std::vector<double> Z, lw; };
+//
+// A rule may also be a signed combination of several such rules: each group
+// of nodes is a rule in its own right, and the estimate is sum_g coef_g log(sum_{q in g} w_q f(z_q)) with the coefficients
+// summing to one. That is the pairwise (anchored-ANOVA) expansion,
+// log I ~ sum_{k<l} log I_kl - (d - 2) sum_k log I_k + (d-1)(d-2)/2 log I_0,
+// each term a Gauss-Hermite rule on a coordinate plane, line or the origin.
+// The planes share their axis nodes and the origin, so nodes are stored once
+// and a group lists its members (node, log weight in that group): at d = 9
+// with 5 nodes, 613 distinct nodes instead of 946. The Fisher identity still
+// gives the gradient, group by group, so pass 2 is unchanged but for signed
+// node weights sum_g coef_g pi_gq. Ungrouped (no members), lw is per node and
+// the rule is one group of coefficient one.
+struct AgqRule {
+  int M = 1, d = 0, G = 1;
+  std::vector<double> Z, lw, coef{1.0};
+  std::vector<int> mnode, mgrp;   // memberships: node, group (0-based)
+  std::vector<double> mlw;        // and the node's log weight in that group
+};
 
 struct AgqWorker : public RcppParallel::Worker {
   const BigIRTObsIndex& obs_by_subj;
@@ -264,8 +281,10 @@ struct AgqWorker : public RcppParallel::Worker {
       std::vector<double> lw(static_cast<std::size_t>(nq));
       std::vector<VectorXd> th(static_cast<std::size_t>(nq), m);
       std::vector<double> buf_eta(static_cast<std::size_t>(nq) * n), buf_c(buf_eta.size()), buf_d(buf_eta.size());
+      const bool grouped = rule.G > 1 || !rule.mnode.empty();
       for (long q = 0; q < nq; ++q) {
-        double lwq = rule.lw[static_cast<std::size_t>(q)];
+        // A grouped rule's weights belong to its memberships, not its nodes.
+        double lwq = grouped ? 0.0 : rule.lw[static_cast<std::size_t>(q)];
         VectorXd z(d);
         for (int k = 0; k < d; ++k) { z(k) = rule.Z[static_cast<std::size_t>(q + nq * k)];
           lwq += 0.5 * z(k) * z(k); }
@@ -289,22 +308,32 @@ struct AgqWorker : public RcppParallel::Worker {
         }
         lw[q] = lwq + lp;
       }
-      double mx = -INFINITY;
-      for (long q = 0; q < nq; ++q) mx = std::max(mx, lw[q]);
-      double se = 0.0;
-      for (long q = 0; q < nq; ++q) se += std::exp(lw[q] - mx);
-      const double lse = mx + std::log(se);
-      const double vi = lse - half_logdet + 0.5 * d * std::log(2.0 * M_PI);
+      // Each group's log-sum-exp over its memberships; ungrouped, one group
+      // whose members are the nodes. lw is now the node's log integrand.
+      const int G = rule.G;
+      const long nm = grouped ? static_cast<long>(rule.mnode.size()) : nq;
+      auto mem_node = [&](long j) -> long { return grouped ? rule.mnode[j] : j; };
+      auto mem_val = [&](long j) -> double { return grouped ? rule.mlw[j] + lw[rule.mnode[j]] : lw[j]; };
+      auto mem_grp = [&](long j) -> int { return grouped ? rule.mgrp[j] : 0; };
+      std::vector<double> gmx(static_cast<std::size_t>(G), -INFINITY), gse(static_cast<std::size_t>(G), 0.0);
+      for (long j = 0; j < nm; ++j) { const int g = mem_grp(j); gmx[g] = std::max(gmx[g], mem_val(j)); }
+      for (long j = 0; j < nm; ++j) { const int g = mem_grp(j); gse[g] += std::exp(mem_val(j) - gmx[g]); }
+      double comb = 0.0;
+      for (int g = 0; g < G; ++g) { gse[g] = gmx[g] + std::log(gse[g]); comb += rule.coef[g] * gse[g]; }
+      const double vi = comb - half_logdet + 0.5 * d * std::log(2.0 * M_PI);
       value += vi;
       if (value_by_subj) value_by_subj[subj] = vi;
 
-      // Pass 2: posterior expectations. Each row's weighted sums over the
-      // nodes are formed first and scattered into the gradient once per row.
+      // Pass 2: posterior expectations (signed, for a grouped rule: a node's
+      // weight sums over the groups it belongs to). Each row's weighted sums
+      // over the nodes are formed first and scattered into the gradient once
+      // per row.
       VectorXd Eth = VectorXd::Zero(K);
       MatrixXd Ett = MatrixXd::Zero(K, K);
-      std::vector<double> pw(static_cast<std::size_t>(nq));
+      std::vector<double> pw(static_cast<std::size_t>(nq), 0.0);
+      for (long j = 0; j < nm; ++j) { const int g = mem_grp(j);
+        pw[mem_node(j)] += rule.coef[g] * std::exp(mem_val(j) - gse[g]); }
       for (long q = 0; q < nq; ++q) {
-        pw[q] = std::exp(lw[q] - lse);
         const VectorXd dv = th[q] - mu;
         Eth += pw[q] * th[q];
         Ett += pw[q] * dv * dv.transpose();
@@ -388,7 +417,8 @@ extern "C" SEXP _bigIRT_agq_fg_cpp_impl(
     SEXP AbilitybetaSEXP, SEXP invspAparsSEXP, SEXP invspAbetaSEXP, SEXP BparsSEXP, SEXP BbetaSEXP,
     SEXP logitCparsSEXP, SEXP logitCbetaSEXP, SEXP logitDparsSEXP, SEXP logitDbetaSEXP,
     SEXP prior_meanSEXP, SEXP prior_precisionSEXP, SEXP free_maskSEXP,
-    SEXP nodesSEXP, SEXP log_weightsSEXP, SEXP want_personSEXP, SEXP grain_sizeSEXP) {
+    SEXP nodesSEXP, SEXP log_weightsSEXP, SEXP groupsSEXP, SEXP coefsSEXP,
+    SEXP want_personSEXP, SEXP grain_sizeSEXP) {
   BEGIN_RCPP
   Rcpp::IntegerVector id(idSEXP);
   Rcpp::NumericMatrix theta_mode(theta_modeSEXP);
@@ -406,13 +436,39 @@ extern "C" SEXP _bigIRT_agq_fg_cpp_impl(
   if (zl.size() != K || wl.size() != K) Rcpp::stop("AGQ: need one rule for each of 1..K free dimensions.");
   std::vector<AgqRule> rules(static_cast<std::size_t>(K) + 1);
   rules[0].M = 1; rules[0].d = 0; rules[0].lw.assign(1, 0.0);
+  const bool any_groups = !Rf_isNull(groupsSEXP);
   for (int d = 1; d <= K; ++d) {
     Rcpp::NumericMatrix Z = zl[d - 1];
     Rcpp::NumericVector lwv = wl[d - 1];
-    if (Z.ncol() != d || Z.nrow() != lwv.size() || Z.nrow() < 1)
+    const bool gd = any_groups && !Rf_isNull(Rcpp::List(groupsSEXP)[d - 1]);
+    if (Z.ncol() != d || Z.nrow() < 1 || (!gd && Z.nrow() != lwv.size()))
       Rcpp::stop("AGQ: rule %d has the wrong shape.", d);
     rules[d].M = Z.nrow(); rules[d].d = d;
     rules[d].Z.assign(Z.begin(), Z.end()); rules[d].lw.assign(lwv.begin(), lwv.end());
+  }
+  // Optional groups, per d (NULL for an ordinary rule): an integer matrix of
+  // memberships (node, group), 1-based, whose log weights are then that d's
+  // log_weights, one per membership; and the groups' coefficients.
+  if (!Rf_isNull(groupsSEXP)) {
+    Rcpp::List gl(groupsSEXP), cl(coefsSEXP);
+    if (gl.size() != K || cl.size() != K) Rcpp::stop("AGQ: need groups and coefficients for each of 1..K.");
+    for (int d = 1; d <= K; ++d) {
+      if (Rf_isNull(gl[d - 1])) continue;
+      Rcpp::IntegerMatrix gm = gl[d - 1];
+      Rcpp::NumericVector cv = cl[d - 1];
+      AgqRule& r = rules[d];
+      if (gm.ncol() != 2 || gm.nrow() != static_cast<int>(r.lw.size()))
+        Rcpp::stop("AGQ: rule %d needs one (node, group) row per log weight.", d);
+      r.G = cv.size();
+      r.coef.assign(cv.begin(), cv.end());
+      r.mlw = r.lw;
+      r.mnode.resize(gm.nrow()); r.mgrp.resize(gm.nrow());
+      for (int j = 0; j < gm.nrow(); ++j) {
+        if (gm(j, 0) < 1 || gm(j, 0) > r.M || gm(j, 1) < 1 || gm(j, 1) > r.G)
+          Rcpp::stop("AGQ: rule %d has a membership out of range.", d);
+        r.mnode[j] = gm(j, 0) - 1; r.mgrp[j] = gm(j, 1) - 1;
+      }
+    }
   }
   AgqWorker w(obs_by_subj, rules, K, P, want_person);
   auto cp_d = [](SEXP x) { return AgqVec_d(x); };

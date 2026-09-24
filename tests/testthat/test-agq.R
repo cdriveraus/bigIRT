@@ -158,4 +158,98 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     expect_lt(abs(q_only - brute), 1e-6 * abs(brute))
     expect_gt(abs((lap$value - lap$prior$value) - brute), 1e-3)
   })
+
+  ## The pairwise rule (pairs = TRUE, K >= 4) is a signed combination of
+  ## ordinary rules, one per coordinate plane, line and the origin.
+  pair_sim <- function(seed, Np = 200) {
+    set.seed(seed)
+    simIRT(Nsubs = Np, Nitems = 32, Nscales = 4, NitemsAnswered = 32,
+      AMean = 1.2, ASD = .3, BMean = 0, BSD = 1, logitCMean = -1.5, logitCSD = .3)
+  }
+
+  test_that("the pairwise rule is the signed combination of its groups", {
+    d <- agq_evaluator(pair_sim(5105), pl = 3)
+    lap <- d$ev(d$par, d$ctx)
+    pr <- bigIRT:::bigIRT_agq_rules(4L, nodes = 3L, pairs = TRUE, nodes3 = 0L)
+    expect_equal(sum(pr$coefs[[4]]), 1)
+    ## Nodes shared between groups are stored once: 1 + 4 * 2 + 6 * 4 of 67.
+    expect_equal(nrow(pr$Z[[4]]), 33L)
+    expect_equal(nrow(pr$groups[[4]]), 67L)
+    ## The pairwise coefficients: 1 on the planes, -(d - 2) on the lines,
+    ## (d - 1)(d - 2) / 2 on the origin.
+    expect_equal(sort(unique(pr$coefs[[4]])), c(-2, 1, 3))
+    by_rule <- function(rule, total = FALSE) { ctx <- d$ctx; ctx$agq <- rule; ctx$agq_centre <- lap$posterior
+      e <- d$ev(d$par, ctx); if(total) e$value else e$item_fg$value_by_subj }
+    vp <- by_rule(pr)
+    expect_length(vp, d$sdat$Nsubs)
+    ## Each group as an ordinary rule of its own.
+    vg <- vapply(seq_along(pr$coefs[[4]]), function(g) {
+      r <- pr; mm <- pr$groups[[4]]; j <- which(mm[, 2] == g)
+      r$Z[[4]] <- pr$Z[[4]][mm[j, 1], , drop = FALSE]; r$log_weights[[4]] <- pr$log_weights[[4]][j]
+      r$groups <- vector("list", 4L); r$coefs <- vector("list", 4L)
+      by_rule(r)
+    }, numeric(d$sdat$Nsubs))
+    expect_lt(max(abs(vp - vg %*% pr$coefs[[4]])), 1e-9)
+    ## The origin alone is the Laplace value (the Laplace path reports only
+    ## the total).
+    ## (Built by hand, so the check does not rest on the rule builder.)
+    r0 <- pr; r0$Z[[4]] <- matrix(0, 1L, 4L); r0$log_weights[[4]] <- 0
+    r0$groups <- vector("list", 4L); r0$coefs <- vector("list", 4L)
+    expect_lt(abs(by_rule(r0, total = TRUE) - lap$value), 1e-8 * abs(lap$value))
+    ## And it is not Laplace: the planes carry a correction.
+    expect_gt(max(abs(vp - vg[, 1])), 1e-3)
+  })
+
+  test_that("the three-way correction has the anchored-ANOVA coefficients", {
+    ## With the correction at the pairs' own node count it is exactly the
+    ## order-3 expansion: -(d - 3) on planes, C(d - 2, 2) on lines,
+    ## -C(d - 1, 3) on the origin, 1 on the cubes.
+    for(d in 4:6) {
+      r <- bigIRT:::bigIRT_anova_rule(d, 3L, 3L)
+      tsz <- vapply(split(r$members[, 1], r$members[, 2]), function(n)
+        sum(colSums(abs(r$Z[n, , drop = FALSE])) > 0), 1)
+      cf <- tapply(r$coefs, tsz, unique)
+      expect_equal(as.numeric(cf[c("0", "1", "2", "3")]),
+        c(-choose(d - 1, 3), choose(d - 2, 2), -(d - 3), 1), label = paste("d", d))
+      expect_equal(sum(r$coefs), 1)
+    }
+    ## At different node counts: the coarse three-way correction sums to zero.
+    r <- bigIRT:::bigIRT_anova_rule(5L, 7L, 3L)
+    r0 <- bigIRT:::bigIRT_anova_rule(5L, 7L, 0L)
+    expect_equal(sum(r$coefs), 1); expect_equal(sum(r0$coefs), 1)
+    expect_gt(length(r$coefs), length(r0$coefs))
+  })
+
+  test_that("pairwise-rule gradients match finite differences (3PL, K = 4, correlations)", {
+    d <- agq_evaluator(pair_sim(5106), pl = 3, ecorr = TRUE)
+    L <- d$layout
+    expect_gt(length(L$corr), 0L)
+    d$par[L$corr] <- 0.3
+    lap <- d$ev(d$par, d$ctx)
+    ctx <- d$ctx; ctx$agq <- bigIRT:::bigIRT_agq_rules(4L, nodes = 3L, pairs = TRUE)
+    ctx$agq_centre <- lap$posterior
+    f <- function(v) d$ev(v, ctx)
+    for(b in c("A", "B", "C", "C_mean"))
+      if(length(L[[b]])) expect_lt(slot_relerr(f, d$par, head(L[[b]], 3L)), 1e-6, label = b)
+    expect_lt(slot_relerr(f, d$par, head(L$corr, 3L)), 1e-6)
+  })
+
+  test_that("auto refines a four-dimensional 3PL by the pairwise rule, reproducibly", {
+    sim <- pair_sim(5107, Np = 250)
+    f <- suppressWarnings(fitIRT(sim$dat, pl = 3, cores = 1, estimateAbilityCorr = TRUE,
+      ebayes = FALSE, marginalApprox = "laplace", keepInternals = TRUE, verbose = 0,
+      plot = FALSE, dropPerfectScores = FALSE, agqNodes = 3L))
+    st <- f$laplaceStatus
+    expect_identical(st$marginal, "agq")
+    expect_true(isTRUE(st$agq_rule$pairs))
+    expect_false(isTRUE(st$refine$reverted))
+    ## A different objective from Laplace at the Laplace optimum, and the
+    ## refinement climbs it.
+    expect_gt(abs(st$refine$agq_start - st$refine$laplace_value), 1e-2)
+    expect_gte(st$refine$agq_end, st$refine$agq_start)
+    ## The standard-error path rebuilds the rule from what the fit stored; it
+    ## must land on the fit's own objective.
+    de <- bigIRT:::bigIRT_direct_eval_from_fit(f)
+    expect_lt(abs(de$eval$value - st$refine$agq_end), 1e-4 * abs(st$refine$agq_end))
+  })
 }

@@ -377,12 +377,17 @@ Gauss-Hermite quadrature, centred at the Laplace mode, instead of by the
 Laplace approximation. The refinement starts from the Laplace optimum and
 uses the same optimiser, so it is a short continuation, not a second fit.
 \code{"auto"} (default): with free asymptotes (3PL, 4PL), by quadrature
-up to three dimensions and not at all beyond (with a warning); without,
-by \code{"laplace2"} from two dimensions on, where Laplace put 2PL
-loadings 0.12 to 0.22 standard errors low on simulated data. \code{"agq"} always refines by quadrature (beyond
-three dimensions with quasi-Monte Carlo points, see \code{agqPoints},
-which need many points to be reliable: a 256-point refinement at nine
-dimensions was measured running away). \code{"laplace2"} refines by the
+at any dimension; without, by \code{"laplace2"} from two dimensions on,
+where Laplace put 2PL loadings 0.12 to 0.22 standard errors low on
+simulated data. \code{"agq"} always refines by quadrature: a product
+Gauss-Hermite rule up to three dimensions, and beyond that an expansion
+of each person's log integral in product rules on every pair (and,
+coarsely, every triple) of dimensions, which on 3PL data at nine
+dimensions, where Laplace was up to seven standard errors off, came
+within 0.5 of a 16,384-point reference at a twelfth of its cost, and on
+4PL data at five dimensions (Laplace 13 off) within 2 (quasi-Monte Carlo points instead,
+with \code{agqPoints}, need many thousands to be reliable: a 256-point
+refinement at nine dimensions was measured running away). \code{"laplace2"} refines by the
 second-order Laplace approximation, each person's Laplace value plus its
 leading correction from the third and fourth derivatives, which costs the
 same at any dimension; at nine dimensions with cross loadings it cut the
@@ -399,14 +404,19 @@ it alone. The reported \code{logLik} is then the quadrature marginal;
 \code{laplaceStatus} records both values and what the refinement did.}
 
 \item{agqNodes}{Integer. Gauss-Hermite nodes per dimension for
-\code{laplaceRefine} with up to three dimensions. The product rule costs
+\code{laplaceRefine}. Up to three dimensions the product rule costs
 \code{agqNodes^K} likelihood passes per person, so the default falls with
-dimension: 9, 7 and 5 for one, two and three dimensions.}
+dimension: 9, 7 and 5 for one, two and three dimensions. Beyond three,
+the pairwise expansion costs about \code{K^2 agqNodes^2 / 2} nodes per
+person, default 7, plus a three-way correction at 3 nodes per dimension
+(\code{options(bigIRT.agq_nodes3 = 0)} drops it), about 2,200 nodes in
+all at nine dimensions.}
 
-\item{agqPoints}{Integer. Beyond three dimensions the product rule is out of
-reach, and the refinement uses this many quasi-Monte Carlo points per
-person instead, in antithetic pairs, as importance sampling through the
-Laplace Gaussian. Default 256.}
+\item{agqPoints}{Integer. If given, beyond three dimensions the refinement
+uses this many quasi-Monte Carlo points per person instead of the
+pairwise expansion, in antithetic pairs, as importance sampling through
+the Laplace Gaussian. Held fixed during the fit they can be exploited
+unless there are many thousands. Default \code{NULL}.}
 
 \item{laplaceKeepCovariance}{Logical. Whether to keep full person covariance
 matrices on the Laplace path. Covariances are otherwise retained only when
