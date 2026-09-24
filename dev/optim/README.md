@@ -125,12 +125,21 @@ seed per cell.
 
 ## Performance (dev2 uncontended, `main` before this work -> now)
 
-M5 26 threads 22.9 -> 14.2 s; T2 26 threads 17.7 -> 11.1 s; C and F at 8
-threads 4.5 -> 2.9 and 5.5 -> 3.2 s; K = 9 3PL Laplace 35.6 -> 10.6 s (dense
-metric in C++). Metric build 0.32 -> 0.135 s at 8 threads (index-only
-ownership pass, cached prior curvature). These predate the CSR index; re-time
-with `timing_grid.sh`. Remaining serial pieces: ~2.2 s of R data preparation
-before the optimiser; see `prof_split.R`, `rprof_fit.R`, `metric_split.R`.
+Re-timed on the anova-refine build (2026-09-24, `timing_grid2.sh` pattern:
+main against the branch, refinement off / auto):
+
+| regime | threads | main | branch, none | branch, auto |
+|---|---|---|---|---|
+| M5 | 8 / 26 | 27.4 / 23.1 s | 17.1 / 11.5 s | 17.2 / 11.6 s |
+| T2 | 8 / 26 | 22.3 / 17.8 s | 12.6 / 8.5 s | 13.9 / 9.3 s |
+| C | 8 / 26 | 4.5 / 4.0 s | 2.8 / 2.3 s | 2.8 / 2.4 s |
+| F | 8 / 26 | 5.5 / 4.9 s | 3.1 / 2.5 s | 3.3 / 2.6 s |
+
+K = 9 3PL Laplace 35.6 -> 10.6 s (dense metric in C++); its anchored-ANOVA
+refinement, whole fit, 48 s at 26 threads. Metric build 0.32 -> 0.135 s at 8
+threads (index-only ownership pass, cached prior curvature). Remaining serial
+pieces: ~3 s of R data preparation before the optimiser (M5 at 26 threads:
+3.1 of 11.6 s); see `prof_split.R`, `rprof_fit.R`, `metric_split.R`.
 
 ## Workflow gotchas found here
 
