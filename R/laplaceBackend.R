@@ -1151,10 +1151,66 @@ bigIRT_laplace_direct_objective <- function(par, state, sdat, prior_precision,
   if(isTRUE(getOption("bigIRT.debug.direct", FALSE))) message("bigIRT debug: entering direct_fg kernel")
   ## Whether the adjoint gradient path runs decides whether the kernel should
   ## hand back the per-response effective values it derives along the way.
-  need_person_terms <- length(context$direct_layout$ability_beta) > 0L ||
+  ## With `context$agq` set, the person integrals are done by adaptive
+  ## Gauss-Hermite quadrature centred at the Laplace mode instead of by the
+  ## Laplace approximation itself (R/agq.R, src/agq_backend.cpp). The mode
+  ## solve is the same; what replaces the Laplace item kernel is a quadrature
+  ## over each person's posterior, and every gradient block becomes a
+  ## posterior expectation.
+  agq_rule <- context$agq
+  need_person_terms <- is.null(agq_rule) && (length(context$direct_layout$ability_beta) > 0L ||
     (isTRUE(context$estimateAbilityCorr) && length(context$direct_layout$corr) > 0L) ||
-    length(context$direct_layout$ability_mean) > 0L
-  direct_fg <- bigIRT_laplace_direct_block_fg_cpp_impl(
+    length(context$direct_layout$ability_mean) > 0L)
+  if(!is.null(agq_rule)) {
+    t_p0 <- wall_time_sec()
+    ## `context$agq_centre`, a posterior from an earlier evaluation, holds the
+    ## nodes where they are. The quadrature objective is then an ordinary
+    ## smooth function whose exact gradient is the Fisher-identity one, which
+    ## is what the gradient tests use.
+    posterior_q <- if(!is.null(context$agq_centre)) context$agq_centre else bigIRT_laplace_person_step_block_cpp_impl(
+      id = sdat$id[context$train_rows], score = sdat$score[context$train_rows],
+      theta_init = theta_init, person_pred = person_pred,
+      fixed_ability = row_context$fixed_ability, fixed_ability_value = row_context$fixed_ability_value,
+      A_ref = row_context$A_ref, A_fixed_value = row_context$fixed_A_value,
+      A_beta_row = row_context$A_beta_row, A_pred = row_context$A_pred,
+      B_ref = row_context$B_ref, B_fixed_value = row_context$B_fixed_value,
+      B_beta_row = row_context$B_beta_row, B_pred = row_context$B_pred,
+      C_ref = row_context$C_ref, C_fixed_value = row_context$C_fixed_value,
+      C_beta_row = row_context$C_beta_row, C_pred = row_context$C_pred,
+      D_ref = row_context$D_ref, D_fixed_value = row_context$D_fixed_value,
+      D_beta_row = row_context$D_beta_row, D_pred = row_context$D_pred,
+      Abilitybeta = ability_beta, invspApars = curState$invspApars, invspAbeta = curState$invspAbeta,
+      Bpars = curState$Bpars, Bbeta = curState$Bbeta, logitCpars = curState$logitCpars,
+      logitCbeta = curState$logitCbeta, logitDpars = curState$logitDpars, logitDbeta = curState$logitDbeta,
+      prior_mean = prior_mean, prior_precision = prior_mats$precision_array,
+      free_mask = 1L - sdat$fixedAbilityLogical, jitter = jitter, max_attempts = max_attempts,
+      max_iter = max_iter, tol = tol, keep_covariance = keep_covariance,
+      grain_size = context$grain_size)
+    t_p1 <- wall_time_sec()
+    aq <- bigIRT_agq_fg_cpp_impl(
+      id = sdat$id[context$train_rows], score = sdat$score[context$train_rows],
+      theta_mode = posterior_q$theta_mode, precision = posterior_q$precision,
+      person_pred = person_pred, fixed_ability = row_context$fixed_ability,
+      fixed_ability_value = row_context$fixed_ability_value,
+      A_ref = row_context$A_ref, A_fixed_value = row_context$fixed_A_value,
+      A_beta_row = row_context$A_beta_row, A_pred = row_context$A_pred,
+      B_ref = row_context$B_ref, B_fixed_value = row_context$B_fixed_value,
+      B_beta_row = row_context$B_beta_row, B_pred = row_context$B_pred,
+      C_ref = row_context$C_ref, C_fixed_value = row_context$C_fixed_value,
+      C_beta_row = row_context$C_beta_row, C_pred = row_context$C_pred,
+      D_ref = row_context$D_ref, D_fixed_value = row_context$D_fixed_value,
+      D_beta_row = row_context$D_beta_row, D_pred = row_context$D_pred,
+      Abilitybeta = ability_beta, invspApars = curState$invspApars, invspAbeta = curState$invspAbeta,
+      Bpars = curState$Bpars, Bbeta = curState$Bbeta, logitCpars = curState$logitCpars,
+      logitCbeta = curState$logitCbeta, logitDpars = curState$logitDpars, logitDbeta = curState$logitDbeta,
+      prior_mean = prior_mean, prior_precision = prior_mats$precision_array,
+      free_mask = 1L - sdat$fixedAbilityLogical, rule = agq_rule,
+      want_person = isTRUE(context$agq_want_person), grain_size = context$grain_size)
+    t_p2 <- wall_time_sec()
+    direct_fg <- list(value = aq$value, posterior = posterior_q, item_fg = aq,
+      timings = list(personKernelSec = t_p1 - t_p0, itemKernelSec = t_p2 - t_p1,
+        kernelSec = t_p2 - t_p0))
+  } else direct_fg <- bigIRT_laplace_direct_block_fg_cpp_impl(
     id = sdat$id[context$train_rows],
     score = sdat$score[context$train_rows],
     theta_init = theta_init,
@@ -1260,7 +1316,32 @@ bigIRT_laplace_direct_objective <- function(par, state, sdat, prior_precision,
         row_effective = row_effective, row_context = row_context
       )
   }
-  if(length(context$direct_layout$ability_beta)){
+  if(!is.null(agq_rule)){
+    ## Quadrature: each person-side block is a posterior expectation the
+    ## kernel has already summed. The ability mean and the covariate
+    ## coefficients enter through the prior's quadratic form and each row's
+    ## ability; the correlations through the prior alone.
+    lay <- context$direct_layout
+    if(length(lay$ability_beta))
+      approx_grad[lay$ability_beta] <- approx_grad[lay$ability_beta] +
+        as.numeric(direct_fg$item_fg$grad_ability_beta)[seq_along(lay$ability_beta)]
+    if(length(lay$ability_mean)){
+      mu <- as.numeric(curState$AbilityMean)
+      g_mu <- as.numeric(direct_fg$item_fg$grad_mean)
+      if(isTRUE(as.logical(sdat$dopriors))){
+        mu0 <- rep_len(as.numeric(sdat$AbilityMeandat), length(mu))
+        mu_sd <- pmax(rep_len(as.numeric(sdat$AbilityMeanSD), length(mu)), 1e-8)
+        prior$value <- prior$value + sum(stats::dnorm(mu, mean = mu0, sd = mu_sd, log = TRUE))
+        g_mu <- g_mu - (mu - mu0) / (mu_sd^2)
+      }
+      approx_grad[lay$ability_mean] <- g_mu
+    }
+    if(isTRUE(context$estimateAbilityCorr) && length(lay$corr))
+      approx_grad[lay$corr] <- approx_grad[lay$corr] + bigIRT_agq_corr_grad(
+        curState$AbilityCorrPars, direct_fg$item_fg$S, sdat,
+        paramization = context$corr_paramization, jitter = jitter)
+  }
+  if(is.null(agq_rule) && length(context$direct_layout$ability_beta)){
     ## Accumulate. The item prior above already wrote this slot's beta prior
     ## gradient, and assigning over it dropped that term; every item beta slot
     ## accumulates for the same reason. Against finite differences the missing
@@ -1281,7 +1362,7 @@ bigIRT_laplace_direct_objective <- function(par, state, sdat, prior_precision,
     )
   }
   ability_mean_sec <- 0
-  if(length(context$direct_layout$ability_mean)){
+  if(is.null(agq_rule) && length(context$direct_layout$ability_mean)){
     t_mean0 <- wall_time_sec()
     ability_mean_contrib <- bigIRT_laplace_ability_mean_contribution(
       state = curState,
@@ -1296,7 +1377,7 @@ bigIRT_laplace_direct_objective <- function(par, state, sdat, prior_precision,
     ability_mean_sec <- wall_time_sec() - t_mean0
   }
   corr_grad_sec <- 0
-  if(isTRUE(context$estimateAbilityCorr) && length(context$direct_layout$corr)){
+  if(is.null(agq_rule) && isTRUE(context$estimateAbilityCorr) && length(context$direct_layout$corr)){
     t_corr0 <- wall_time_sec()
     approx_grad[context$direct_layout$corr] <- approx_grad[context$direct_layout$corr] + bigIRT_laplace_corr_grad(
       state = curState,
@@ -1417,7 +1498,7 @@ bigIRT_laplace_optimize_direct <- function(state, sdat, prior_precision,
   corr_paramization = c("normalized_chol", "stan_corsqrt"),
   collect_history = FALSE, plot_callback = NULL, plot_every = 1L,
   verbose = 0L, trace_fn = NULL, stochastic = FALSE, polish_steps = 8L,
-  polish_tol = 1e-8, optimizer = c("fisher", "mize")){
+  polish_tol = 1e-8, optimizer = c("fisher", "mize"), refine = NULL){
   corr_paramization <- match.arg(corr_paramization)
   optimizer <- match.arg(optimizer)
   direct_layout <- bigIRT_laplace_direct_layout(sdat, estimateAbilityCorr = estimateAbilityCorr)
@@ -1575,13 +1656,15 @@ bigIRT_laplace_optimize_direct <- function(state, sdat, prior_precision,
     target_fg(par)$gr
   }
   minv <- NULL
+  fg_f <- function(par){
+    r <- get_eval(par)
+    list(f = -r$value, g = -r$approx_grad, ev = r, x = par)
+  }
+  gfun <- function(par) -get_eval(par)$approx_grad
+  ## `context` is read when called, so the solver follows the objective when
+  ## the quadrature refinement below switches it.
+  solver <- function(e) bigIRT_laplace_metric_solver(e, sdat, context, direct_layout, gfun)
   if(identical(optimizer, "fisher") && !isTRUE(stochastic)){
-    fg_f <- function(par){
-      r <- get_eval(par)
-      list(f = -r$value, g = -r$approx_grad, ev = r, x = par)
-    }
-    gfun <- function(par) -get_eval(par)$approx_grad
-    solver <- function(e) bigIRT_laplace_metric_solver(e, sdat, context, direct_layout, gfun)
     minv <- solver(fg_f(init))
     ## Finite-difference columns move the cache and the warm start; put both
     ## back at the point the optimiser is about to use.
@@ -1618,8 +1701,12 @@ bigIRT_laplace_optimize_direct <- function(state, sdat, prior_precision,
     ## R/laplaceOptimizer.R. `tol` is the predicted gain, in nats, below which
     ## it stops.
     refresh <- function(e){ m <- solver(e); get_eval(e$x); m }
+    ## When quadrature refinement follows, polishing the Laplace optimum is
+    ## wasted: the refinement's target sits several nats of predicted gain
+    ## away from it on 3PL and 4PL data. So the Laplace stage stops early.
+    lap_tol <- if(!is.null(refine)) max(tol, getOption("bigIRT.agq_switch_gain", 0.1)) else tol
     fit <- bigIRT_laplace_lbfgs(init, fg_f, minv = minv, maxit = as.integer(niter),
-      gain_tol = tol, refresh = refresh,
+      gain_tol = lap_tol, refresh = refresh,
       refresh_every = as.integer(getOption("bigIRT.fisher_refresh", 10L)))
     fit$metric <- attr(minv, "metric")
   } else {
@@ -1689,7 +1776,80 @@ bigIRT_laplace_optimize_direct <- function(state, sdat, prior_precision,
     }
   }
   fit$polish <- polish
+
+  ## Quadrature refinement. From the Laplace optimum, continue on the
+  ## objective with the person integrals done by adaptive Gauss-Hermite
+  ## quadrature (`refine`, rules from bigIRT_agq_rules), with the same
+  ## optimiser and metric. Laplace is biased for free asymptotes and can hold
+  ## a fit at an optimum the exact marginal does not have (src/agq_backend.cpp);
+  ## starting where it ended makes the refinement a short run rather than a
+  ## second fit. The convergence verdict is then the refinement's.
+  if(!is.null(refine) && !isTRUE(stochastic)){
+    lap_value <- get_eval(fit$par)$value
+    lap_evals <- eval_count
+    context$agq <- refine
+    ## Nodes are held where the Laplace posterior puts them and re-centred at
+    ## each metric refresh, not at every evaluation. With the nodes fixed the
+    ## objective is an ordinary smooth function whose Fisher-identity gradient
+    ## is exact, and an evaluation skips the person mode solve -- about half
+    ## its cost. Re-centring moves the value by the change in quadrature
+    ## error, so the search takes the re-evaluated point from there, and the
+    ## fit only stops once a re-centred point shows no gain left.
+    fixed_nodes <- isTRUE(getOption("bigIRT.agq_fixed_nodes", TRUE))
+    recentre <- function(par){
+      context$agq_centre <<- NULL
+      cache_par <<- NULL; cache_eval <<- NULL
+      e <- fg_f(par)
+      if(fixed_nodes) context$agq_centre <<- e$ev$posterior
+      e
+    }
+    e_r <- recentre(fit$par)
+    m_r <- solver(e_r)
+    get_eval(fit$par)
+    refresh_r <- function(e){
+      m <- solver(e)
+      list(minv = m, e = recentre(e$x))
+    }
+    rf_iter <- 0L; rounds <- 0L; x_r <- fit$par
+    repeat {
+      rounds <- rounds + 1L
+      rf <- bigIRT_laplace_lbfgs(x_r, fg_f, minv = m_r, maxit = as.integer(niter),
+        gain_tol = tol, refresh = refresh_r,
+        refresh_every = as.integer(getOption("bigIRT.fisher_refresh", 10L)))
+      rf_iter <- rf_iter + rf$iter
+      x_r <- rf$par
+      if(!fixed_nodes || rf$iter == 0L || rounds >= 5L ||
+         !(rf$terminate$what %in% c("gain", "noise_floor"))) break
+      ## Converged on these nodes: re-centre, and go on only if that left
+      ## something to gain.
+      e_c <- recentre(x_r)
+      m_r <- solver(e_c)
+      get_eval(x_r)
+    }
+    rf$iter <- rf_iter
+    ## What is reported is the objective with the nodes centred at the end
+    ## point itself, whatever round the loop stopped in: the final evaluation
+    ## below re-centres.
+    context$agq_centre <- NULL
+    fit$refine <- list(approx = "agq", nodes = paste(refine$desc, collapse = ","),
+      rule = list(nodes = refine$nodes, points = refine$points, inflate = refine$inflate),
+      iter = rf$iter, evals = eval_count - lap_evals, terminate = rf$terminate,
+      rounds = rounds, fixed_nodes = fixed_nodes,
+      laplace_value = lap_value, agq_start = -e_r$f, agq_end = -rf$f,
+      metric = attr(m_r, "metric"), laplace_iter = fit$iter,
+      laplace_terminate = fit$terminate)
+    fit$par <- rf$par
+    fit$iter <- rf$iter
+    fit$terminate <- rf$terminate
+  }
+  ## The final evaluation is fresh, with the clipping counters reset, so they
+  ## describe the fitted point rather than every trial point the line search
+  ## visited: counted along the path, whether a fit "clipped a lot" depended
+  ## on the optimiser that got there.
+  bigIRT_laplace_clip_counts(reset = TRUE)
+  cache_par <- NULL; cache_eval <- NULL
   final <- get_eval(fit$par)
+  fit$clip_final <- bigIRT_laplace_clip_counts(reset = FALSE)
   fit$masked_grad_norm <- sqrt(sum(final$approx_grad^2))
   ## Keep the vector, not only its norm.  A single scaled norm cannot say which
   ## block failed to settle, and that is exactly the question asked whenever a

@@ -276,7 +276,10 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
       pl = 4L, marginalApprox = "laplace", cores = 1L, verbose = 0L, plot = FALSE,
       priors = TRUE, ebayes = FALSE, normalise = FALSE, dropPerfectScores = FALSE,
       personPreds = "xcov", estimateAbilityCorr = TRUE, keepInternals = TRUE,
-      laplaceKeepCovariance = TRUE)
+      laplaceKeepCovariance = TRUE,
+      ## This is about the Laplace kernel's own row outputs; a refined fit is
+      ## re-evaluated by the quadrature kernel, which has none.
+      laplaceRefine = "none")
     dd <- bigIRT:::bigIRT_direct_eval_from_fit(f, keep_covariance = TRUE)
     ev <- bigIRT:::bigIRT_laplace_direct_objective(par = dd$par, state = dd$state,
       sdat = dd$sdat, prior_precision = f$internals$priorPrecision,

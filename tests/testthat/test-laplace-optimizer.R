@@ -243,6 +243,72 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     }
   })
 
+  test_that("the C++ block-diagonal metric equals the R assembly", {
+    ## The test above holds the default (C++) build against the dense F. This
+    ## one covers what it does not: item-specific covariate coefficients, and a
+    ## two-dimensional fit with estimated correlations, whose columns are
+    ## differenced rather than assembled.
+    set.seed(71)
+    ip <- matrix(rnorm(20 * 2, 0, .3), 20, 2)
+    s1 <- simIRT(Nsubs = 500, Nitems = 20, NitemsAnswered = 10, AMean = 1.2, ASD = .3, BSD = 1,
+      logitCMean = -1.5, logitCSD = .5, itemPreds = ip, BitemPredEffects = matrix(c(.5, -.3), 1))
+    f1 <- suppressWarnings(fitIRT(dat = s1$dat, pl = 3, marginalApprox = "laplace", cores = 1,
+      ebayes = FALSE, keepInternals = TRUE, BitemPreds = c("V1", "V2"), itemSpecificBetas = TRUE,
+      laplaceOuterIter = 5))
+    s2 <- simIRT(Nsubs = 500, Nitems = 24, Nscales = 2, NitemsAnswered = 12, AMean = 1.2, ASD = .3,
+      BSD = 1, logitCMean = -20, logitCSD = 0)
+    f2 <- suppressWarnings(fitIRT(dat = s2$dat, pl = 2, marginalApprox = "laplace", cores = 1,
+      ebayes = FALSE, keepInternals = TRUE, estimateAbilityCorr = TRUE, laplaceOuterIter = 5))
+    for(f in list(f1, f2)){
+      d <- bigIRT:::bigIRT_direct_eval_from_fit(f, keep_covariance = TRUE)
+      gfun <- function(p) -bigIRT:::bigIRT_laplace_direct_objective(par = p, state = d$state,
+        sdat = d$sdat, prior_precision = f$internals$priorPrecision,
+        theta_init = d$eval$posterior$theta_mode, keep_covariance = TRUE, context = d$context,
+        tol = 1e-10, max_iter = 200L)$approx_grad
+      g0 <- gfun(d$par)
+      solve_with <- function(impl){
+        old <- options(bigIRT.blockdiag_impl = impl); on.exit(options(old))
+        bigIRT:::bigIRT_laplace_blockdiag_solver(d$eval, d$par, g0, d$sdat, d$context,
+          d$layout, gfun = gfun)
+      }
+      mc <- solve_with("cpp"); mr <- solve_with("R")
+      expect_true(is.function(mc)); expect_true(is.function(mr))
+      n <- length(d$par)
+      V <- matrix(rnorm(n * 5), n, 5)
+      rel <- max(abs(apply(V, 2, mc) - apply(V, 2, mr))) / max(abs(apply(V, 2, mr)))
+      expect_lt(rel, 1e-8)
+    }
+    expect_gt(length(bigIRT:::bigIRT_direct_eval_from_fit(f1)$layout$B_beta), 20L)
+    expect_gt(length(bigIRT:::bigIRT_direct_eval_from_fit(f2)$layout$corr), 0L)
+  })
+
+  test_that("the closed-form correlation information matches its direct definition", {
+    ## 1/2 sum_i tr(W_i dS_j W_i dS_l), W_i = (Sigma + D_i^-1)^-1, computed the
+    ## long way -- explicit inverses and traces -- against the Kronecker
+    ## accumulation and the D - D V D identity the package uses.
+    set.seed(3)
+    K <- 3L; N <- 40L; sdv <- c(1, 1.5, 0.8)
+    cp <- c(0.4, -0.3, 0.2)
+    Sig <- function(p) diag(sdv) %*% bigIRT:::bigIRT_laplace_corr_from_packed(p, K,
+      paramization = "normalized_chol") %*% diag(sdv)
+    S0 <- Sig(cp); P0 <- solve(S0)
+    Dl <- lapply(seq_len(N), function(i){ X <- matrix(rnorm(K * 5), 5, K); crossprod(X) })
+    H <- array(0, c(K, K, N)); for(i in seq_len(N)) H[, , i] <- P0 + Dl[[i]]
+    ev <- list(posterior = list(precision = H), prior_mats = list(precision = P0),
+      state = list(AbilityCorrPars = cp))
+    sdat <- list(Nscales = K, Nsubs = N, AbilitySD = sdv)
+    lay <- list(corr = 1:3); attr(lay, "par_scale") <- c(1, 1, 1)
+    Fa <- bigIRT:::bigIRT_laplace_corr_fisher(ev, sdat, lay, paramization = "normalized_chol")
+    dS <- lapply(1:3, function(j){ h <- 1e-6; pp <- cp; pm <- cp; pp[j] <- pp[j] + h; pm[j] <- pm[j] - h
+      (Sig(pp) - Sig(pm)) / (2 * h) })
+    Fd <- matrix(0, 3, 3)
+    for(i in seq_len(N)){
+      W <- solve(S0 + solve(Dl[[i]]))
+      for(j in 1:3) for(l in 1:3) Fd[j, l] <- Fd[j, l] + 0.5 * sum(diag(W %*% dS[[j]] %*% W %*% dS[[l]]))
+    }
+    expect_lt(max(abs(Fa - Fd)) / max(abs(Fd)), 1e-6)
+  })
+
   test_that("forced to the block-diagonal metric, the optimiser still reaches the mize optimum", {
     for(cfg in list(list(pl = 2, preds = TRUE), list(pl = 3, preds = FALSE))){
       fm <- opt_fit(pl = cfg$pl, preds = cfg$preds, ns = 3000, ni = 120, na = 25, optimizer = "mize")

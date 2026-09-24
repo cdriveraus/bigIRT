@@ -61,6 +61,9 @@ fitIRT(
   laplacePolish = 8L,
   laplacePersonTol = 1e-06,
   laplaceOptimizer = c("fisher", "mize"),
+  laplaceRefine = c("auto", "agq", "none"),
+  agqNodes = NULL,
+  agqPoints = NULL,
   laplaceKeepCovariance = FALSE,
   laplaceDiagnostics = FALSE,
   laplacePlot = FALSE,
@@ -327,18 +330,6 @@ that it is far stricter at large N: a tolerance chosen for
 \code{\"relative\"} should not be carried over unchanged. The scale used
 is recorded in \code{laplaceStatus$tolerance_scale}.}
 
-\item{laplaceOptimizer}{Character. Optimiser for the Laplace backend.
-\code{"fisher"} (default) is L-BFGS whose initial inverse Hessian is
-shaped by the Fisher information of the marginal likelihood, including
-the coupling between items that runs through the persons, and which stops
-when the predicted gain in log-likelihood falls below \code{laplaceTol}
-nats. \code{"mize"} is the previous path: mize's L-BFGS stopping on the
-change in objective, followed by the block-Newton polish. Measured on
-simulated 2PL to 4PL designs, the Fisher path needed about a third of the
-objective evaluations and half the time, and ended closer to the optimum.
-It builds the information as a sparse matrix, and falls back to
-\code{"mize"} when that would exceed about 5e7 nonzeros.}
-
 \item{laplaceGradTol}{Numeric. Tolerance for the item-block gradient,
 measured relative to the objective rather than as a raw norm: the reported
 norm is divided by the same denominator \code{laplaceTolScale} selects for
@@ -367,6 +358,46 @@ different warm starts differed by about 1e-3 nats at 5,000 persons and 1e-2
 at 40,000 -- above the optimiser's own stopping tolerance
 (\code{laplaceTol}). At 1e-6 it is about 1e-5 and 1e-4, for 3 to 5 per
 cent more time per fit. Default is 1e-6 (1e-4 before September 2026).}
+
+\item{laplaceOptimizer}{Character. Optimiser for the Laplace backend.
+\code{"fisher"} (default) is L-BFGS whose initial inverse Hessian is
+shaped by the Fisher information of the marginal likelihood, including
+the coupling between items that runs through the persons, and which stops
+when the predicted gain in log-likelihood falls below \code{laplaceTol}
+nats. \code{"mize"} is the previous path: mize's L-BFGS stopping on the
+change in objective, followed by the block-Newton polish. Measured on
+simulated 2PL to 4PL designs, the Fisher path needed about a third of the
+objective evaluations and half the time, and ended closer to the optimum.
+It builds the information as a sparse matrix, and falls back to
+\code{"mize"} when that would exceed about 5e7 nonzeros.}
+
+\item{laplaceRefine}{Character. Whether to finish a \code{"laplace"} fit on
+the marginal likelihood with each person's integral done by adaptive
+Gauss-Hermite quadrature, centred at the Laplace mode, instead of by the
+Laplace approximation. The refinement starts from the Laplace optimum and
+uses the same optimiser, so it is a short continuation, not a second fit.
+\code{"auto"} (default) refines whenever an asymptote is estimated (3PL,
+4PL); \code{"agq"} always refines;
+\code{"none"} never does. Why: Laplace is biased when asymptotes are free.
+Measured on simulated 3PL data, the exact-marginal optimum sat about half
+a standard error above the Laplace one in every discrimination (loadings
+about 5 per cent larger), and on 4PL data nearly one standard error (8 to
+13 per cent); the bias is fixed per person while standard errors shrink
+with N, so intervals under-cover more as data grow. Laplace can also hold
+a fit at an optimum the exact marginal does not have. For the 2PL the
+shift was about 0.03 standard errors, which is why \code{"auto"} leaves
+it alone. The reported \code{logLik} is then the quadrature marginal;
+\code{laplaceStatus} records both values and what the refinement did.}
+
+\item{agqNodes}{Integer. Gauss-Hermite nodes per dimension for
+\code{laplaceRefine} with up to three dimensions. The product rule costs
+\code{agqNodes^K} likelihood passes per person, so the default falls with
+dimension: 9, 5 and 3 for one, two and three dimensions.}
+
+\item{agqPoints}{Integer. Beyond three dimensions the product rule is out of
+reach, and the refinement uses this many quasi-Monte Carlo points per
+person instead, in antithetic pairs, as importance sampling through the
+Laplace Gaussian. Default 256.}
 
 \item{laplaceKeepCovariance}{Logical. Whether to keep full person covariance
 matrices on the Laplace path. Covariances are otherwise retained only when

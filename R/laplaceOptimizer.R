@@ -255,6 +255,69 @@ bigIRT_laplace_factor_metric <- function(H){
   NULL
 }
 
+## Fisher information of the latent correlation parameters, in closed form,
+## optimiser coordinates.
+##
+## Person i's Laplace posterior is N(m_i, V_i) with precision H_i = P0 + D_i,
+## D_i the information from the data. Read the mode as a measurement of theta_i
+## with error covariance D_i^-1; its marginal is then N(mu, Sigma + D_i^-1), so
+##
+##   F_jl = 1/2 sum_i tr(W_i dSigma_j W_i dSigma_l),
+##   W_i  = (Sigma + D_i^-1)^-1 = D_i - D_i V_i D_i,
+##
+## which never inverts D_i and runs from Sigma^-1 (perfect information) to 0
+## (none). Accumulated as sum_i W_i (x) W_i, one crossprod of an N x K^2
+## matrix. It replaces a finite-difference column per correlation -- one
+## objective evaluation each, 36 per metric build at nine dimensions.
+## dSigma is differenced through the correlation constructor, a K x K
+## closed form.
+bigIRT_laplace_corr_fisher <- function(ev, sdat, layout, paramization, h = 1e-6){
+  idx <- layout$corr
+  if(!length(idx)) return(NULL)
+  K <- as.integer(sdat$Nscales); N <- as.integer(sdat$Nsubs)
+  Hp <- array(as.numeric(ev$posterior$precision), c(K, K, N))
+  P0 <- as.matrix(ev$prior_mats$precision)
+  sdv <- pmax(as.numeric(sdat$AbilitySD), 1e-8)
+  cp <- ev$state$AbilityCorrPars
+  Sig <- function(p) diag(sdv, K) %*% bigIRT_laplace_corr_from_packed(p, K, paramization = paramization) %*% diag(sdv, K)
+  J <- vapply(seq_along(cp), function(j){
+    pp <- cp; pm <- cp; pp[j] <- pp[j] + h; pm[j] <- pm[j] - h
+    as.numeric(Sig(pp) - Sig(pm)) / (2 * h)
+  }, numeric(K * K))
+  J <- matrix(J, nrow = K * K)
+  Wv <- matrix(0, N, K * K)
+  for(i in seq_len(N)){
+    H <- Hp[, , i]; D <- H - P0
+    W <- D - D %*% solve(H, D)
+    Wv[i, ] <- as.numeric((W + t(W)) / 2)
+  }
+  C <- crossprod(Wv)
+  ## C[(a,c),(b,d)] = sum_i W[a,c] W[b,d]; the Kronecker sum wants (a,b),(c,d).
+  ix <- as.matrix(expand.grid(a = seq_len(K), b = seq_len(K), c = seq_len(K), d = seq_len(K)))
+  M <- matrix(C[cbind((ix[, "c"] - 1L) * K + ix[, "a"], (ix[, "d"] - 1L) * K + ix[, "b"])], K * K, K * K)
+  ## Rows of M: (a,b) with a fastest; columns (c,d). vec(dSigma) indexes (row, col), row fastest.
+  F <- 0.5 * crossprod(J, M %*% J)
+  ps <- attr(layout, "par_scale")
+  s <- if(length(ps) >= max(idx)) ps[idx] else rep(1, length(idx))
+  (F + t(F)) / 2 * outer(s, s)
+}
+
+## Write the closed-form correlation block into a metric matrix M, whose rows
+## and columns `pos` hold the correlation parameters in layout order, and
+## zero their coupling to the rest. Returns M unchanged when the option asks
+## for finite differences or there are no correlations; `done` then says
+## which parameters still need differencing.
+bigIRT_laplace_use_corr_block <- function(M, pos, ev, sdat, context, layout){
+  if(!length(pos) || identical(getOption("bigIRT.corr_metric", "analytic"), "fd"))
+    return(list(M = M, done = integer(0)))
+  Fc <- tryCatch(bigIRT_laplace_corr_fisher(ev, sdat, layout,
+    paramization = context$corr_paramization %||% "normalized_chol"), error = function(e) NULL)
+  if(is.null(Fc) || any(!is.finite(Fc))) return(list(M = M, done = integer(0)))
+  M[pos, ] <- 0; M[, pos] <- 0
+  M[pos, pos] <- Fc
+  list(M = M, done = layout$corr)
+}
+
 ## Columns of F for `cols`: Fisher-vector products for the ones the Fisher
 ## construction describes, forward differences of the gradient (one
 ## evaluation each, through `gfun`) for the rest. n x length(cols).
@@ -282,7 +345,9 @@ bigIRT_laplace_fisher_solver <- function(ev, x, g, sdat, context, layout, gfun, 
   und <- attr(H, "undescribed")
   if(length(und)){
     H <- as.matrix(H)
-    for(j in und){
+    cb <- bigIRT_laplace_use_corr_block(H, layout$corr, ev, sdat, context, layout)
+    H <- cb$M
+    for(j in setdiff(und, cb$done)){
       hj <- h * max(1, abs(x[j]))
       xp <- x; xp[j] <- xp[j] + hj
       col <- (gfun(xp) - g) / hj
@@ -318,6 +383,8 @@ bigIRT_laplace_fisher_solver <- function(ev, x, g, sdat, context, layout, gfun, 
 ## exact F applied matrix-free by conjugate gradients, at a fraction of the
 ## cost, and 2-4x fewer than mize.
 bigIRT_laplace_blockdiag_solver <- function(ev, x, g, sdat, context, layout, gfun, h = 1e-4){
+  if(!identical(getOption("bigIRT.blockdiag_impl", "cpp"), "R"))
+    return(bigIRT_laplace_blockdiag_solver_cpp(ev, x, g, sdat, context, layout, gfun, h = h))
   P <- tryCatch(bigIRT_laplace_fisher_parts(ev, sdat, context, layout), error = function(e) NULL)
   if(is.null(P)) return(NULL)
   n <- P$n
@@ -343,7 +410,12 @@ bigIRT_laplace_blockdiag_solver <- function(ev, x, g, sdat, context, layout, gfu
   Bl <- as(Bl, "TsparseMatrix")
   ti <- local[Bl@i + 1L]; tj <- local[Bl@j + 1L]; tx <- Bl@x
   if(length(G)){
-    FG <- bigIRT_laplace_fisher_columns(P, G, x, g, gfun, h = h)[G, , drop = FALSE]
+    cpos <- match(layout$corr, G)
+    FG <- matrix(0, length(G), length(G))
+    fd_cols <- setdiff(G, if(identical(getOption("bigIRT.corr_metric", "analytic"), "fd")) integer(0) else layout$corr)
+    if(length(fd_cols))
+      FG[, match(fd_cols, G)] <- bigIRT_laplace_fisher_columns(P, fd_cols, x, g, gfun, h = h)[G, , drop = FALSE]
+    FG <- bigIRT_laplace_use_corr_block(FG, cpos[!is.na(cpos)], ev, sdat, context, layout)$M
     FG <- (FG + t(FG)) / 2
     ti <- c(ti, rep(G, times = length(G))); tj <- c(tj, rep(G, each = length(G)))
     tx <- c(tx, as.numeric(FG))
@@ -356,6 +428,97 @@ bigIRT_laplace_blockdiag_solver <- function(ev, x, g, sdat, context, layout, gfu
   if(length(fixd)) Bd <- Bd + Matrix::sparseMatrix(i = fixd, j = fixd,
     x = rep(max(stats::median(dg[dg > 0]), 1e-8), length(fixd)), dims = c(n, n))
   bigIRT_laplace_factor_metric(Bd)
+}
+
+## The same metric assembled in C++ (src/fisher_blocks.cpp): one parallel
+## pass over persons builds every item block and the exact shared block, with
+## no sparse matrices, no factorisation of the person block and no
+## Fisher-vector products. The R assembly above remains, selected by
+## options(bigIRT.blockdiag_impl = "R"), and the tests hold the two equal.
+## Only the coordinates the construction does not describe (latent
+## correlations) are still differenced, one gradient evaluation each.
+bigIRT_laplace_blockdiag_solver_cpp <- function(ev, x, g, sdat, context, layout, gfun, h = 1e-4){
+  n <- length(ev$approx_grad); K <- as.integer(sdat$Nscales); N <- as.integer(sdat$Nsubs)
+  rc <- context$row_context; st <- ev$state; rows <- context$train_rows
+  ps <- attr(layout, "par_scale"); if(length(ps) != n) ps <- rep(1, n)
+  P0 <- as.matrix(ev$prior_mats$precision)
+  Pr <- bigIRT_laplace_prior_curvature(sdat, layout, n, N, P0)
+  person_pred <- rc$person_pred; ab <- st$Abilitybeta
+  if(!length(person_pred) || ncol(person_pred) == 0L){
+    person_pred <- matrix(0, length(rows), 1L); ab <- matrix(0, K, 1L)
+  }
+  item_par <- integer(n); item_par[c(layout$B, layout$A, layout$C, layout$D)] <- 1L
+  iv <- function(x) as.integer(if(is.null(x)) integer(0) else x)
+  nr <- length(rows)
+  out <- tryCatch(.Call(`_bigIRT_fisher_blocks_cpp_impl`,
+    as.integer(sdat$id[rows]), as.integer(rc$items), as.matrix(ev$posterior$theta_mode),
+    as.matrix(person_pred), bigirt_int_matrix(rc$fixed_ability, nr, K), as.matrix(rc$fixed_ability_value),
+    bigirt_int_matrix(rc$A_ref, nr, K), as.matrix(rc$fixed_A_value), as.matrix(rc$A_pred),
+    as.integer(rc$B_ref), as.numeric(rc$B_fixed_value), as.matrix(rc$B_pred),
+    as.integer(rc$C_ref), as.numeric(rc$C_fixed_value), as.matrix(rc$C_pred),
+    as.integer(rc$D_ref), as.numeric(rc$D_fixed_value), as.matrix(rc$D_pred),
+    as.matrix(ab), as.numeric(st$invspApars), as.matrix(st$invspAbeta), as.numeric(st$Bpars),
+    as.matrix(st$Bbeta), as.numeric(st$logitCpars), as.matrix(st$logitCbeta),
+    as.numeric(st$logitDpars), as.matrix(st$logitDbeta), P0,
+    iv(layout$A), iv(layout$B), iv(layout$C), iv(layout$D),
+    iv(layout$A_beta), iv(layout$B_beta), iv(layout$C_beta), iv(layout$D_beta),
+    iv(layout$ability_beta), iv(layout$ability_mean), item_par, as.numeric(ps),
+    as.numeric(Matrix::diag(Pr)) * ps^2, as.integer(context$grain_size %||% 64L)),
+    error = function(e) NULL)
+  if(is.null(out)) return(NULL)
+  G <- out$G
+  described <- unique(c(layout$B, layout$B_beta, layout$A, layout$A_beta, layout$C, layout$C_beta,
+    layout$D, layout$D_beta, layout$B_mean, layout$A_mean, layout$C_mean, layout$D_mean,
+    layout$ability_beta, layout$ability_mean))
+  FG <- NULL
+  if(length(G)){
+    FG <- out$FGG + as.matrix(Pr[G, G, drop = FALSE]) * outer(ps[G], ps[G])
+    cb <- bigIRT_laplace_use_corr_block(FG, match(intersect(layout$corr, G), G), ev, sdat, context, layout)
+    FG <- cb$M
+    for(j in setdiff(intersect(G, setdiff(seq_len(n), described)), cb$done)){
+      hj <- h * max(1, abs(x[j]))
+      xp <- x; xp[j] <- xp[j] + hj
+      col <- ((gfun(xp) - g) / hj)[G]
+      k <- match(j, G)
+      FG[, k] <- col; FG[k, ] <- col
+    }
+    FG <- (FG + t(FG)) / 2
+    dg <- diag(FG)
+    bad <- which(!(dg > 0))
+    if(length(bad)) diag(FG)[bad] <- max(stats::median(dg[dg > 0]), 1e-8)
+    ch <- NULL; ridge <- 0
+    for(attempt in 1:6){
+      ch <- tryCatch(chol(if(ridge > 0) FG + diag(ridge, nrow(FG)) else FG), error = function(e) NULL)
+      if(!is.null(ch)) break
+      ridge <- if(ridge == 0) 1e-8 * max(abs(diag(FG))) else ridge * 100
+    }
+    if(is.null(ch)) return(NULL)
+  }
+  ## Group the blocks by size, so applying them is a few vector operations
+  ## whatever the number of items.
+  dims <- out$block_dim
+  ofs <- c(0L, cumsum(as.numeric(dims)^2))
+  pofs <- c(0L, cumsum(dims))
+  groups <- lapply(sort(unique(dims)), function(P){
+    b <- which(dims == P)
+    idx <- vapply(b, function(i) out$block_par[pofs[i] + seq_len(P)], integer(P))
+    inv <- vapply(b, function(i) out$block_inv[ofs[i] + seq_len(P * P)], numeric(P * P))
+    list(P = P, idx = matrix(idx, nrow = P), inv = matrix(inv, nrow = P * P))
+  })
+  function(v){
+    v <- as.numeric(v)
+    res <- numeric(length(v))
+    for(gr in groups){
+      P <- gr$P
+      for(a in seq_len(P)){
+        acc <- 0
+        for(b in seq_len(P)) acc <- acc + gr$inv[a + P * (b - 1L), ] * v[gr$idx[b, ]]
+        res[gr$idx[a, ]] <- acc
+      }
+    }
+    if(length(G)) res[G] <- backsolve(ch, forwardsolve(t(ch), v[G]))
+    res
+  }
 }
 
 ## The metric for the Fisher-shaped L-BFGS: dense F where it is cheap and
@@ -446,6 +609,13 @@ bigIRT_laplace_lbfgs <- function(x0, fg, minv = NULL, memory = 30L, maxit = 500L
     x <- x + s; f <- fn; g <- en$g; e <- en
     if(!is.null(refresh) && refresh_every > 0L && it %% refresh_every == 0L){
       m <- refresh(e)
+      ## A refresh may also move the objective itself (the quadrature
+      ## refinement re-centres its nodes), in which case it hands back the
+      ## current point re-evaluated, and the search continues from that.
+      if(is.list(m) && !is.function(m)){
+        if(!is.null(m$e)){ e <- m$e; f <- e$f; g <- e$g }
+        m <- m$minv
+      }
       if(!is.null(m)) mv <- m
     }
   }

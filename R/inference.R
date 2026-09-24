@@ -26,6 +26,11 @@ bigIRT_direct_eval_from_fit <- function(fit, keep_covariance = TRUE, cores = 1L,
   ctx$estimateAbilityCorr <- ecorr
   ctx$corr_paramization <- if(!is.null(state$laplaceCorrParam)) state$laplaceCorrParam else "normalized_chol"
   state$laplaceCorrParam <- ctx$corr_paramization
+  ## A fit refined by quadrature is at the optimum of the quadrature objective,
+  ## not of Laplace; anything differenced around it must use the same one.
+  if(identical(fit$laplaceStatus$marginal, "agq"))
+    ctx$agq <- bigIRT_agq_rules(sdat$Nscales, nodes = fit$laplaceStatus$agq_rule$nodes,
+      points = fit$laplaceStatus$agq_rule$points, inflate = fit$laplaceStatus$agq_rule$inflate)
   par <- bigIRT_laplace_pack_direct_state(state, sdat, layout = layout)
   ev <- bigIRT_laplace_direct_objective(
     par = par, state = state, sdat = sdat,

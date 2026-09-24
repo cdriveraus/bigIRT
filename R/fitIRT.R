@@ -1514,6 +1514,31 @@ bigIRT_validate_fit_inputs <- function(dat, score, id, item, scale, pl, controls
 #'   objective evaluations and half the time, and ended closer to the optimum.
 #'   It builds the information as a sparse matrix, and falls back to
 #'   \code{"mize"} when that would exceed about 5e7 nonzeros.
+#' @param laplaceRefine Character. Whether to finish a \code{"laplace"} fit on
+#'   the marginal likelihood with each person's integral done by adaptive
+#'   Gauss-Hermite quadrature, centred at the Laplace mode, instead of by the
+#'   Laplace approximation. The refinement starts from the Laplace optimum and
+#'   uses the same optimiser, so it is a short continuation, not a second fit.
+#'   \code{"auto"} (default) refines whenever an asymptote is estimated (3PL,
+#'   4PL); \code{"agq"} always refines;
+#'   \code{"none"} never does. Why: Laplace is biased when asymptotes are free.
+#'   Measured on simulated 3PL data, the exact-marginal optimum sat about half
+#'   a standard error above the Laplace one in every discrimination (loadings
+#'   about 5 per cent larger), and on 4PL data nearly one standard error (8 to
+#'   13 per cent); the bias is fixed per person while standard errors shrink
+#'   with N, so intervals under-cover more as data grow. Laplace can also hold
+#'   a fit at an optimum the exact marginal does not have. For the 2PL the
+#'   shift was about 0.03 standard errors, which is why \code{"auto"} leaves
+#'   it alone. The reported \code{logLik} is then the quadrature marginal;
+#'   \code{laplaceStatus} records both values and what the refinement did.
+#' @param agqNodes Integer. Gauss-Hermite nodes per dimension for
+#'   \code{laplaceRefine} with up to three dimensions. The product rule costs
+#'   \code{agqNodes^K} likelihood passes per person, so the default falls with
+#'   dimension: 9, 5 and 3 for one, two and three dimensions.
+#' @param agqPoints Integer. Beyond three dimensions the product rule is out of
+#'   reach, and the refinement uses this many quasi-Monte Carlo points per
+#'   person instead, in antithetic pairs, as importance sampling through the
+#'   Laplace Gaussian. Default 256.
 #' @param laplaceGradTol Numeric. Tolerance for the item-block gradient,
 #'   measured relative to the objective rather than as a raw norm: the reported
 #'   norm is divided by the same denominator \code{laplaceTolScale} selects for
@@ -1651,6 +1676,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   estimateAbilityCorr=FALSE,
   laplaceCorrParam=c("stan_corsqrt","normalized_chol"),
   keepInternals=FALSE,laplaceOuterIter=500,laplaceTol=1e-4,laplaceTolScale=c("relative","per_obs"),laplaceGradTol=1e-4,laplacePolish=8L,laplacePersonTol=1e-6,laplaceOptimizer=c("fisher","mize"),
+  laplaceRefine=c("auto","agq","none"),agqNodes=NULL,agqPoints=NULL,
   laplaceKeepCovariance=FALSE,laplaceDiagnostics=FALSE,laplacePlot=FALSE,laplacePlotEvery=1L,
   laplaceJitter=1e-6,noptimsteps=10,
   normalise=FALSE,normaliseScale=1,normaliseMean=0,
@@ -1715,26 +1741,13 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   ## 1.7e-7, indistinguishable from the unclipped 1e-7.
   ##
   ## So the count is recorded rather than warned about, and the warning is
-  ## reserved for clipping being pervasive rather than incidental. The
-  ## threshold is deliberately loose: more partial clips than there are
-  ## persons means it averaged at least one per person across the fit, which
-  ## is orders above anything measured. bigIRT_laplace_clip_counts() has the
-  ## running totals for anyone who wants them.
+  ## reserved for clipping being pervasive at the fitted point. It used to
+  ## count along the whole optimisation path, line-search trials included, so
+  ## the verdict depended on the optimiser (3,944 clips under one, 17,652
+  ## under another, for the same 3D 4PL fit). The optimiser now counts at its
+  ## final evaluation only; see laplaceStatus$clipped_partial and the warning
+  ## after the fit. bigIRT_laplace_clip_counts() still has running totals.
   bigIRT_laplace_clip_counts(reset = TRUE)
-  on.exit({
-    .clip <- tryCatch(bigIRT_laplace_clip_counts(reset = FALSE),
-                      error = function(e) c(full = 0L, partial = 0L))
-    ## sdat is only populated if the fit got that far; treat a missing Nsubs
-    ## as zero so an early failure cannot turn this into a second error.
-    .ns <- suppressWarnings(as.integer(sdat$Nsubs)[1])
-    if(length(.ns) == 0L || is.na(.ns)) .ns <- 0L
-    if(isTRUE(.clip[["partial"]] > max(100L, .ns)))
-      warning(sprintf(paste0("Laplace curvature was partially clipped %d times, ",
-        "against %d persons. At that rate the log-determinant gradient may be ",
-        "materially approximate; treat item standard errors and convergence ",
-        "diagnostics with care. Rates this high were never seen in simulation."),
-        .clip[["partial"]], .ns), call. = FALSE)
-  }, add = TRUE)
   sdat <-list() #initialize standata object
   basetol=tol
   marginalApprox <- match.arg(marginalApprox)
@@ -1755,6 +1768,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   ebayesMethod <- match.arg(ebayesMethod)
   laplaceCorrParam <- match.arg(laplaceCorrParam)
   laplaceOptimizer <- match.arg(laplaceOptimizer)
+  laplaceRefine <- match.arg(laplaceRefine)
 
   itemPreds <- unique(c(AitemPreds,BitemPreds,CitemPreds,DitemPreds))
 
@@ -2274,6 +2288,10 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     ## ebayesFromFixed block -- so a fit asking for it silently got fixed priors.
     eb_rounds <- if(isTRUE(ebayes)) max(1L, as.integer(ebayesIter)) else 0L
     eb_trace <- list()
+    ## Quadrature refinement of the final pass; see laplaceRefine.
+    free_asymptotes <- (sdat$Nitems - sdat$NfixedC) > 0 || (sdat$Nitems - sdat$NfixedD) > 0
+    use_agq <- switch(laplaceRefine, none = FALSE, agq = TRUE, auto = free_asymptotes)
+    agq_rule <- if(use_agq) bigIRT_agq_rules(sdat$Nscales, nodes = agqNodes, points = agqPoints) else NULL
     eb_prev_delta <- setNames(rep(NA_real_, 4L), c("B", "C", "D", "A"))
     eb_prev_sdat <- sdat
     eb_frozen <- character(0)
@@ -2310,7 +2328,16 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
       verbose = laplaceVerbose,
       trace_fn = function(msg) laplace_trace(2, msg),
       stochastic = isTRUE(optimdots$stochastic),
-      optimizer = laplaceOptimizer
+      optimizer = laplaceOptimizer,
+      ## Every empirical-Bayes round is refined too, at its coarse tolerance.
+      ## The hyperparameter update reads the item estimates, and Laplace-biased
+      ## ones bias it: on a 2,000-item 3PL, Laplace-only rounds took the
+      ## guessing SD to 1.83 on one dataset (0.55 and 0.64 on two others, by
+      ## way of the spurious optimum above), and refined rounds to 0.46, 0.44
+      ## and 0.46. Costs 15 to 25 per cent there. options(bigIRT.agq_eb_rounds
+      ## = FALSE) refines the final pass only.
+      refine = if(eb_rounds > 0L && eb_round <= eb_rounds &&
+        !isTRUE(getOption("bigIRT.agq_eb_rounds", TRUE))) NULL else agq_rule
     )
 
       if(eb_round > eb_rounds) break
@@ -2471,34 +2498,6 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
           any(block_tab$share > 0.5 & block_tab$n < 0.05 * length(dgrad))
       }
     }
-    ## A single scaled norm sums over every parameter, so it cannot say which
-    ## block is responsible and it hides one stuck parameter among thousands.
-    ## It also lets a small block with a naturally larger gradient dominate the
-    ## whole criterion.  The gate stays as it is -- changing it would move every
-    ## existing fit -- but the shape of the gradient is recorded, and the case
-    ## that actually caused trouble is flagged: a handful of parameters holding
-    ## most of the norm.
-    dgrad <- directFit$optim$grad
-    dlay <- directFit$optim$layout
-    block_tab <- NULL; block_imbalance <- FALSE
-    if(length(dgrad) && !is.null(dlay)){
-      sl <- dlay[vapply(dlay, length, integer(1)) > 0L]
-      if(length(sl)){
-        bn <- vapply(sl, function(i) sum(dgrad[i]^2), numeric(1))
-        block_tab <- data.frame(block = names(sl),
-          n = vapply(sl, length, integer(1)),
-          norm = sqrt(bn),
-          max_abs = vapply(sl, function(i) max(abs(dgrad[i])), numeric(1)),
-          share = if(sum(bn) > 0) bn / sum(bn) else bn * 0,
-          row.names = NULL, stringsAsFactors = FALSE)
-        ## Share alone is not the diagnosis. Once the fit is at its optimum the
-        ## polish has driven the item blocks to nearly zero, so whatever it does
-        ## not touch holds most of a negligible total -- true, and meaningless.
-        ## Imbalance is only worth flagging when it is what stopped the fit.
-        block_imbalance <- !isTRUE(strict_direct) &&
-          any(block_tab$share > 0.5 & block_tab$n < 0.05 * length(dgrad))
-      }
-    }
     fit$laplaceStatus <- list(
       converged = strict_direct,
       reason = if(gain_converged) "predicted_gain" else
@@ -2508,7 +2507,8 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
       initialized_from = "prior_anchored",
       direct_objective = TRUE,
       approximate_gradient = TRUE,
-      gradient_type = "mode_adjusted_laplace_item_gradient",
+      gradient_type = if(!is.null(directFit$optim$refine)) "agq_fisher_identity" else
+        "mode_adjusted_laplace_item_gradient",
       estimated_corr = estimateAbilityCorr,
       last_item_grad_norm = directFit$optim$masked_grad_norm,
       last_item_grad_scaled = directGradScaled,
@@ -2520,10 +2520,18 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
       polish_gain = if(!is.null(directFit$optim$polish$gain)) directFit$optim$polish$gain else 0,
       item_prior_value = if(!is.null(directFit$eval$prior$value))
         as.numeric(directFit$eval$prior$value) else NA_real_,
-      max_abs_grad = if(length(dgrad)) max(abs(dgrad)) else NA_real_,
-      rms_grad = if(length(dgrad)) sqrt(mean(dgrad^2)) else NA_real_,
-      gradient_blocks = block_tab,
-      block_imbalance = block_imbalance,
+      ## "agq" when the final pass was refined by quadrature (laplaceRefine);
+      ## logLik is then the quadrature marginal, and laplace_logLik the Laplace
+      ## objective at the Laplace optimum the refinement started from.
+      marginal = if(!is.null(directFit$optim$refine)) "agq" else "laplace",
+      ## Persons whose curvature was clipped to positive semidefinite at the
+      ## fitted point (each is counted by the mode solve, and by the Laplace
+      ## item kernel when that runs).
+      clipped_partial = as.integer(directFit$optim$clip_final[["partial"]] %||% NA_integer_),
+      clipped_full = as.integer(directFit$optim$clip_final[["full"]] %||% NA_integer_),
+      agq_rule = if(!is.null(directFit$optim$refine)) directFit$optim$refine$rule else NULL,
+      laplace_logLik = if(!is.null(directFit$optim$refine)) directFit$optim$refine$laplace_value else directFit$eval$value,
+      refine = directFit$optim$refine,
       item_grad_denominator = directGradDenom,
       last_outer_seconds = directSec,
       ebayes_rounds = length(eb_trace),
@@ -2535,6 +2543,16 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
       ## NA when the mize path ran.
       optimizer_metric = if(!is.null(directFit$optim$metric)) as.character(directFit$optim$metric) else NA_character_
     )
+    ## Warn when partial clipping is pervasive at the fitted point of a
+    ## Laplace fit, where it zeroes part of the log-determinant gradient. A
+    ## Laplace evaluation clips each such person twice (mode solve, item
+    ## kernel), hence the halving. Quadrature fits do not use that gradient.
+    clip_persons <- fit$laplaceStatus$clipped_partial / 2
+    if(identical(fit$laplaceStatus$marginal, "laplace") && isTRUE(clip_persons > max(10, 0.01 * sdat$Nsubs)))
+      warning(sprintf(paste0("Laplace curvature is partially clipped for %d of %d persons at the ",
+        "fitted point, where the log-determinant gradient is then approximate; treat item ",
+        "standard errors and convergence diagnostics with care, or refit with ",
+        "laplaceRefine = \"agq\"."), as.integer(clip_persons), as.integer(sdat$Nsubs)), call. = FALSE)
     fit$abilityPrior <- list(
       sd = as.numeric(sdat$AbilitySD),
       corr = as.matrix(if(!is.null(state$AbilityCorr)) state$AbilityCorr else sdat$AbilityCorr),
