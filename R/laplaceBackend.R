@@ -1397,6 +1397,38 @@ bigIRT_laplace_direct_objective <- function(par, state, sdat, prior_precision,
     )
     corr_grad_sec <- wall_time_sec() - t_corr0
   }
+  ## Second-order Laplace (context$laplace2): add each person's leading
+  ## correction to the Laplace value, with its exact gradient; see
+  ## src/laplace2_backend.cpp. Everything above is the Laplace objective.
+  laplace2_value <- 0; laplace2_skipped <- NA_integer_
+  if(isTRUE(context$laplace2) && is.null(agq_rule)){
+    l2 <- bigIRT_laplace2_fg_cpp_impl(
+      id = sdat$id[context$train_rows], score = sdat$score[context$train_rows],
+      theta_mode = posterior$theta_mode, person_pred = person_pred,
+      fixed_ability = row_context$fixed_ability, fixed_ability_value = row_context$fixed_ability_value,
+      A_ref = row_context$A_ref, A_fixed_value = row_context$fixed_A_value, A_pred = row_context$A_pred,
+      B_ref = row_context$B_ref, B_fixed_value = row_context$B_fixed_value, B_pred = row_context$B_pred,
+      C_ref = row_context$C_ref, C_fixed_value = row_context$C_fixed_value, C_pred = row_context$C_pred,
+      D_ref = row_context$D_ref, D_fixed_value = row_context$D_fixed_value, D_pred = row_context$D_pred,
+      Abilitybeta = ability_beta, invspApars = curState$invspApars, invspAbeta = curState$invspAbeta,
+      Bpars = curState$Bpars, Bbeta = curState$Bbeta, logitCpars = curState$logitCpars,
+      logitCbeta = curState$logitCbeta, logitDpars = curState$logitDpars, logitDbeta = curState$logitDbeta,
+      prior_mean = prior_mean, prior_precision = prior_mats$precision_array,
+      free_mask = 1L - sdat$fixedAbilityLogical, grain_size = context$grain_size)
+    laplace2_value <- l2$value; laplace2_skipped <- l2$skipped
+    lay <- context$direct_layout
+    add_blk <- function(idx, g) if(length(idx)) approx_grad[idx] <<- approx_grad[idx] + as.numeric(g)[seq_along(idx)]
+    add_blk(lay$A, l2$grad_A); add_blk(lay$B, l2$grad_B); add_blk(lay$C, l2$grad_C); add_blk(lay$D, l2$grad_D)
+    if(sdat$NAitemPreds > 0) add_blk(lay$A_beta, l2$grad_A_beta)
+    if(sdat$NBitemPreds > 0) add_blk(lay$B_beta, l2$grad_B_beta)
+    if(sdat$NCitemPreds > 0) add_blk(lay$C_beta, l2$grad_C_beta)
+    if(sdat$NDitemPreds > 0) add_blk(lay$D_beta, l2$grad_D_beta)
+    add_blk(lay$ability_beta, l2$grad_ability_beta)
+    add_blk(lay$ability_mean, l2$grad_mean)
+    if(isTRUE(context$estimateAbilityCorr) && length(lay$corr))
+      add_blk(lay$corr, bigIRT_laplace2_corr_grad(curState$AbilityCorrPars, l2$grad_P0, sdat,
+        paramization = context$corr_paramization, jitter = jitter))
+  }
   ## Chain rule for the rescaled coordinates. The optimiser works in
   ## u = theta / par_scale, so dL/du = par_scale * dL/dtheta. Applied once, and
   ## here, so every contributor above -- kernel, adjoint, prior -- stays in the
@@ -1406,7 +1438,8 @@ bigIRT_laplace_direct_objective <- function(par, state, sdat, prior_precision,
     approx_grad <- approx_grad * par_scale
   total_sec <- wall_time_sec() - t_total0
   list(
-    value = laplace_value + prior_norm_value + prior$value,
+    value = laplace_value + prior_norm_value + prior$value + laplace2_value,
+    laplace2_skipped = laplace2_skipped,
     approx_grad = approx_grad,
     state = curState,
     prior_mats = prior_mats,
@@ -1794,7 +1827,7 @@ bigIRT_laplace_optimize_direct <- function(state, sdat, prior_precision,
   if(!is.null(refine) && !isTRUE(stochastic)){
     lap_value <- get_eval(fit$par)$value
     lap_evals <- eval_count
-    context$agq <- refine
+    if(inherits(refine, "bigIRT_agq_rules")) context$agq <- refine else context$laplace2 <- TRUE
     ## Nodes are held where the Laplace posterior puts them and re-centred at
     ## each metric refresh, not at every evaluation. With the nodes fixed the
     ## objective is an ordinary smooth function whose Fisher-identity gradient
@@ -1802,7 +1835,7 @@ bigIRT_laplace_optimize_direct <- function(state, sdat, prior_precision,
     ## its cost. Re-centring moves the value by the change in quadrature
     ## error, so the search takes the re-evaluated point from there, and the
     ## fit only stops once a re-centred point shows no gain left.
-    fixed_nodes <- isTRUE(getOption("bigIRT.agq_fixed_nodes", TRUE))
+    fixed_nodes <- inherits(refine, "bigIRT_agq_rules") && isTRUE(getOption("bigIRT.agq_fixed_nodes", TRUE))
     recentre <- function(par){
       context$agq_centre <<- NULL
       cache_par <<- NULL; cache_eval <<- NULL
@@ -1838,7 +1871,8 @@ bigIRT_laplace_optimize_direct <- function(state, sdat, prior_precision,
     ## point itself, whatever round the loop stopped in: the final evaluation
     ## below re-centres.
     context$agq_centre <- NULL
-    fit$refine <- list(approx = "agq", nodes = paste(refine$desc, collapse = ","),
+    fit$refine <- list(approx = if(inherits(refine, "bigIRT_agq_rules")) "agq" else "laplace2",
+      nodes = paste(refine$desc, collapse = ","),
       rule = list(nodes = refine$nodes, points = refine$points, inflate = refine$inflate),
       iter = rf$iter, evals = eval_count - lap_evals, terminate = rf$terminate,
       rounds = rounds, fixed_nodes = fixed_nodes,

@@ -32,24 +32,24 @@ fitv <- function(refine, points = NULL){
   f$sec <- t; f
 }
 options(bigIRT.agq_default_inflate = 1.15)
-fits <- list(laplace = fitv("none"))
-for(M in c(256L, 1024L, 4096L)) fits[[paste0("qmc", M)]] <- fitv("agq", M)
+fits <- list(laplace = fitv("none"), laplace2 = fitv("laplace2"))
+for(M in c(4096L, 16384L)) fits[[paste0("qmc", M)]] <- fitv("agq", M)
 d <- G("bigIRT_direct_eval_from_fit")(fits$laplace, keep_covariance = TRUE, cores = cores)
 m <- G("bigIRT_laplace_metric_solver")(list(ev = d$eval, x = d$par, g = -d$eval$approx_grad),
   d$sdat, d$context, d$layout, gfun = function(p) stop("no differences expected"))
 n <- length(d$par)
 se <- sqrt(pmax(vapply(seq_len(n), function(k){ e <- numeric(n); e[k] <- 1; m(e)[k] }, 1), 0))
-ref <- fits$qmc4096$optim$par
+ref <- fits$qmc16384$optim$par
 Ly <- d$layout
 for(nm in names(fits)){
   f <- fits[[nm]]; dz <- (f$optim$par - ref) / se
   blk <- vapply(c("A", "B", "C", "corr"), function(b) if(length(Ly[[b]]))
     sprintf("%s mean %+.2f max %.2f", b, mean(dz[Ly[[b]]]), max(abs(dz[Ly[[b]]]))) else "", "")
-  cat(sprintf("%-8s %6.1f s  evals %4d  refine evals %s  | vs 4096-point optimum (SE units): %s\n",
+  cat(sprintf("%-8s %6.1f s  evals %4d  refine evals %s  | vs 16384-point optimum (SE units): %s\n",
     nm, f$sec, f$optim$target_evals, format(f$laplaceStatus$refine$evals %||% NA),
     paste(blk[nzchar(blk)], collapse = "; ")))
 }
 aL <- log1p(exp(fits$laplace$optim$par[Ly$A] * attr(Ly, "par_scale")[Ly$A]))
 aQ <- log1p(exp(ref[Ly$A] * attr(Ly, "par_scale")[Ly$A]))
-cat(sprintf("loadings: mean ratio 4096-point / Laplace %.4f\n", mean(aQ / aL)))
+cat(sprintf("loadings: mean ratio 16384-point / Laplace %.4f\n", mean(aQ / aL)))
 cat("MREF_DONE\n")

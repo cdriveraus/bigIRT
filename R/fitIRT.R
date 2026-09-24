@@ -1520,8 +1520,16 @@ bigIRT_validate_fit_inputs <- function(dat, score, id, item, scale, pl, controls
 #'   Laplace approximation. The refinement starts from the Laplace optimum and
 #'   uses the same optimiser, so it is a short continuation, not a second fit.
 #'   \code{"auto"} (default) refines whenever an asymptote is estimated (3PL,
-#'   4PL); \code{"agq"} always refines;
-#'   \code{"none"} never does. Why: Laplace is biased when asymptotes are free.
+#'   4PL): by quadrature up to three dimensions, and beyond that by
+#'   \code{"laplace2"}. \code{"agq"} always refines by quadrature (beyond
+#'   three dimensions with quasi-Monte Carlo points, see \code{agqPoints},
+#'   which need many points to be reliable: a 256-point refinement at nine
+#'   dimensions was measured running away). \code{"laplace2"} refines by the
+#'   second-order Laplace approximation, each person's Laplace value plus its
+#'   leading correction from the third and fourth derivatives, which costs the
+#'   same at any dimension; at nine dimensions with cross loadings it cut the
+#'   per-person error of the log marginal from 0.095 to 0.004 nats, against
+#'   0.012 for 256 quasi-Monte Carlo points. \code{"none"} never refines. Why: Laplace is biased when asymptotes are free.
 #'   Measured on simulated 3PL data, the exact-marginal optimum sat about half
 #'   a standard error above the Laplace one in every discrimination (loadings
 #'   about 5 per cent larger), and on 4PL data nearly one standard error (8 to
@@ -1676,7 +1684,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   estimateAbilityCorr=FALSE,
   laplaceCorrParam=c("stan_corsqrt","normalized_chol"),
   keepInternals=FALSE,laplaceOuterIter=500,laplaceTol=1e-4,laplaceTolScale=c("relative","per_obs"),laplaceGradTol=1e-4,laplacePolish=8L,laplacePersonTol=1e-6,laplaceOptimizer=c("fisher","mize"),
-  laplaceRefine=c("auto","agq","none"),agqNodes=NULL,agqPoints=NULL,
+  laplaceRefine=c("auto","agq","laplace2","none"),agqNodes=NULL,agqPoints=NULL,
   laplaceKeepCovariance=FALSE,laplaceDiagnostics=FALSE,laplacePlot=FALSE,laplacePlotEvery=1L,
   laplaceJitter=1e-6,noptimsteps=10,
   normalise=FALSE,normaliseScale=1,normaliseMean=0,
@@ -2290,8 +2298,18 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     eb_trace <- list()
     ## Quadrature refinement of the final pass; see laplaceRefine.
     free_asymptotes <- (sdat$Nitems - sdat$NfixedC) > 0 || (sdat$Nitems - sdat$NfixedD) > 0
-    use_agq <- switch(laplaceRefine, none = FALSE, agq = TRUE, auto = free_asymptotes)
-    agq_rule <- if(use_agq) bigIRT_agq_rules(sdat$Nscales, nodes = agqNodes, points = agqPoints) else NULL
+    ## "auto" uses quadrature up to three dimensions and second-order Laplace
+    ## beyond. Not quasi-Monte Carlo: at 256 points in nine dimensions a
+    ## refinement held on fixed points was measured running away (693
+    ## evaluations, correlations 100 SE off) -- the optimiser finds parameters
+    ## a few points favour -- and 1,024 points still sat up to 1.6 SE from
+    ## 4,096. The second-order correction is deterministic and cannot be
+    ## exploited that way.
+    refine_kind <- switch(laplaceRefine, none = "none", agq = "agq", laplace2 = "laplace2",
+      auto = if(!free_asymptotes) "none" else if(sdat$Nscales <= 3L) "agq" else "laplace2")
+    agq_rule <- switch(refine_kind, none = NULL,
+      agq = bigIRT_agq_rules(sdat$Nscales, nodes = agqNodes, points = agqPoints),
+      laplace2 = structure(list(desc = "laplace2"), class = "bigIRT_laplace2"))
     eb_prev_delta <- setNames(rep(NA_real_, 4L), c("B", "C", "D", "A"))
     eb_prev_sdat <- sdat
     eb_frozen <- character(0)
@@ -2523,7 +2541,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
       ## "agq" when the final pass was refined by quadrature (laplaceRefine);
       ## logLik is then the quadrature marginal, and laplace_logLik the Laplace
       ## objective at the Laplace optimum the refinement started from.
-      marginal = if(!is.null(directFit$optim$refine)) "agq" else "laplace",
+      marginal = if(!is.null(directFit$optim$refine)) directFit$optim$refine$approx else "laplace",
       ## Persons whose curvature was clipped to positive semidefinite at the
       ## fitted point (each is counted by the mode solve, and by the Laplace
       ## item kernel when that runs).

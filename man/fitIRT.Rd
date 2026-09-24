@@ -61,7 +61,7 @@ fitIRT(
   laplacePolish = 8L,
   laplacePersonTol = 1e-06,
   laplaceOptimizer = c("fisher", "mize"),
-  laplaceRefine = c("auto", "agq", "none"),
+  laplaceRefine = c("auto", "agq", "laplace2", "none"),
   agqNodes = NULL,
   agqPoints = NULL,
   laplaceKeepCovariance = FALSE,
@@ -377,8 +377,16 @@ Gauss-Hermite quadrature, centred at the Laplace mode, instead of by the
 Laplace approximation. The refinement starts from the Laplace optimum and
 uses the same optimiser, so it is a short continuation, not a second fit.
 \code{"auto"} (default) refines whenever an asymptote is estimated (3PL,
-4PL); \code{"agq"} always refines;
-\code{"none"} never does. Why: Laplace is biased when asymptotes are free.
+4PL): by quadrature up to three dimensions, and beyond that by
+\code{"laplace2"}. \code{"agq"} always refines by quadrature (beyond
+three dimensions with quasi-Monte Carlo points, see \code{agqPoints},
+which need many points to be reliable: a 256-point refinement at nine
+dimensions was measured running away). \code{"laplace2"} refines by the
+second-order Laplace approximation, each person's Laplace value plus its
+leading correction from the third and fourth derivatives, which costs the
+same at any dimension; at nine dimensions with cross loadings it cut the
+per-person error of the log marginal from 0.095 to 0.004 nats, against
+0.012 for 256 quasi-Monte Carlo points. \code{"none"} never refines. Why: Laplace is biased when asymptotes are free.
 Measured on simulated 3PL data, the exact-marginal optimum sat about half
 a standard error above the Laplace one in every discrimination (loadings
 about 5 per cent larger), and on 4PL data nearly one standard error (8 to

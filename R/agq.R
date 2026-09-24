@@ -125,6 +125,45 @@ bigIRT_agq_fg_cpp_impl <- function(id, score, theta_mode, precision,
     as.logical(want_person)[1], as.integer(grain_size))
 }
 
+## Second-order Laplace (src/laplace2_backend.cpp): the leading correction to
+## each person's Laplace value and its exact gradient. Arguments as for the
+## quadrature kernel, without the rule and the posterior precision (the
+## kernel rebuilds the observed Hessian at the mode itself).
+bigIRT_laplace2_fg_cpp_impl <- function(id, score, theta_mode,
+  person_pred, fixed_ability, fixed_ability_value,
+  A_ref, A_fixed_value, A_pred, B_ref, B_fixed_value, B_pred,
+  C_ref, C_fixed_value, C_pred, D_ref, D_fixed_value, D_pred,
+  Abilitybeta, invspApars, invspAbeta, Bpars, Bbeta, logitCpars, logitCbeta, logitDpars, logitDbeta,
+  prior_mean, prior_precision, free_mask, grain_size = 64L){
+  nr <- length(id); K <- ncol(theta_mode)
+  .Call(`_bigIRT_laplace2_fg_cpp_impl`,
+    as.integer(id), as.integer(score), as.matrix(theta_mode), as.matrix(person_pred),
+    bigirt_int_matrix(fixed_ability, nr, K), as.matrix(fixed_ability_value),
+    bigirt_int_matrix(A_ref, nr, K), as.matrix(A_fixed_value), as.matrix(A_pred),
+    as.integer(B_ref), as.numeric(B_fixed_value), as.matrix(B_pred),
+    as.integer(C_ref), as.numeric(C_fixed_value), as.matrix(C_pred),
+    as.integer(D_ref), as.numeric(D_fixed_value), as.matrix(D_pred),
+    as.matrix(Abilitybeta), as.numeric(invspApars), as.matrix(invspAbeta),
+    as.numeric(Bpars), as.matrix(Bbeta), as.numeric(logitCpars), as.matrix(logitCbeta),
+    as.numeric(logitDpars), as.matrix(logitDbeta),
+    as.matrix(prior_mean), as.numeric(prior_precision),
+    bigirt_int_matrix(free_mask, nrow(theta_mode), K), as.integer(grain_size))
+}
+
+## The correction's gradient in the packed correlation parameters, from its
+## gradient in the prior precision entries, G: sum_kl G_kl dP0_kl / drho_j,
+## with dP0 differenced through the constructor the objective uses.
+bigIRT_laplace2_corr_grad <- function(corr_par, G, sdat, paramization, jitter, h = 1e-6){
+  K <- sdat$Nscales
+  P0 <- function(p) bigIRT_laplace_prior_mats(sdat,
+    AbilityCorr = bigIRT_laplace_corr_from_packed(p, K, paramization = paramization),
+    jitter = jitter)$precision
+  vapply(seq_along(corr_par), function(j){
+    pp <- corr_par; pm <- corr_par; pp[j] <- pp[j] + h; pm[j] <- pm[j] - h
+    sum(G * (P0(pp) - P0(pm))) / (2 * h)
+  }, numeric(1))
+}
+
 ## Gradient of the person-prior terms in the latent correlation parameters,
 ## given the summed posterior second moments S = sum_i E[(theta-mu)(theta-mu)'].
 ## Those terms are N/2 log|P0| - tr(P0 S)/2, with P0 the prior precision; by the
