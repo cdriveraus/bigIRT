@@ -43,6 +43,7 @@
 #include <memory>
 #include <cmath>
 #include <algorithm>
+#include "bigirt_obsindex.h"
 using Eigen::MatrixXd;
 using Eigen::VectorXd;
 
@@ -126,7 +127,7 @@ inline AgqRow agq_row(const double y, const double eta, const double c, const do
 struct AgqRule { int M = 1, d = 0; std::vector<double> Z, lw; };
 
 struct AgqWorker : public RcppParallel::Worker {
-  const std::vector< std::vector<int> >& obs_by_subj;
+  const BigIRTObsIndex& obs_by_subj;
   AgqVec<int> score;
   AgqVec<double> theta_mode, precision, person_pred;
   AgqVec<int> fixed_ability;
@@ -150,7 +151,7 @@ struct AgqWorker : public RcppParallel::Worker {
   int failure;
   std::vector<double> gA, gB, gC, gD, gAb, gBb, gCb, gDb, gAbil, gMean, S;
 
-  AgqWorker(const std::vector< std::vector<int> >& obs_by_subj,
+  AgqWorker(const BigIRTObsIndex& obs_by_subj,
             const std::vector<AgqRule>& rules,
             int K, int P, bool want_person)
     : obs_by_subj(obs_by_subj), rules(rules), K(K), P(P),
@@ -196,7 +197,7 @@ struct AgqWorker : public RcppParallel::Worker {
   void operator()(std::size_t begin, std::size_t end) {
     for (std::size_t s = begin; s < end; ++s) {
       const int subj = static_cast<int>(s);
-      const std::vector<int>& obs = obs_by_subj[subj];
+      const BigIRTObsSpan obs = obs_by_subj[subj];
       const int n = static_cast<int>(obs.size());
       std::vector<int> act;
       for (int k = 0; k < K; ++k) if (free_mask(subj, k) != 0) act.push_back(k);
@@ -397,12 +398,8 @@ extern "C" SEXP _bigIRT_agq_fg_cpp_impl(
   const int P = person_pred.ncol() > 0 && Abilitybeta.ncol() == person_pred.ncol() ? person_pred.ncol() : 0;
   const bool want_person = Rcpp::as<bool>(want_personSEXP);
   const std::size_t grain = static_cast<std::size_t>(std::max(1, Rcpp::as<int>(grain_sizeSEXP)));
-  std::vector< std::vector<int> > obs_by_subj(N);
-  for (int o = 0; o < Nobs; ++o) {
-    const int s = id[o] - 1;
-    if (s < 0 || s >= N) Rcpp::stop("id must be coded from 1 to Nsubs.");
-    obs_by_subj[s].push_back(o);
-  }
+  BigIRTObsIndex obs_by_subj;
+  if (!obs_by_subj.build(id, Nobs, N)) Rcpp::stop("id must be coded from 1 to Nsubs.");
   // Rules for 0..K free dimensions: element d of the two lists is the node
   // matrix (M x d) and log weights for persons with d free dimensions.
   Rcpp::List zl(nodesSEXP), wl(log_weightsSEXP);

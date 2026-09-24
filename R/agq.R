@@ -150,7 +150,8 @@ bigIRT_laplace2_fg_cpp_impl <- function(id, score, theta_mode,
     as.numeric(Bpars), as.matrix(Bbeta), as.numeric(logitCpars), as.matrix(logitCbeta),
     as.numeric(logitDpars), as.matrix(logitDbeta),
     as.matrix(prior_mean), as.numeric(prior_precision),
-    bigirt_int_matrix(free_mask, nrow(theta_mode), K), as.integer(grain_size))
+    bigirt_int_matrix(free_mask, nrow(theta_mode), K),
+    as.numeric(getOption("bigIRT.laplace2_floor", 0)), as.integer(grain_size))
 }
 
 ## The correction's gradient in the packed correlation parameters, from its

@@ -36,6 +36,7 @@
 #include <memory>
 #include <cmath>
 #include <algorithm>
+#include "bigirt_obsindex.h"
 using Eigen::MatrixXd;
 using Eigen::VectorXd;
 
@@ -123,6 +124,35 @@ struct FbData {
     for (int m = 0; m < pred.nc; ++m) push(row, lay, m * beta.nr + brow - 1, base * pred(o, m));
   }
 
+  // The parameters row o touches, without their values: what the ownership
+  // pass needs. It depends on the data and layout only, so it costs index
+  // lookups where evaluating every row's derivatives, serially, did not.
+  inline void touch_one(std::vector<int>& out, const FbVec<int>& lay, int ix0) const {
+    if (ix0 < 0 || ix0 >= lay.size()) return;
+    const int g = lay[ix0] - 1;
+    if (g >= 0) out.push_back(g);
+  }
+  inline void touch_beta(std::vector<int>& out, const FbVec<int>& lay, const FbVec<double>& pred,
+                         const FbVec<double>& beta, int brow) const {
+    if (brow <= 0 || pred.nc == 0 || beta.nr == 0 || lay.size() == 0) return;
+    for (int m = 0; m < pred.nc; ++m) touch_one(out, lay, m * beta.nr + brow - 1);
+  }
+  void touch(int o, std::vector<int>& out) const {
+    out.clear();
+    if (B_ref[o] > 0) { touch_one(out, lay_B, B_ref[o] - 1);
+      touch_beta(out, lay_Bb, B_pred, Bbeta, Bbeta.nr == 1 ? 1 : B_ref[o]); }
+    for (int k = 0; k < K; ++k) if (A_ref(o, k) > 0) {
+      touch_one(out, lay_A, A_ref(o, k) - 1);
+      touch_beta(out, lay_Ab, A_pred, invspAbeta, invspAbeta.nr == 1 ? 1 : A_ref(o, k));
+    }
+    if (C_ref[o] > 0) { touch_one(out, lay_C, C_ref[o] - 1);
+      touch_beta(out, lay_Cb, C_pred, logitCbeta, logitCbeta.nr == 1 ? 1 : C_ref[o]); }
+    if (D_ref[o] > 0) { touch_one(out, lay_D, D_ref[o] - 1);
+      touch_beta(out, lay_Db, D_pred, logitDbeta, logitDbeta.nr == 1 ? 1 : D_ref[o]); }
+    for (int k = 0; k < K; ++k) if (fixed_ability(o, k) == 0)
+      for (int m = 0; m < P; ++m) touch_one(out, lay_abil, k + K * m);
+  }
+
   FbRow row(int o, int subj) const {
     FbRow r; r.item = items[o] - 1; r.w = VectorXd::Zero(K);
     const int bb = B_ref[o] > 0 ? (Bbeta.nr == 1 ? 1 : B_ref[o]) : 0;
@@ -174,7 +204,7 @@ struct FbData {
 
 struct FbWorker : public RcppParallel::Worker {
   const FbData& D;
-  const std::vector< std::vector<int> >& obs_by_subj;
+  const BigIRTObsIndex& obs_by_subj;
   const std::vector<int>& owner;   // block of each parameter, -1 in G
   const std::vector<int>& bpos;    // position within its block (or within G)
   const std::vector<int>& bdim;    // size of each block
@@ -186,7 +216,7 @@ struct FbWorker : public RcppParallel::Worker {
   MatrixXd FGG;
   int failure = 0;
 
-  FbWorker(const FbData& D, const std::vector< std::vector<int> >& obs_by_subj,
+  FbWorker(const FbData& D, const BigIRTObsIndex& obs_by_subj,
            const std::vector<int>& owner, const std::vector<int>& bpos, const std::vector<int>& bdim,
            const std::vector<long>& bofs, long total, const MatrixXd& P0,
            const std::vector<int>& amean, int nG)
@@ -201,7 +231,7 @@ struct FbWorker : public RcppParallel::Worker {
     const int K = D.K;
     for (std::size_t s = begin; s < end; ++s) {
       const int subj = static_cast<int>(s);
-      const std::vector<int>& obs = obs_by_subj[subj];
+      const BigIRTObsSpan obs = obs_by_subj[subj];
       std::vector<FbRow> rows; rows.reserve(obs.size());
       MatrixXd Ipp = P0;
       for (int o : obs) { rows.push_back(D.row(o, subj)); Ipp += rows.back().w * rows.back().w.transpose(); }
@@ -263,13 +293,13 @@ struct FbWorker : public RcppParallel::Worker {
 // fit's wall time.
 struct FbDenseWorker : public RcppParallel::Worker {
   const FbData& D;
-  const std::vector< std::vector<int> >& obs_by_subj;
+  const BigIRTObsIndex& obs_by_subj;
   const MatrixXd& P0;
   const std::vector<int>& amean;
   const int n;
   MatrixXd F;
   int failure = 0;
-  FbDenseWorker(const FbData& D, const std::vector< std::vector<int> >& obs, const MatrixXd& P0,
+  FbDenseWorker(const FbData& D, const BigIRTObsIndex& obs, const MatrixXd& P0,
                 const std::vector<int>& amean, int n)
     : D(D), obs_by_subj(obs), P0(P0), amean(amean), n(n), F(MatrixXd::Zero(n, n)) {}
   FbDenseWorker(const FbDenseWorker& o, RcppParallel::Split)
@@ -279,7 +309,7 @@ struct FbDenseWorker : public RcppParallel::Worker {
     std::vector<int> loc(static_cast<std::size_t>(n), -1);
     for (std::size_t s = begin; s < end; ++s) {
       const int subj = static_cast<int>(s);
-      const std::vector<int>& obs = obs_by_subj[subj];
+      const BigIRTObsSpan obs = obs_by_subj[subj];
       std::vector<FbRow> rows; rows.reserve(obs.size());
       MatrixXd Ipp = P0;
       for (int o : obs) { rows.push_back(D.row(o, subj)); Ipp += rows.back().w * rows.back().w.transpose(); }
@@ -355,12 +385,8 @@ static SEXP fb_impl(const bool dense,
   std::vector<int> amean;
   for (int k = 0; k < lay_amean.size(); ++k) amean.push_back(lay_amean[k] - 1);
 
-  std::vector< std::vector<int> > obs_by_subj(N);
-  for (int o = 0; o < Nobs; ++o) {
-    const int s = id[o] - 1;
-    if (s < 0 || s >= N) Rcpp::stop("id must be coded from 1 to Nsubs.");
-    obs_by_subj[s].push_back(o);
-  }
+  BigIRTObsIndex obs_by_subj;
+  if (!obs_by_subj.build(id, Nobs, N)) Rcpp::stop("id must be coded from 1 to Nsubs.");
 
   if (dense) {
     MatrixXd P0d(K, K);
@@ -379,11 +405,15 @@ static SEXP fb_impl(const bool dense,
   // the parallel pass rather than stored.
   const int UNSET = -2, SHARED = -1;
   std::vector<int> own_item(static_cast<std::size_t>(n), UNSET);
-  for (int s = 0; s < N; ++s) for (int o : obs_by_subj[s]) {
-    const FbRow r = D.row(o, s);
-    for (const auto& e : r.v) {
-      int& ow = own_item[static_cast<std::size_t>(e.first)];
-      if (ow == UNSET) ow = r.item; else if (ow != r.item) ow = SHARED;
+  {
+    std::vector<int> tp;
+    for (int o = 0; o < Nobs; ++o) {
+      D.touch(o, tp);
+      const int item = D.items[o] - 1;
+      for (int g : tp) {
+        int& ow = own_item[static_cast<std::size_t>(g)];
+        if (ow == UNSET) ow = item; else if (ow != item) ow = SHARED;
+      }
     }
   }
   // Blocks: one per item for its local parameters; an item parameter no row

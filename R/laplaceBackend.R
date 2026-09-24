@@ -1548,6 +1548,7 @@ bigIRT_laplace_optimize_direct <- function(state, sdat, prior_precision,
   context$direct_layout <- direct_layout
   ## Data, not parameters: taken once rather than subset on every evaluation.
   context$score_rows <- as.integer(sdat$score[context$train_rows])
+  context$cache <- new.env(parent = emptyenv())
   context$estimateAbilityCorr <- isTRUE(estimateAbilityCorr)
   context$corr_paramization <- corr_paramization
   state$laplaceCorrParam <- corr_paramization

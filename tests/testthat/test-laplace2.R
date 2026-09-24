@@ -61,9 +61,13 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
   }
 
   test_that("the second-order correction is the formula it claims", {
-    cs <- cross_sim(6101)
-    d <- l2_evaluator(cs$sim$dat, pl = 3, list(loadings = cs$L))
+   cs <- cross_sim(6101)
+   d <- l2_evaluator(cs$sim$dat, pl = 3, list(loadings = cs$L))
+   ## With the optional curvature floor (kappa = 0.5) and without it (the default).
+   for(kap in c(0.5, 0)) {
+    old <- options(bigIRT.laplace2_floor = kap)
     e0 <- d$ev(d$par, l2 = FALSE); e1 <- d$ev(d$par, l2 = TRUE)
+    options(old)
     K <- 2L; sdat <- d$sdat
     re <- bigIRT:::bigIRT_laplace_row_effective(state = e0$state, sdat = sdat,
       thetaBase = e0$posterior$theta_mode, rows = d$ctx$train_rows, context = d$ctx$row_context)
@@ -83,18 +87,23 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
       l2 <- vapply(r, function(k) der(eta[k], k, 2), 1)
       l3 <- vapply(r, function(k) der(eta[k], k, 3), 1)
       l4 <- vapply(r, function(k) der(eta[k], k, 4), 1)
-      ## Observed curvature, which for the 3PL can be negative row by row; a
-      ## person whose total data curvature is not PSD has it clipped to the
-      ## nearest PSD matrix, as in the Laplace path.
-      Dw <- crossprod(a, a * (-l2))
+      ## Each row's curvature, observed, floored at kap times the Fisher
+      ## information; with kap = 0 the observed curvature, which for the 3PL
+      ## can be negative, and a non-PSD total is clipped to the nearest PSD
+      ## matrix, as in the Laplace path.
+      p <- cc[r] + (dd[r] - cc[r]) * plogis(eta[r])
+      wF <- ((dd[r] - cc[r]) * plogis(eta[r]) * (1 - plogis(eta[r])))^2 / (p * (1 - p))
+      w <- if(kap > 0) pmax(-l2, kap * wF) else -l2
+      Dw <- crossprod(a, a * w)
       ee <- eigen(Dw, symmetric = TRUE)
       if(min(ee$values) < 0) Dw <- ee$vectors %*% diag(pmax(ee$values, 0), K) %*% t(ee$vectors)
       H <- P0 + Dw; S <- solve(H)
       C <- a %*% S %*% t(a); cd <- diag(C)
       corr <- corr + sum(l4 * cd^2) / 8 + sum(outer(l3, l3) * (3 * outer(cd, cd) * C + 2 * C^3)) / 24
     }
-    expect_lt(abs((e1$value - e0$value) - corr), 1e-4 * abs(corr) + 1e-6)
+    expect_lt(abs((e1$value - e0$value) - corr), 1e-4 * abs(corr) + 1e-6, label = paste("kappa", kap))
     expect_gt(abs(corr), 1e-2)
+   }
   })
 
   test_that("second-order Laplace gradients match finite differences (3PL, 4PL, K = 1)", {
@@ -107,6 +116,11 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
       L <- d$layout
       for(b in c("A", "B", "C", "D")) if(length(L[[b]]))
         expect_lt(slot_relerr(d, head(L[[b]], 3L)), 1e-6, label = paste(pl, b))
+      ## And with the (optional) curvature floor, whose derivative is its own.
+      old <- options(bigIRT.laplace2_floor = 0.5)
+      for(b in c("A", "B", "C", "D")) if(length(L[[b]]))
+        expect_lt(slot_relerr(d, head(L[[b]], 3L)), 1e-6, label = paste(pl, b, "floored"))
+      options(old)
       for(b in c("A_mean", "B_mean", "C_mean", "D_mean")) if(length(L[[b]]))
         expect_lt(slot_relerr(d, L[[b]]), 1e-6, label = paste(pl, b))
     }

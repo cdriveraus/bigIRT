@@ -16,7 +16,7 @@ RcppExport SEXP _bigIRT_agq_fg_cpp_impl(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP
 RcppExport SEXP _bigIRT_fisher_blocks_cpp_impl(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
 RcppExport SEXP _bigIRT_fisher_dense_cpp_impl(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
 RcppExport SEXP _bigIRT_item_info_accum_cpp_impl(SEXP, SEXP, SEXP, SEXP);
-RcppExport SEXP _bigIRT_laplace2_fg_cpp_impl(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
+RcppExport SEXP _bigIRT_laplace2_fg_cpp_impl(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
 RcppExport SEXP _bigIRT_laplace_ability_beta_rows_cpp_impl(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
 RcppExport SEXP _bigIRT_laplace_clip_counts_cpp_impl(SEXP);
 RcppExport SEXP _bigIRT_laplace_corr_grad_cpp_impl(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
@@ -41,7 +41,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_bigIRT_fisher_blocks_cpp_impl",                (DL_FUNC) &_bigIRT_fisher_blocks_cpp_impl,                42},
     {"_bigIRT_fisher_dense_cpp_impl",                 (DL_FUNC) &_bigIRT_fisher_dense_cpp_impl,                 42},
     {"_bigIRT_item_info_accum_cpp_impl",              (DL_FUNC) &_bigIRT_item_info_accum_cpp_impl,               4},
-    {"_bigIRT_laplace2_fg_cpp_impl",                  (DL_FUNC) &_bigIRT_laplace2_fg_cpp_impl,                  31},
+    {"_bigIRT_laplace2_fg_cpp_impl",                  (DL_FUNC) &_bigIRT_laplace2_fg_cpp_impl,                  32},
     {"_bigIRT_laplace_ability_beta_rows_cpp_impl",    (DL_FUNC) &_bigIRT_laplace_ability_beta_rows_cpp_impl,    13},
     {"_bigIRT_laplace_clip_counts_cpp_impl",          (DL_FUNC) &_bigIRT_laplace_clip_counts_cpp_impl,           1},
     {"_bigIRT_laplace_corr_grad_cpp_impl",            (DL_FUNC) &_bigIRT_laplace_corr_grad_cpp_impl,             9},

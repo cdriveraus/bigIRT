@@ -173,7 +173,7 @@ bigIRT_laplace_fisher_parts <- function(ev, sdat, context, layout){
   }
   V <- D$V %*% S
   C <- C %*% S
-  Pr <- S %*% bigIRT_laplace_prior_curvature(sdat, layout, n, N, P0) %*% S
+  Pr <- S %*% bigIRT_prior_curvature_cached(sdat, layout, n, N, P0, context) %*% S
   Fv <- function(v){
     v <- as.numeric(v)
     as.numeric(Matrix::crossprod(V, V %*% v) + Pr %*% v -
@@ -432,6 +432,19 @@ bigIRT_laplace_blockdiag_solver <- function(ev, x, g, sdat, context, layout, gfu
   bigIRT_laplace_factor_metric(Bd)
 }
 
+## The prior curvature, cached for the optimiser run: it depends on the
+## priors, the layout and the ability prior precision, and within one call of
+## bigIRT_laplace_optimize_direct only the last can change (with estimated
+## correlations). Rebuilding it cost 0.17 s at every metric refresh on a
+## 10,000-parameter fit.
+bigIRT_prior_curvature_cached <- function(sdat, layout, n, N, P0, context){
+  ce <- context$cache
+  if(is.environment(ce) && !is.null(ce$pr_P0) && identical(ce$pr_P0, P0)) return(ce$pr)
+  Pr <- bigIRT_laplace_prior_curvature(sdat, layout, n, N, P0)
+  if(is.environment(ce)){ ce$pr_P0 <- P0; ce$pr <- Pr }
+  Pr
+}
+
 ## The same metric assembled in C++ (src/fisher_blocks.cpp): one parallel
 ## pass over persons builds every item block and the exact shared block, with
 ## no sparse matrices, no factorisation of the person block and no
@@ -439,6 +452,7 @@ bigIRT_laplace_blockdiag_solver <- function(ev, x, g, sdat, context, layout, gfu
 ## options(bigIRT.blockdiag_impl = "R"), and the tests hold the two equal.
 ## Only the coordinates the construction does not describe (latent
 ## correlations) are still differenced, one gradient evaluation each.
+
 ## Marshal the fitted state for the C++ Fisher kernels (src/fisher_blocks.cpp):
 ## `entry` is "blocks" (block-diagonal) or "dense".
 bigIRT_fisher_kernel_call <- function(entry, ev, sdat, context, layout, ps, prior_diag){
@@ -483,7 +497,7 @@ bigIRT_laplace_fisher_solver_cpp <- function(ev, x, g, sdat, context, layout, gf
   Fm <- tryCatch(bigIRT_fisher_kernel_call("dense", ev, sdat, context,
     layout, ps, numeric(n)), error = function(e) NULL)
   if(is.null(Fm)) return(NULL)
-  Fm <- Fm + as.matrix(bigIRT_laplace_prior_curvature(sdat, layout, n, N, P0)) * outer(ps, ps)
+  Fm <- Fm + as.matrix(bigIRT_prior_curvature_cached(sdat, layout, n, N, P0, context)) * outer(ps, ps)
   described <- unique(c(layout$B, layout$B_beta, layout$A, layout$A_beta, layout$C, layout$C_beta,
     layout$D, layout$D_beta, layout$B_mean, layout$A_mean, layout$C_mean, layout$D_mean,
     layout$ability_beta, layout$ability_mean))
@@ -514,7 +528,7 @@ bigIRT_laplace_blockdiag_solver_cpp <- function(ev, x, g, sdat, context, layout,
   rc <- context$row_context; st <- ev$state; rows <- context$train_rows
   ps <- attr(layout, "par_scale"); if(length(ps) != n) ps <- rep(1, n)
   P0 <- as.matrix(ev$prior_mats$precision)
-  Pr <- bigIRT_laplace_prior_curvature(sdat, layout, n, N, P0)
+  Pr <- bigIRT_prior_curvature_cached(sdat, layout, n, N, P0, context)
   out <- tryCatch(bigIRT_fisher_kernel_call("blocks", ev, sdat, context,
     layout, ps, as.numeric(Matrix::diag(Pr)) * ps^2), error = function(e) NULL)
   if(is.null(out)) return(NULL)

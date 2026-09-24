@@ -6,6 +6,7 @@
 #include <vector>
 #include <memory>
 #include <cstdlib>
+#include "bigirt_obsindex.h"
 using Eigen::MatrixXd;
 using Eigen::VectorXd;
 
@@ -1648,7 +1649,7 @@ extern "C" SEXP _bigIRT_laplace_item_objective_cpp_impl(
 // subjects sitting identical forms adjacent and similar forms nearby. It
 // assumes nothing about the design.
 static std::vector<int> bigIRT_subject_locality_order(
-    const std::vector< std::vector<int> >& obs_by_subj,
+    const BigIRTObsIndex& obs_by_subj,
     const Rcpp::IntegerVector& B_ref) {
   const std::size_t n = obs_by_subj.size();
   std::vector<int> order(n);
@@ -1658,7 +1659,7 @@ static std::vector<int> bigIRT_subject_locality_order(
   const int nref = static_cast<int>(B_ref.size());
   std::vector< std::vector<int> > sig(n);
   for (std::size_t i = 0; i < n; ++i) {
-    const std::vector<int>& obs = obs_by_subj[i];
+    const BigIRTObsSpan obs = obs_by_subj[i];
     std::vector<int> k;
     k.reserve(obs.size());
     for (std::size_t j = 0; j < obs.size(); ++j) {
@@ -1675,7 +1676,7 @@ static std::vector<int> bigIRT_subject_locality_order(
 }
 
 struct BigIRTLaplaceItemBlockWorker : public RcppParallel::Worker {
-  const std::vector< std::vector<int> >& obs_by_subj;
+  const BigIRTObsIndex& obs_by_subj;
   BigIRTOwnedVector<int> score;
   BigIRTOwnedMatrix<double> row_ability;
   BigIRTOwnedMatrix<int> A_ref;
@@ -1755,7 +1756,7 @@ struct BigIRTLaplaceItemBlockWorker : public RcppParallel::Worker {
   int out_nobs = 0;
 
   BigIRTLaplaceItemBlockWorker(
-      const std::vector< std::vector<int> >& obs_by_subj,
+      const BigIRTObsIndex& obs_by_subj,
       Rcpp::IntegerVector score,
       Rcpp::NumericMatrix row_ability,
       Rcpp::IntegerMatrix A_ref,
@@ -1867,7 +1868,7 @@ struct BigIRTLaplaceItemBlockWorker : public RcppParallel::Worker {
       }
       const MatrixXd Q_prior = Q;
 
-      const std::vector<int>& obs_idx = obs_by_subj[subj];
+      const BigIRTObsSpan obs_idx = obs_by_subj[subj];
       std::vector<BigIRTRowTerms> row_terms(obs_idx.size());
       std::vector<VectorXd> row_a(obs_idx.size(), VectorXd::Zero(K));
       std::vector<VectorXd> row_a_mult(obs_idx.size(), VectorXd::Zero(K));
@@ -2082,7 +2083,7 @@ struct BigIRTItemPrepared {
   Rcpp::NumericVector prior_precision;
   int K = 0, Nsubs = 0, max_attempts = 0;
   double jitter = 0.0;
-  std::vector< std::vector<int> > obs_by_subj;
+  BigIRTObsIndex obs_by_subj;
   std::vector<int> subject_order;
 };
 
@@ -2121,14 +2122,9 @@ extern "C" SEXP _bigIRT_laplace_item_prepare_cpp_impl(
   d->Nsubs = Rcpp::as<Rcpp::IntegerVector>(d->prior_precision.attr("dim"))[2];
 
   const int Nobs = d->id.size();
-  d->obs_by_subj.assign(static_cast<std::size_t>(d->Nsubs), std::vector<int>());
-  for (int obs = 0; obs < Nobs; ++obs) {
-    const int subj = d->id[obs] - 1;
-    if (subj < 0 || subj >= d->Nsubs) {
-      delete d;
-      Rcpp::stop("id must be coded from 1 to Nsubs.");
-    }
-    d->obs_by_subj[static_cast<std::size_t>(subj)].push_back(obs);
+  if (!d->obs_by_subj.build(d->id, Nobs, d->Nsubs)) {
+    delete d;
+    Rcpp::stop("id must be coded from 1 to Nsubs.");
   }
   // Natural subject order by default.
   //
@@ -2286,12 +2282,8 @@ extern "C" SEXP _bigIRT_laplace_item_block_objective_cpp_impl(
     Rcpp::stop("B/C/D reference vectors must have length Nobs.");
   }
 
-  std::vector< std::vector<int> > obs_by_subj(Nsubs);
-  for (int obs = 0; obs < Nobs; ++obs) {
-    const int subj = id[obs] - 1;
-    if (subj < 0 || subj >= Nsubs) Rcpp::stop("id must be coded from 1 to Nsubs.");
-    obs_by_subj[subj].push_back(obs);
-  }
+  BigIRTObsIndex obs_by_subj;
+  if (!obs_by_subj.build(id, Nobs, Nsubs)) Rcpp::stop("id must be coded from 1 to Nsubs.");
 
   BigIRTLaplaceItemBlockWorker worker(
     obs_by_subj, score, row_ability, A_ref, A_fixed_value, A_beta_row, A_pred,
@@ -2469,12 +2461,8 @@ extern "C" SEXP _bigIRT_laplace_person_step_block_cpp_impl(
     Rcpp::stop("Unexpected dimensions in Laplace person-step block inputs.");
   }
 
-  std::vector< std::vector<int> > obs_by_subj(Nsubs);
-  for (int obs = 0; obs < Nobs; ++obs) {
-    const int subj = id[obs] - 1;
-    if (subj < 0 || subj >= Nsubs) Rcpp::stop("id must be coded from 1 to Nsubs.");
-    obs_by_subj[subj].push_back(obs);
-  }
+  BigIRTObsIndex obs_by_subj;
+  if (!obs_by_subj.build(id, Nobs, Nsubs)) Rcpp::stop("id must be coded from 1 to Nsubs.");
 
   Rcpp::NumericMatrix theta_mode(Nsubs, K);
   Rcpp::NumericVector precision(K * K * Nsubs);
@@ -2493,7 +2481,7 @@ extern "C" SEXP _bigIRT_laplace_person_step_block_cpp_impl(
   }
 
   struct BigIRTLaplacePersonBlockWorker : public RcppParallel::Worker {
-    const std::vector< std::vector<int> >& obs_by_subj;
+    const BigIRTObsIndex& obs_by_subj;
     BigIRTOwnedVector<int> score;
     BigIRTOwnedMatrix<double> theta_init;
     BigIRTOwnedMatrix<double> person_pred;
@@ -2544,7 +2532,7 @@ extern "C" SEXP _bigIRT_laplace_person_step_block_cpp_impl(
     RcppParallel::RVector<double> covariance;
 
     BigIRTLaplacePersonBlockWorker(
-      const std::vector< std::vector<int> >& obs_by_subj,
+      const BigIRTObsIndex& obs_by_subj,
       Rcpp::IntegerVector score,
       Rcpp::NumericMatrix theta_init,
       Rcpp::NumericMatrix person_pred,
@@ -2640,7 +2628,7 @@ extern "C" SEXP _bigIRT_laplace_person_step_block_cpp_impl(
           if (free_mask(subj, k) != 0) active.push_back(k);
         }
 
-        const std::vector<int>& obs_idx = obs_by_subj[subj];
+        const BigIRTObsSpan obs_idx = obs_by_subj[subj];
         std::vector<VectorXd> ability_offset(obs_idx.size(), VectorXd::Zero(K));
         std::vector<VectorXd> loadings(obs_idx.size(), VectorXd::Zero(K));
         std::vector<double> b_row(obs_idx.size(), 0.0);

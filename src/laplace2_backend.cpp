@@ -45,6 +45,7 @@
 #include <memory>
 #include <cmath>
 #include <algorithm>
+#include "bigirt_obsindex.h"
 using Eigen::MatrixXd;
 using Eigen::VectorXd;
 
@@ -149,6 +150,7 @@ struct L2Data {
     Abilitybeta, invspApars, invspAbeta, Bpars, Bbeta, logitCpars, logitCbeta, logitDpars, logitDbeta,
     prior_mean, prior_precision;
   int K = 1, P = 0;
+  double kappa = 0;     // curvature floor, as a share of the Fisher information (off)
   double beta_term(int o, const L2Vec<double>& pred, const L2Vec<double>& beta, int brow) const {
     if (brow <= 0 || pred.nc == 0 || beta.nr == 0) return 0.0;
     double s = 0; for (int j = 0; j < pred.nc; ++j) s += pred(o, j) * beta(brow - 1, j);
@@ -158,10 +160,10 @@ struct L2Data {
 
 struct L2Worker : public RcppParallel::Worker {
   const L2Data& D;
-  const std::vector< std::vector<int> >& obs_by_subj;
+  const BigIRTObsIndex& obs_by_subj;
   double value = 0; int skipped = 0;
   std::vector<double> gA, gB, gC, gD, gAb, gBb, gCb, gDb, gAbil, gMean, gP0;
-  L2Worker(const L2Data& D, const std::vector< std::vector<int> >& obs) : D(D), obs_by_subj(obs) {
+  L2Worker(const L2Data& D, const BigIRTObsIndex& obs) : D(D), obs_by_subj(obs) {
     gA.assign(D.invspApars.count(), 0); gB.assign(D.Bpars.count(), 0);
     gC.assign(D.logitCpars.count(), 0); gD.assign(D.logitDpars.count(), 0);
     gAb.assign(D.invspAbeta.count(), 0); gBb.assign(D.Bbeta.count(), 0);
@@ -185,7 +187,7 @@ struct L2Worker : public RcppParallel::Worker {
     const int K = D.K;
     for (std::size_t s = begin; s < end; ++s) {
       const int subj = static_cast<int>(s);
-      const std::vector<int>& obs = obs_by_subj[subj];
+      const BigIRTObsSpan obs = obs_by_subj[subj];
       const int n = static_cast<int>(obs.size());
       if (n == 0) continue;
       std::vector<int> act;
@@ -202,6 +204,10 @@ struct L2Worker : public RcppParallel::Worker {
       std::vector<double> y(n), l1(n), l2(n), l3(n), l4(n), l5(n);
       std::vector<double> l1c(n, 0), l2c(n, 0), l3c(n, 0), l4c(n, 0), l1d(n, 0), l2d(n, 0), l3d(n, 0), l4d(n, 0);
       std::vector<double> cmul(n, 0), dmul(n, 0);
+      // The curvature the correction uses, and, where it is floored, the
+      // derivatives of the floor kappa w_F in eta, c and d.
+      std::vector<double> wc(n, 0), fe(n, 0), fcv(n, 0), fdv(n, 0);
+      std::vector<char> floored(n, 0);
       for (int oi = 0; oi < n; ++oi) {
         const int o = obs[oi];
         const int bb = D.B_ref[o] > 0 ? (D.Bbeta.nr == 1 ? 1 : D.B_ref[o]) : 0;
@@ -231,6 +237,20 @@ struct L2Worker : public RcppParallel::Worker {
         y[oi] = static_cast<double>(D.score[o]);
         double t[6]; l2_tower<double>(y[oi], eta, c, dd, t);
         l1[oi] = t[1]; l2[oi] = t[2]; l3[oi] = t[3]; l4[oi] = t[4]; l5[oi] = t[5];
+        {
+          // Fisher information in eta, w_F = u^2 s1^2 / (p (1 - p)).
+          const double sg = l2_sig(eta), s1 = sg * (1 - sg), u = dd - c;
+          double pp = c + u * sg; pp = std::min(std::max(pp, 1e-12), 1 - 1e-12);
+          const double rr = std::max(pp * (1 - pp), 1e-12), q2 = u * u * s1 * s1;
+          const double wF = q2 / rr;
+          const double wobs = -t[2];
+          if (D.kappa > 0 && wobs < D.kappa * wF) {
+            wc[oi] = D.kappa * wF; floored[oi] = 1;
+            fe[oi] = D.kappa * q2 * (2 * (1 - 2 * sg) * rr - u * s1 * (1 - 2 * pp)) / (rr * rr);
+            fcv[oi] = D.kappa * (-2 * u * s1 * s1 * rr - q2 * (1 - sg) * (1 - 2 * pp)) / (rr * rr);
+            fdv[oi] = D.kappa * (2 * u * s1 * s1 * rr - q2 * sg * (1 - 2 * pp)) / (rr * rr);
+          } else wc[oi] = wobs;
+        }
         if (D.C_ref[o] > 0) { Dual tc[6]; l2_tower<Dual>(y[oi], eta, Dual(c, 1), Dual(dd, 0), tc);
           l1c[oi] = tc[1].d; l2c[oi] = tc[2].d; l3c[oi] = tc[3].d; l4c[oi] = tc[4].d; }
         if (D.D_ref[o] > 0) { Dual td[6]; l2_tower<Dual>(y[oi], eta, Dual(c, 0), Dual(dd, 1), td);
@@ -240,8 +260,24 @@ struct L2Worker : public RcppParallel::Worker {
       MatrixXd P0a(d, d); VectorXd dm(d);
       for (int r = 0; r < d; ++r) { dm(r) = m(act[r]) - mu(act[r]);
         for (int c = 0; c < d; ++c) P0a(r, c) = P0(act[r], act[c]); }
-      MatrixXd Dw = MatrixXd::Zero(d, d);
-      for (int oi = 0; oi < n; ++oi) Dw += (-l2[oi]) * A.row(oi).transpose() * A.row(oi);
+      // Two curvatures. The correction's Gaussian may use a floored one, wc
+      // (options(bigIRT.laplace2_floor = kappa), off by default): with free
+      // asymptotes the observed curvature of a response near the guessing
+      // floor can be zero or negative, S then fails to shrink as the loadings
+      // grow, and the E T3^2 term grows like a^6 -- a two-dimensional 3PL
+      // refinement drove the objective to 1e13 that way. Flooring at kappa
+      // times the Fisher information, which grows like a^2, bounds it, but
+      // measured against 9^K optima (dev/optim/mdim_lowk.R) it left some
+      // items 15 to 23 SE off at K = 2 and 3, where without it the K = 3 fit
+      // was within 0.8 and the K = 2 one blew up and was reverted by
+      // fitIRT's guard. Silently wrong is worse than caught, so it is off.
+      // For the 2PL the two curvatures are equal and nothing is ever floored.
+      // The mode adjoint needs the actual Hessian, so that is kept too.
+      MatrixXd Dw = MatrixXd::Zero(d, d), Dt = MatrixXd::Zero(d, d);
+      for (int oi = 0; oi < n; ++oi) {
+        Dw += wc[oi] * A.row(oi).transpose() * A.row(oi);
+        Dt += (-l2[oi]) * A.row(oi).transpose() * A.row(oi);
+      }
       // Where the data curvature is not positive semidefinite, clip it to
       // the nearest matrix that is, as the Laplace path does. Clipping is
       // continuous, so the objective stays continuous across the boundary
@@ -262,6 +298,14 @@ struct L2Worker : public RcppParallel::Worker {
       Eigen::LLT<MatrixXd> llt(H);
       if (llt.info() != Eigen::Success) { ++skipped; continue; }
       const MatrixXd S = llt.solve(MatrixXd::Identity(d, d));
+      MatrixXd St = S;
+      {
+        Eigen::SelfAdjointEigenSolver<MatrixXd> es(Dt);
+        if (es.eigenvalues().minCoeff() < 0)
+          Dt = es.eigenvectors() * es.eigenvalues().cwiseMax(0.0).asDiagonal() * es.eigenvectors().transpose();
+        Eigen::LLT<MatrixXd> lt(P0a + Dt);
+        if (lt.info() == Eigen::Success) St = lt.solve(MatrixXd::Identity(d, d));
+      }
       const MatrixXd Q = A * S;                  // n x d
       const MatrixXd C = Q * A.transpose();      // n x n
       VectorXd v(n), L3(n);
@@ -292,16 +336,18 @@ struct L2Worker : public RcppParallel::Worker {
       MatrixXd ga(n, d);
       for (int r = 0; r < n; ++r) {
         const double aHa = AH.row(r).dot(A.row(r));
-        dl2[r] = clipped ? 0.0 : -aHa;                   // w = -l2; H frozen where clipped
+        // dC/dw_r = a'Hbar a, through -l2 or through the floor.
+        dl2[r] = (clipped || floored[r]) ? 0.0 : -aHa;   // H frozen where clipped
         geta[r] = dl2[r] * l3[r] + dl3[r] * l4[r] + dl4[r] * l5[r];
         gc[r] = dl2[r] * l2c[r] + dl3[r] * l3c[r] + dl4[r] * l4c[r];
         gd[r] = dl2[r] * l2d[r] + dl3[r] * l3d[r] + dl4[r] * l4d[r];
+        if (floored[r] && !clipped) { geta[r] += aHa * fe[r]; gc[r] += aHa * fcv[r]; gd[r] += aHa * fdv[r]; }
         ga.row(r) = 2.0 * GQ.row(r);
-        if (!clipped) ga.row(r) += 2.0 * (-l2[r]) * AH.row(r);
+        if (!clipped) ga.row(r) += 2.0 * wc[r] * AH.row(r);
         gm += geta[r] * A.row(r).transpose();
       }
       // Mode adjoint.
-      const VectorXd u = S * gm;
+      const VectorXd u = St * gm;
       for (int r = 0; r < n; ++r) {
         const double au = A.row(r).dot(u);
         geta[r] += l2[r] * au;
@@ -378,7 +424,7 @@ extern "C" SEXP _bigIRT_laplace2_fg_cpp_impl(
     SEXP D_refSEXP, SEXP D_fixed_valueSEXP, SEXP D_predSEXP,
     SEXP AbilitybetaSEXP, SEXP invspAparsSEXP, SEXP invspAbetaSEXP, SEXP BparsSEXP, SEXP BbetaSEXP,
     SEXP logitCparsSEXP, SEXP logitCbetaSEXP, SEXP logitDparsSEXP, SEXP logitDbetaSEXP,
-    SEXP prior_meanSEXP, SEXP prior_precisionSEXP, SEXP free_maskSEXP, SEXP grainSEXP) {
+    SEXP prior_meanSEXP, SEXP prior_precisionSEXP, SEXP free_maskSEXP, SEXP kappaSEXP, SEXP grainSEXP) {
   BEGIN_RCPP
   Rcpp::IntegerVector id(idSEXP);
   Rcpp::NumericMatrix theta_mode(theta_modeSEXP);
@@ -399,12 +445,9 @@ extern "C" SEXP _bigIRT_laplace2_fg_cpp_impl(
   D.prior_mean = l2_d(prior_meanSEXP); D.prior_precision = l2_d(prior_precisionSEXP);
   D.K = K;
   D.P = (D.person_pred.nc > 0 && D.Abilitybeta.nc == D.person_pred.nc) ? D.person_pred.nc : 0;
-  std::vector< std::vector<int> > obs_by_subj(N);
-  for (int o = 0; o < Nobs; ++o) {
-    const int s = id[o] - 1;
-    if (s < 0 || s >= N) Rcpp::stop("id must be coded from 1 to Nsubs.");
-    obs_by_subj[s].push_back(o);
-  }
+  BigIRTObsIndex obs_by_subj;
+  if (!obs_by_subj.build(id, Nobs, N)) Rcpp::stop("id must be coded from 1 to Nsubs.");
+  D.kappa = Rcpp::as<double>(kappaSEXP);
   L2Worker w(D, obs_by_subj);
   RcppParallel::parallelReduce(static_cast<std::size_t>(0), static_cast<std::size_t>(N), w,
                                static_cast<std::size_t>(std::max(1, Rcpp::as<int>(grainSEXP))));
