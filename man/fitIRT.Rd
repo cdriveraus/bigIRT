@@ -59,7 +59,7 @@ fitIRT(
   laplaceTolScale = c("relative", "per_obs"),
   laplaceGradTol = 1e-04,
   laplacePolish = 8L,
-  laplacePersonTol = 1e-04,
+  laplacePersonTol = 1e-06,
   laplaceOptimizer = c("fisher", "mize"),
   laplaceKeepCovariance = FALSE,
   laplaceDiagnostics = FALSE,
@@ -341,7 +341,7 @@ parameters and the number of responses, so an absolute threshold cannot be
 met by a large sparse fit however well converged it is. Both the raw and
 the scaled value are returned in \code{laplaceStatus}. Formerly a
 gradient-norm tolerance for the item-step
-Laplace surrogate. Default is 1e-2.}
+Laplace surrogate. Default is 1e-4.}
 
 \item{laplacePolish}{Integer. Maximum block-Newton polish steps taken after
 the quasi-Newton optimizer stops, on the final fit only. L-BFGS gives up
@@ -353,7 +353,14 @@ Set to 0 to disable. Default is 8. Applies to
 \code{laplaceOptimizer = "mize"} only.}
 
 \item{laplacePersonTol}{Numeric. Newton tolerance for person-mode updates in
-\code{"laplace"}. Default is 1e-4.}
+\code{"laplace"}: the gradient norm at which each person's mode solve
+stops. The objective is a sum over persons, and every mode is solved from
+where the previous evaluation left it, so this sets how much the value
+depends on the path that led to it. At 1e-4 the same point evaluated from
+different warm starts differed by about 1e-3 nats at 5,000 persons and 1e-2
+at 40,000 -- above the optimiser's own stopping tolerance
+(\code{laplaceTol}). At 1e-6 it is about 1e-5 and 1e-4, for 3 to 5 per
+cent more time per fit. Default is 1e-6 (1e-4 before September 2026).}
 
 \item{laplaceKeepCovariance}{Logical. Whether to keep full person covariance
 matrices on the Laplace path. Covariances are otherwise retained only when

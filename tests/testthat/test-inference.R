@@ -8,9 +8,10 @@
 ## that a change to either construction has to be deliberate.
 ##
 ## The person-mode tolerance is the trap here. Perturbing one item parameter
-## barely moves the modes, so at the fitting default of 1e-4 the mode solve
-## returns immediately and the difference quotient measures frozen-mode
-## curvature instead -- a larger, different quantity that looks plausible.
+## barely moves the modes, so at a fitting tolerance (1e-6 now, 1e-4 before)
+## the mode solve returns immediately and the difference quotient measures
+## frozen-mode curvature instead -- a larger, different quantity that looks
+## plausible.
 
 if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
 

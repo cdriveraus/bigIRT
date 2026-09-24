@@ -1516,9 +1516,16 @@ bigIRT_validate_fit_inputs <- function(dat, score, id, item, scale, pl, controls
 #'   met by a large sparse fit however well converged it is. Both the raw and
 #'   the scaled value are returned in \code{laplaceStatus}. Formerly a
 #'   gradient-norm tolerance for the item-step
-#'   Laplace surrogate. Default is 1e-2.
+#'   Laplace surrogate. Default is 1e-4.
 #' @param laplacePersonTol Numeric. Newton tolerance for person-mode updates in
-#'   \code{"laplace"}. Default is 1e-4.
+#'   \code{"laplace"}: the gradient norm at which each person's mode solve
+#'   stops. The objective is a sum over persons, and every mode is solved from
+#'   where the previous evaluation left it, so this sets how much the value
+#'   depends on the path that led to it. At 1e-4 the same point evaluated from
+#'   different warm starts differed by about 1e-3 nats at 5,000 persons and 1e-2
+#'   at 40,000 -- above the optimiser's own stopping tolerance
+#'   (\code{laplaceTol}). At 1e-6 it is about 1e-5 and 1e-4, for 3 to 5 per
+#'   cent more time per fit. Default is 1e-6 (1e-4 before September 2026).
 #' @param laplaceKeepCovariance Logical. Whether to keep full person covariance
 #'   matrices on the Laplace path. Covariances are otherwise retained only when
 #'   needed to estimate ability correlations. Default is FALSE.
@@ -1637,7 +1644,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   marginalApprox=c("none","laplace","laplace_fast","laplace_direct"),
   estimateAbilityCorr=FALSE,
   laplaceCorrParam=c("stan_corsqrt","normalized_chol"),
-  keepInternals=FALSE,laplaceOuterIter=500,laplaceTol=1e-3,laplaceTolScale=c("relative","per_obs"),laplaceGradTol=1e-4,laplacePolish=8L,laplacePersonTol=1e-4,laplaceOptimizer=c("fisher","mize"),
+  keepInternals=FALSE,laplaceOuterIter=500,laplaceTol=1e-3,laplaceTolScale=c("relative","per_obs"),laplaceGradTol=1e-4,laplacePolish=8L,laplacePersonTol=1e-6,laplaceOptimizer=c("fisher","mize"),
   laplaceKeepCovariance=FALSE,laplaceDiagnostics=FALSE,laplacePlot=FALSE,laplacePlotEvery=1L,
   laplaceJitter=1e-6,noptimsteps=10,
   normalise=FALSE,normaliseScale=1,normaliseMean=0,

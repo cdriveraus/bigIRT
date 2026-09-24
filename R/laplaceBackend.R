@@ -1106,7 +1106,7 @@ bigIRT_laplace_person_step_block_cpp_impl <- function(id, score, theta_init,
 ## `marginalApprox = "laplace_direct"`.
 bigIRT_laplace_direct_objective <- function(par, state, sdat, prior_precision,
   theta_init = state$AbilityBase, jitter = 1e-6, max_attempts = 8L,
-  max_iter = 50L, tol = 1e-4, keep_covariance = FALSE, context = NULL){
+  max_iter = 50L, tol = 1e-6, keep_covariance = FALSE, context = NULL){
   wall_time_sec <- function() as.numeric(proc.time()[["elapsed"]])
   t_total0 <- wall_time_sec()
   estimateAbilityCorr <- isTRUE(context$estimateAbilityCorr)
@@ -1412,7 +1412,7 @@ bigIRT_laplace_newton_step <- function(ev, sdat, context, layout){
 ## objective value together with the frozen-mode Laplace gradient as a proxy
 ## gradient for efficient experimentation.
 bigIRT_laplace_optimize_direct <- function(state, sdat, prior_precision,
-  niter = 50L, tol = 1e-4, jitter = 1e-6, person_tol = 1e-4,
+  niter = 50L, tol = 1e-4, jitter = 1e-6, person_tol = 1e-6,
   keep_covariance = FALSE, cores = 1L, estimateAbilityCorr = FALSE,
   corr_paramization = c("normalized_chol", "stan_corsqrt"),
   collect_history = FALSE, plot_callback = NULL, plot_every = 1L,
