@@ -9,47 +9,46 @@
 using Eigen::MatrixXd;
 using Eigen::VectorXd;
 
-// Worker inputs must not retain an R object.  RcppParallel's RVector/RMatrix
-// views are only safe for a narrow set of access patterns and were the source
-// of process-level exits in predictor-bearing fits on Windows.  These compact
-// column-major copies are made once at the .Call boundary and are ordinary C++
-// data thereafter.
+// Worker inputs: read-only views of the R arrays, no copy.
+//
+// These used to be owned copies, made on every .Call. The copies were there
+// because RcppParallel's RVector/RMatrix views had been the source of
+// process-level exits in predictor-bearing fits on Windows, and they were
+// correct -- but they were serial, O(Nobs) per array per call, and on a 1.5M
+// response fit at eight threads the person kernel spent more time in its
+// serial part (copies and index) than in its parallel one.
+//
+// A view here is a raw pointer taken at the .Call boundary on the main thread
+// (which also materialises any ALTREP vector there, so no worker thread ever
+// calls into R), plus its dimensions. It holds no R object. The arrays it
+// points at are .Call arguments, or members of the persistent prepared-item
+// object, so they outlive every worker. An empty array is a null pointer with
+// zero extent, and every accessor site already guards on the extent.
 template <typename T>
-// The buffer is shared, not copied. RcppParallel splits the worker body once
-// per stealing thread, and the default member-wise copy duplicated every one of
-// these -- all of them read-only, and several of them sized by the number of
-// observations rather than the number of subjects. On a sparse fit with
-// millions of responses that is hundreds of megabytes per split, for data no
-// split ever writes to. A shared_ptr copy is O(1) and every accessor below is
-// unchanged, so no call site has to know.
 struct BigIRTOwnedVector {
-  std::shared_ptr< std::vector<T> > values;
-  BigIRTOwnedVector() : values(std::make_shared< std::vector<T> >()) {}
-  template <typename V> explicit BigIRTOwnedVector(const V& x)
-      : values(std::make_shared< std::vector<T> >(static_cast<std::size_t>(x.size()))) {
-    std::copy(x.begin(), x.end(), values->begin());
+  const T* ptr = nullptr;
+  int n = 0;
+  BigIRTOwnedVector() {}
+  template <typename V> explicit BigIRTOwnedVector(const V& x) : n(static_cast<int>(x.size())) {
+    if (n > 0) ptr = &(*x.begin());
   }
-  inline int length() const { return static_cast<int>(values->size()); }
-  inline int size() const { return static_cast<int>(values->size()); }
-  inline const T& operator[](const int i) const { return (*values)[static_cast<std::size_t>(i)]; }
+  inline int length() const { return n; }
+  inline int size() const { return n; }
+  inline const T& operator[](const int i) const { return ptr[i]; }
 };
 
 template <typename T>
-// Shared for the same reason as BigIRTOwnedVector above.
 struct BigIRTOwnedMatrix {
   int nr = 0, nc = 0;
-  std::shared_ptr< std::vector<T> > values;
-  BigIRTOwnedMatrix() : values(std::make_shared< std::vector<T> >()) {}
-  template <typename M> explicit BigIRTOwnedMatrix(const M& x)
-      : nr(x.nrow()), nc(x.ncol()),
-        values(std::make_shared< std::vector<T> >(static_cast<std::size_t>(nr) * static_cast<std::size_t>(nc))) {
-    for (int j = 0; j < nc; ++j) for (int i = 0; i < nr; ++i)
-      (*values)[static_cast<std::size_t>(i + nr * j)] = x(i, j);
+  const T* ptr = nullptr;
+  BigIRTOwnedMatrix() {}
+  template <typename M> explicit BigIRTOwnedMatrix(const M& x) : nr(x.nrow()), nc(x.ncol()) {
+    if (nr > 0 && nc > 0) ptr = &(*x.begin());
   }
   inline int nrow() const { return nr; }
   inline int ncol() const { return nc; }
   inline const T& operator()(const int i, const int j) const {
-    return (*values)[static_cast<std::size_t>(i + nr * j)];
+    return ptr[static_cast<std::size_t>(i) + static_cast<std::size_t>(nr) * static_cast<std::size_t>(j)];
   }
 };
 

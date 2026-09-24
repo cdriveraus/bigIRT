@@ -49,31 +49,49 @@ inline double fb_softplus(const double x) {
   return x > 0.0 ? x + std::log1p(std::exp(-x)) : std::log1p(std::exp(x));
 }
 
+// A read-only view of an R array, or an owned copy when R handed over a
+// different storage type (a view of a coerced temporary would dangle). Views
+// are taken on the main thread at the .Call boundary; the array outlives the
+// call. See BigIRTOwnedVector in laplace_backend.cpp for why not copies.
 template <typename T>
 struct FbVec {
   std::shared_ptr< std::vector<T> > v;
+  const T* p = nullptr;
+  std::size_t len = 0;
   int nr = 0, nc = 0;
   FbVec() : v(std::make_shared< std::vector<T> >()) {}
-  inline const T& operator[](std::size_t i) const { return (*v)[i]; }
+  inline const T& operator[](std::size_t i) const { return p[i]; }
   inline const T& operator()(int i, int j) const {
-    return (*v)[static_cast<std::size_t>(i) + static_cast<std::size_t>(nr) * static_cast<std::size_t>(j)];
+    return p[static_cast<std::size_t>(i) + static_cast<std::size_t>(nr) * static_cast<std::size_t>(j)];
   }
-  inline int size() const { return static_cast<int>(v->size()); }
+  inline std::size_t count() const { return len; }
+  inline int size() const { return static_cast<int>(len); }
 };
-FbVec<double> fb_d(SEXP x) {
-  Rcpp::NumericVector r(x); FbVec<double> o;
-  o.v = std::make_shared< std::vector<double> >(r.begin(), r.end());
-  o.nr = Rf_isMatrix(x) ? Rf_nrows(x) : r.size(); o.nc = Rf_isMatrix(x) ? Rf_ncols(x) : 1;
+inline FbVec<double> FbVec_d(SEXP x) {
+  FbVec<double> o;
+  o.len = static_cast<std::size_t>(Rf_xlength(x));
+  o.nr = Rf_isMatrix(x) ? Rf_nrows(x) : static_cast<int>(o.len);
+  o.nc = Rf_isMatrix(x) ? Rf_ncols(x) : 1;
   if (o.nr == 0) o.nc = 0;
+  if (TYPEOF(x) == REALSXP) { if (o.len) o.p = REAL(x); }
+  else { Rcpp::NumericVector r(x); o.v = std::make_shared< std::vector<double> >(r.begin(), r.end());
+    o.p = o.v->data(); }
   return o;
 }
-FbVec<int> fb_i(SEXP x) {
-  Rcpp::IntegerVector r(x); FbVec<int> o;
-  o.v = std::make_shared< std::vector<int> >(r.begin(), r.end());
-  o.nr = Rf_isMatrix(x) ? Rf_nrows(x) : r.size(); o.nc = Rf_isMatrix(x) ? Rf_ncols(x) : 1;
+inline FbVec<int> FbVec_i(SEXP x) {
+  FbVec<int> o;
+  o.len = static_cast<std::size_t>(Rf_xlength(x));
+  o.nr = Rf_isMatrix(x) ? Rf_nrows(x) : static_cast<int>(o.len);
+  o.nc = Rf_isMatrix(x) ? Rf_ncols(x) : 1;
   if (o.nr == 0) o.nc = 0;
+  if (TYPEOF(x) == INTSXP) { if (o.len) o.p = INTEGER(x); }
+  else if (TYPEOF(x) == LGLSXP) { if (o.len) o.p = LOGICAL(x); }
+  else { Rcpp::IntegerVector r(x); o.v = std::make_shared< std::vector<int> >(r.begin(), r.end());
+    o.p = o.v->data(); }
   return o;
 }
+inline FbVec<double> fb_d(SEXP x) { return FbVec_d(x); }
+inline FbVec<int> fb_i(SEXP x) { return FbVec_i(x); }
 
 // Everything a row contributes: its item, its derivative entries against
 // free parameters (0-based global index, value in optimiser coordinates) and

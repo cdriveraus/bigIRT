@@ -29,8 +29,15 @@
 // and the mode enters by the implicit function theorem through
 // u = S dC/dm: each row's eta-gradient gains l2_r a_r'u, its asymptote
 // gradients dl1/dc a_r'u, its loadings l1_r u, the ability mean P0 u, and the
-// prior precision -u (m - mu)'. Persons whose data curvature is not positive
-// semidefinite get no correction (and are counted).
+// prior precision -u (m - mu)'. Where a person's data curvature is not
+// positive semidefinite it is clipped to the nearest matrix that is (and
+// counted), with H then held fixed in the rows, as the Laplace path does.
+//
+// CAUTION. With free asymptotes the correction is not bounded: where the
+// observed curvature is not positive, S does not shrink as loadings grow and
+// the E T3^2 term grows like a^6. A two-dimensional 3PL refinement exploited
+// that (objective 1e13); fitIRT's "auto" uses this only without asymptotes,
+// where the curvature is always positive, and guards every refinement.
 
 #include <RcppEigen.h>
 #include <RcppParallel.h>
@@ -91,30 +98,49 @@ void l2_tower(const double y, const double eta, const T& c, const T& d, T out[6]
     + 24.0 * r[1] * r[1] * r[1] * r[1] * r[1];
 }
 
+// A read-only view of an R array, or an owned copy when R handed over a
+// different storage type (a view of a coerced temporary would dangle). Views
+// are taken on the main thread at the .Call boundary; the array outlives the
+// call. See BigIRTOwnedVector in laplace_backend.cpp for why not copies.
 template <typename T>
 struct L2Vec {
   std::shared_ptr< std::vector<T> > v;
+  const T* p = nullptr;
+  std::size_t len = 0;
   int nr = 0, nc = 0;
   L2Vec() : v(std::make_shared< std::vector<T> >()) {}
-  inline const T& operator[](std::size_t i) const { return (*v)[i]; }
+  inline const T& operator[](std::size_t i) const { return p[i]; }
   inline const T& operator()(int i, int j) const {
-    return (*v)[static_cast<std::size_t>(i) + static_cast<std::size_t>(nr) * static_cast<std::size_t>(j)];
+    return p[static_cast<std::size_t>(i) + static_cast<std::size_t>(nr) * static_cast<std::size_t>(j)];
   }
+  inline std::size_t count() const { return len; }
+  inline int size() const { return static_cast<int>(len); }
 };
-L2Vec<double> l2_d(SEXP x) {
-  Rcpp::NumericVector r(x); L2Vec<double> o;
-  o.v = std::make_shared< std::vector<double> >(r.begin(), r.end());
-  o.nr = Rf_isMatrix(x) ? Rf_nrows(x) : r.size(); o.nc = Rf_isMatrix(x) ? Rf_ncols(x) : 1;
+inline L2Vec<double> L2Vec_d(SEXP x) {
+  L2Vec<double> o;
+  o.len = static_cast<std::size_t>(Rf_xlength(x));
+  o.nr = Rf_isMatrix(x) ? Rf_nrows(x) : static_cast<int>(o.len);
+  o.nc = Rf_isMatrix(x) ? Rf_ncols(x) : 1;
   if (o.nr == 0) o.nc = 0;
+  if (TYPEOF(x) == REALSXP) { if (o.len) o.p = REAL(x); }
+  else { Rcpp::NumericVector r(x); o.v = std::make_shared< std::vector<double> >(r.begin(), r.end());
+    o.p = o.v->data(); }
   return o;
 }
-L2Vec<int> l2_i(SEXP x) {
-  Rcpp::IntegerVector r(x); L2Vec<int> o;
-  o.v = std::make_shared< std::vector<int> >(r.begin(), r.end());
-  o.nr = Rf_isMatrix(x) ? Rf_nrows(x) : r.size(); o.nc = Rf_isMatrix(x) ? Rf_ncols(x) : 1;
+inline L2Vec<int> L2Vec_i(SEXP x) {
+  L2Vec<int> o;
+  o.len = static_cast<std::size_t>(Rf_xlength(x));
+  o.nr = Rf_isMatrix(x) ? Rf_nrows(x) : static_cast<int>(o.len);
+  o.nc = Rf_isMatrix(x) ? Rf_ncols(x) : 1;
   if (o.nr == 0) o.nc = 0;
+  if (TYPEOF(x) == INTSXP) { if (o.len) o.p = INTEGER(x); }
+  else if (TYPEOF(x) == LGLSXP) { if (o.len) o.p = LOGICAL(x); }
+  else { Rcpp::IntegerVector r(x); o.v = std::make_shared< std::vector<int> >(r.begin(), r.end());
+    o.p = o.v->data(); }
   return o;
 }
+inline L2Vec<double> l2_d(SEXP x) { return L2Vec_d(x); }
+inline L2Vec<int> l2_i(SEXP x) { return L2Vec_i(x); }
 
 struct L2Data {
   L2Vec<int> score, fixed_ability, A_ref, B_ref, C_ref, D_ref, free_mask;
@@ -136,10 +162,10 @@ struct L2Worker : public RcppParallel::Worker {
   double value = 0; int skipped = 0;
   std::vector<double> gA, gB, gC, gD, gAb, gBb, gCb, gDb, gAbil, gMean, gP0;
   L2Worker(const L2Data& D, const std::vector< std::vector<int> >& obs) : D(D), obs_by_subj(obs) {
-    gA.assign(D.invspApars.v->size(), 0); gB.assign(D.Bpars.v->size(), 0);
-    gC.assign(D.logitCpars.v->size(), 0); gD.assign(D.logitDpars.v->size(), 0);
-    gAb.assign(D.invspAbeta.v->size(), 0); gBb.assign(D.Bbeta.v->size(), 0);
-    gCb.assign(D.logitCbeta.v->size(), 0); gDb.assign(D.logitDbeta.v->size(), 0);
+    gA.assign(D.invspApars.count(), 0); gB.assign(D.Bpars.count(), 0);
+    gC.assign(D.logitCpars.count(), 0); gD.assign(D.logitDpars.count(), 0);
+    gAb.assign(D.invspAbeta.count(), 0); gBb.assign(D.Bbeta.count(), 0);
+    gCb.assign(D.logitCbeta.count(), 0); gDb.assign(D.logitDbeta.count(), 0);
     gAbil.assign(static_cast<std::size_t>(D.K) * D.P, 0); gMean.assign(D.K, 0);
     gP0.assign(static_cast<std::size_t>(D.K) * D.K, 0);
   }

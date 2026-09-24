@@ -56,19 +56,47 @@ inline double agq_softplus(const double x) {
   return x > 0.0 ? x + std::log1p(std::exp(-x)) : std::log1p(std::exp(x));
 }
 
-// A read-only copy of an R vector or matrix, shared between worker splits.
+// A read-only view of an R array, or an owned copy when R handed over a
+// different storage type (a view of a coerced temporary would dangle). Views
+// are taken on the main thread at the .Call boundary; the array outlives the
+// call. See BigIRTOwnedVector in laplace_backend.cpp for why not copies.
 template <typename T>
 struct AgqVec {
   std::shared_ptr< std::vector<T> > v;
+  const T* p = nullptr;
+  std::size_t len = 0;
   int nr = 0, nc = 0;
   AgqVec() : v(std::make_shared< std::vector<T> >()) {}
-  template <typename V> AgqVec(const V& x, int nrow, int ncol)
-    : v(std::make_shared< std::vector<T> >(x.begin(), x.end())), nr(nrow), nc(ncol) {}
-  inline const T& operator[](std::size_t i) const { return (*v)[i]; }
+  inline const T& operator[](std::size_t i) const { return p[i]; }
   inline const T& operator()(int i, int j) const {
-    return (*v)[static_cast<std::size_t>(i) + static_cast<std::size_t>(nr) * static_cast<std::size_t>(j)];
+    return p[static_cast<std::size_t>(i) + static_cast<std::size_t>(nr) * static_cast<std::size_t>(j)];
   }
+  inline std::size_t count() const { return len; }
+  inline int size() const { return static_cast<int>(len); }
 };
+inline AgqVec<double> AgqVec_d(SEXP x) {
+  AgqVec<double> o;
+  o.len = static_cast<std::size_t>(Rf_xlength(x));
+  o.nr = Rf_isMatrix(x) ? Rf_nrows(x) : static_cast<int>(o.len);
+  o.nc = Rf_isMatrix(x) ? Rf_ncols(x) : 1;
+  if (o.nr == 0) o.nc = 0;
+  if (TYPEOF(x) == REALSXP) { if (o.len) o.p = REAL(x); }
+  else { Rcpp::NumericVector r(x); o.v = std::make_shared< std::vector<double> >(r.begin(), r.end());
+    o.p = o.v->data(); }
+  return o;
+}
+inline AgqVec<int> AgqVec_i(SEXP x) {
+  AgqVec<int> o;
+  o.len = static_cast<std::size_t>(Rf_xlength(x));
+  o.nr = Rf_isMatrix(x) ? Rf_nrows(x) : static_cast<int>(o.len);
+  o.nc = Rf_isMatrix(x) ? Rf_ncols(x) : 1;
+  if (o.nr == 0) o.nc = 0;
+  if (TYPEOF(x) == INTSXP) { if (o.len) o.p = INTEGER(x); }
+  else if (TYPEOF(x) == LGLSXP) { if (o.len) o.p = LOGICAL(x); }
+  else { Rcpp::IntegerVector r(x); o.v = std::make_shared< std::vector<int> >(r.begin(), r.end());
+    o.p = o.v->data(); }
+  return o;
+}
 
 // Log-likelihood of one response and its derivatives with respect to the
 // linear predictor and the two asymptotes; the probability is clamped exactly
@@ -390,10 +418,8 @@ extern "C" SEXP _bigIRT_agq_fg_cpp_impl(
     rules[d].Z.assign(Z.begin(), Z.end()); rules[d].lw.assign(lwv.begin(), lwv.end());
   }
   AgqWorker w(obs_by_subj, rules, K, P, want_person);
-  auto cp_d = [](SEXP x) { Rcpp::NumericVector v(x); int nr = v.size(), nc = 1;
-    if (Rf_isMatrix(x)) { nr = Rf_nrows(x); nc = Rf_ncols(x); } return AgqVec<double>(v, nr, nc); };
-  auto cp_i = [](SEXP x) { Rcpp::IntegerVector v(x); int nr = v.size(), nc = 1;
-    if (Rf_isMatrix(x)) { nr = Rf_nrows(x); nc = Rf_ncols(x); } return AgqVec<int>(v, nr, nc); };
+  auto cp_d = [](SEXP x) { return AgqVec_d(x); };
+  auto cp_i = [](SEXP x) { return AgqVec_i(x); };
   w.score = cp_i(scoreSEXP); w.theta_mode = cp_d(theta_modeSEXP); w.precision = cp_d(precisionSEXP);
   w.person_pred = cp_d(person_predSEXP); w.fixed_ability = cp_i(fixed_abilitySEXP);
   w.fixed_ability_value = cp_d(fixed_ability_valueSEXP);
@@ -418,10 +444,10 @@ extern "C" SEXP _bigIRT_agq_fg_cpp_impl(
   if (w.B_pred.nr == 0) w.B_pred.nc = 0;
   if (w.C_pred.nr == 0) w.C_pred.nc = 0;
   if (w.D_pred.nr == 0) w.D_pred.nc = 0;
-  w.gA.assign(w.invspApars.v->size(), 0.0); w.gB.assign(w.Bpars.v->size(), 0.0);
-  w.gC.assign(w.logitCpars.v->size(), 0.0); w.gD.assign(w.logitDpars.v->size(), 0.0);
-  w.gAb.assign(w.invspAbeta.v->size(), 0.0); w.gBb.assign(w.Bbeta.v->size(), 0.0);
-  w.gCb.assign(w.logitCbeta.v->size(), 0.0); w.gDb.assign(w.logitDbeta.v->size(), 0.0);
+  w.gA.assign(w.invspApars.count(), 0.0); w.gB.assign(w.Bpars.count(), 0.0);
+  w.gC.assign(w.logitCpars.count(), 0.0); w.gD.assign(w.logitDpars.count(), 0.0);
+  w.gAb.assign(w.invspAbeta.count(), 0.0); w.gBb.assign(w.Bbeta.count(), 0.0);
+  w.gCb.assign(w.logitCbeta.count(), 0.0); w.gDb.assign(w.logitDbeta.count(), 0.0);
   w.gAbil.assign(static_cast<std::size_t>(K) * P, 0.0); w.gMean.assign(K, 0.0);
   w.S.assign(static_cast<std::size_t>(K) * K, 0.0);
   Rcpp::NumericMatrix eap(want_person ? N : 0, K);
