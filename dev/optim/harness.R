@@ -73,7 +73,9 @@ tr <- rbindlist(TRACE$rows)
 ## depends slightly on the path that led to it. Score every variant on the
 ## same, path-free number instead: its final point, with the person modes
 ## cold-started and solved to 1e-10.
-precise_value <- function(fit){
+## `agq`: score on the quadrature marginal (a Gauss-Hermite rule), as the fit
+## optimised when it was refined; NULL scores on Laplace.
+precise_value <- function(fit, agq = NULL){
   it <- fit$internals
   if(is.null(it)) return(NA_real_)
   sdat <- it$sdat
@@ -85,6 +87,7 @@ precise_value <- function(fit){
   ctx$direct_layout <- lay
   ctx$estimateAbilityCorr <- est_corr
   ctx$corr_paramization <- fa$laplaceCorrParam %||% "stan_corsqrt"
+  ctx$agq <- agq
   st <- it$state
   st$laplaceCorrParam <- ctx$corr_paramization
   th0 <- matrix(0, nrow = sdat$Nsubs, ncol = sdat$Nscales)
@@ -95,7 +98,12 @@ precise_value <- function(fit){
     error = function(e) NA_real_)
   v
 }
-ll_precise <- if(!is.null(fit)) precise_value(fit) else NA_real_
+ll_precise_laplace <- if(!is.null(fit)) precise_value(fit) else NA_real_
+fit_agq <- !is.null(fit) && identical(fit$laplaceStatus$marginal, "agq")
+## Score on the marginal the fit optimised; the Laplace score is kept too.
+ll_precise <- if(fit_agq) precise_value(fit, get("bigIRT_agq_rules", ns)(fit$internals$sdat$Nscales,
+  nodes = fit$laplaceStatus$agq_rule$nodes, points = fit$laplaceStatus$agq_rule$points,
+  inflate = fit$laplaceStatus$agq_rule$inflate)) else ll_precise_laplace
 ## The first evaluation of the fit is at the initial state, identical for all
 ## variants: its time is the contention control.
 ctrl_sec <- if(nrow(tr)) tr$sec[1] else NA_real_
@@ -105,7 +113,9 @@ out <- list(regime = regime, seed = seed, variant = variant,
   sec = tt, nobs = nrow(dat), ctrl_sec = ctrl_sec,
   evals = nrow(tr), evals_cov = if(nrow(tr)) sum(tr$keep_cov) else NA,
   logLik = if(!is.null(fit)) fit$optim$logLik else NA_real_,
-  ll_precise = ll_precise,
+  ll_precise = ll_precise, ll_precise_laplace = ll_precise_laplace,
+  marginal = if(!is.null(fit)) fit$laplaceStatus$marginal else NA,
+  refine = if(!is.null(fit)) fit$laplaceStatus$refine[c("iter", "evals", "laplace_value", "agq_start", "agq_end")] else NULL,
   iter = if(!is.null(fit)) fit$optim$iter %||% NA else NA,
   terminate = if(!is.null(fit)) fit$optim$terminate$what %||% NA else NA,
   polish_steps = if(!is.null(fit)) fit$laplaceStatus$polish_steps else NA,

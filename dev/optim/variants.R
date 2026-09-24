@@ -73,6 +73,20 @@ VARIANTS <- list(
   ## against the new build), with and without empirical Bayes.
   pkg_default = list(fit = list()),
   pkg_default_eb = list(fit = list(ebayes = TRUE)),
+  ## The Laplace path alone, without the quadrature refinement that the
+  ## default now applies to free asymptotes.
+  pkg_norefine = list(fit = list(laplaceRefine = "none")),
+  ## Where the Laplace stage hands over to the quadrature refinement: 1e-4 is
+  ## the full Laplace tolerance (no early switch), 0.1 the default.
+  pkg_sw4 = list(fit = list(), opts = list(bigIRT.agq_switch_gain = 1e-4)),
+  pkg_sw1 = list(fit = list(), opts = list(bigIRT.agq_switch_gain = 1)),
+  ## Quadrature nodes re-centred at every evaluation instead of at each metric
+  ## refresh (the default holds them fixed in between).
+  pkg_movenodes = list(fit = list(), opts = list(bigIRT.agq_fixed_nodes = FALSE)),
+  ## Empirical Bayes with the quadrature refinement in every round, not only
+  ## the final one.
+  pkg_default_eb_allq = list(fit = list(ebayes = TRUE), opts = list(bigIRT.agq_eb_rounds = TRUE)),
+  pkg_norefine_eb = list(fit = list(laplaceRefine = "none", ebayes = TRUE)),
   pkg_stage = list(fit = list(), opts = list(bigIRT.laplace_stage_asymptotes = TRUE)),
   ## Threaded kernel: the evaluations get faster and the metric build (R,
   ## single-threaded) takes a larger share.
