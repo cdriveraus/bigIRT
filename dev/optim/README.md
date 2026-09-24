@@ -16,12 +16,17 @@ repo); the full round-1/2 evidence is `optimisation-review-2026-09.md` there.
 - `laplaceRefine`, finishing on a better marginal from the Laplace optimum:
   - `"agq"`: adaptive Gauss-Hermite at the Laplace mode
     (`src/agq_backend.cpp`), Fisher-identity gradient, exact with the nodes
-    held fixed between metric refreshes. 9 / 7 / 5 nodes at K = 1 / 2 / 3.
+    held fixed between metric refreshes. Product rule, 9 / 7 / 5 nodes at
+    K = 1 / 2 / 3. From K = 4 the anchored-ANOVA expansion
+    (`bigIRT_anova_rule` in `R/agq.R`): 7-node rules on every coordinate
+    plane and line of the whitened space plus a 3-node three-way correction
+    on every cube, combined with signed coefficients; the kernel takes it as
+    grouped rules with shared nodes (2,185 a person at K = 9).
   - `"laplace2"`: second-order Laplace, E T4 + E T3^2 / 2
     (`src/laplace2_backend.cpp`), exact reverse-mode gradient with a mode
     adjoint.
   - `"auto"`: no free asymptotes -> none at K = 1, laplace2 at K >= 2;
-    free asymptotes -> agq at K <= 3, none at K >= 4 with a warning.
+    free asymptotes -> agq at every K.
   - Guard: a refinement moving the objective by more than max(50, N/2) nats
     reverts to the Laplace optimum.
 - One CSR person->rows index (`src/bigirt_obsindex.h`) shared by all kernels.
@@ -46,10 +51,48 @@ The T2 "local maximum" was a Laplace artefact: one item held steep with high
 guessing plus `C_mean` dragging the rest (`basins.R`, `basin_hybrid.R`,
 `item_basin.R`). Refined, both basins reach the same point to 3e-4.
 
-## 3PL/4PL at K >= 4: unsolved, and what has been ruled out
+## 3PL/4PL at K >= 4: the anchored-ANOVA rule
 
-The problem is not pointwise accuracy but exploitability: the optimiser finds
-where an approximate marginal is wrong.
+The problem was never pointwise accuracy but exploitability: the optimiser
+finds where an approximate marginal is wrong. What worked is an expansion
+whose every piece is a low-dimensional Gauss-Hermite rule of the kind already
+shown not to be exploited at K <= 3:
+
+    log I ~ sum_{k<l} log I_kl - (K - 2) sum_k log I_k + C(K-1, 2) log I_0
+            + [three-way correction: order 3 minus order 2, at 3 nodes]
+
+in whitened coordinates (theta = m + U^-1 z, the kernel's own). Full
+refinements (`pairs_fit.R`), against 16,384-point QMC optima (which are
+themselves within 0.4 SE of a 65,536-point optimum, mean 0.0), N = 2,000,
+10 items per dimension, 20% cross loadings; loadings mean / worst, SE units:
+
+| model | K | Laplace | pairs 5 | pairs 7 | pairs 7 + t3 | pairs 7 + t5 | time (Laplace / p7t3 / ref) |
+|---|---|---|---|---|---|---|---|
+| 3PL | 5 (vs 65,536) | -1.60 / 6.2 | -0.18 / 0.8 | -0.09 / 0.3 | -0.04 / 0.21 | | 3.7 / 14 / 1,651 s |
+| 3PL | 9 | -1.05 / 5.7 | -0.11 / 0.9 | -0.09 / 0.7 | -0.02 / 0.5 | | 8 / 84 / 1,027 s |
+| 4PL | 5 | -3.77 / 10.1 | -0.87 / 3.4 | -0.56 / 2.6 | -0.39 / 1.95 | -0.24 / 1.34 | 7.8 / 24 / 788 s |
+
+At K = 5 the 16,384-point optimum itself sits -0.01 / 0.21 from the
+65,536-point one, so pairs 7 + t3 there is as close as the usual reference.
+Difficulties behave the same way (3PL K = 9, pairs 7 + t3: -0.01 / 0.36;
+3PL K = 5: -0.09 / 0.31; 4PL K = 5: -0.08 / 1.03). No refinement with this rule ran away or was reverted
+(30-60 evaluations each). On the 4PL the pairwise optimum does not improve
+past 7 nodes (9 and 11: -0.49, -0.47), so what is left there is truncation;
+each added order closes about half of it. Sharing nodes between groups cut
+the K = 9 pairs-5 fit from 58.6 to 46.0 s at identical estimates.
+
+Per person (`mdim_pairs.R`, against 65,536 points) the pairwise rule is as
+accurate as second-order Laplace at the Laplace optimum and stays accurate at
+the points where the others fail (the 256-point QMC runaway, the reference
+optimum 7 SE away): K = 5 3PL rmse 0.004-0.007 against laplace2's 0.009-0.013
+(max 0.098). QMC with the second-order Taylor polynomial as a control variate
+(candidate 2 below) cut the error at the Laplace optimum but not elsewhere,
+and was not built.
+
+Still open: the 4PL residual (-0.39 / 1.95 at K = 5 with the default); a
+5-node correction halves it at twice the cost. Only one seed per cell.
+
+### What was ruled out on the way
 
 - **QMC on fixed points** (antithetic Halton, Cranley-Patterson shift,
   inflation 1.15): 256 points at K = 9 ran away (693 evaluations); 4,096 left
@@ -71,16 +114,11 @@ where an approximate marginal is wrong.
   bounded, but remove only ~70% of the per-person error at K = 9.
 - **Mixture decomposition of the 3PL**: exact for one response, 2^k beyond.
 
-Untried candidates:
-1. Pairwise (many-body) expansion of the per-person log-marginal in 1-D and
-   2-D AGQ terms: log I ~ log I_Lap + sum_k d_k + sum_{k<l} d_kl. Each term
-   is a low-dimensional AGQ, which is not exploitable at K <= 3; cost at
-   K = 9 with 5 nodes ~ 9*5 + 36*25 = 945 row evaluations a person. Unknown
-   whether the three-way interactions are small enough in whitened
-   coordinates -- check per person with `mdim_rules.R` first.
-2. Importance sampling with the second-order correction as a control
-   variate, to get 16,384-point accuracy from far fewer points.
-3. Accept Laplace plus the warning (current behaviour).
+- **QMC with a control variate** (the second-order Taylor polynomial, whose
+  Gaussian expectation is the laplace2 correction exactly; `mdim_pairs.R`):
+  per-person error at the Laplace optimum 0.0005 against plain QMC's 0.003,
+  but no better than plain QMC at the runaway and reference points, which is
+  where exploitation happens.
 
 ## Performance (dev2 uncontended, `main` before this work -> now)
 
