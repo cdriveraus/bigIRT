@@ -23,6 +23,8 @@ if(nzchar(lib)) .libPaths(c(lib, .libPaths()))
 suppressPackageStartupMessages({library(bigIRT); library(data.table)})
 here <- Sys.getenv("BENCH_DIR", ".")
 source(file.path(here, "models.R"))
+source(file.path(here, "scale_models.R"))
+if(file.exists(file.path(here, "scale_metric.R"))) source(file.path(here, "scale_metric.R"))
 source(file.path(here, "fisher.R"))
 source(file.path(here, "variants.R"))
 
@@ -56,12 +58,8 @@ fa <- bench_fit_args(regime)
 fa <- modifyList(fa, variant_fit_args(variant))
 fa$keepInternals <- TRUE
 
-## Contention control, then the fit.
-ctrl <- local({
-  sdat_fit <- do.call(fitIRT, c(list(dat = dat), modifyList(fa, list(laplaceOuterIter = 2,
-    laplacePolish = 0L, keepInternals = TRUE))))
-  NULL
-})
+## (The contention control is the first evaluation of the fit itself, at the
+## fixed initial state; see below.)
 TRACE$rows <- list()
 TRACE$t0 <- proc.time()[["elapsed"]]
 ctrl_sec <- NA_real_
@@ -121,6 +119,12 @@ out <- list(regime = regime, seed = seed, variant = variant,
   extra = if(exists("PROTO_EXTRA", envir = globalenv())) get("PROTO_EXTRA", envir = globalenv()) else NULL,
   par = if(!is.null(fit)) fit$optim$par else NULL,
   trace = tr)
+## Peak resident memory of this process, from the kernel.
+out$vmhwm_mb <- tryCatch({
+  st <- readLines("/proc/self/status")
+  as.numeric(gsub("[^0-9]", "", grep("^VmHWM", st, value = TRUE))) / 1024
+}, error = function(e) NA_real_)
 saveRDS(out, file.path(outdir, sprintf("%s_%d_%s.rds", regime, seed, variant)))
-cat(sprintf("DONE %s %d %s sec=%.2f evals=%d iter=%s ll=%.6f term=%s\n",
-  regime, seed, variant, tt, nrow(tr), format(out$iter), out$logLik, format(out$terminate)))
+cat(sprintf("DONE %s %d %s sec=%.2f evals=%d iter=%s ll=%.6f precise=%.6f term=%s mem=%.0fMB\n",
+  regime, seed, variant, tt, nrow(tr), format(out$iter), out$logLik, ll_precise,
+  format(out$terminate), out$vmhwm_mb))

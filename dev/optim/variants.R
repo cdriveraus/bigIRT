@@ -57,6 +57,40 @@ VARIANTS <- list(
   pkg_fisher_r0 = list(fit = list(laplaceOptimizer = "fisher"), opts = list(bigIRT.fisher_refresh = 0L)),
   pkg_fisher_r5 = list(fit = list(laplaceOptimizer = "fisher"), opts = list(bigIRT.fisher_refresh = 5L)),
   pkg_fisher_pt6 = list(fit = list(laplaceOptimizer = "fisher", laplacePersonTol = 1e-6)),
+  ## Scale metrics (scale_metric.R): L-BFGS with H0 = gamma M^-1, stop on
+  ## predicted gain 1e-3, no polish, person modes to 1e-6.
+  sm_bd = list(proto = list(metric = "sm_bd", stop = "gain", gain_tol = 1e-3, polish_steps = 0L),
+    fit = list(laplacePersonTol = 1e-6)),
+  sm_bd_g4 = list(proto = list(metric = "sm_bd", stop = "gain", gain_tol = 1e-4, polish_steps = 0L),
+    fit = list(laplacePersonTol = 1e-6)),
+  ## The package's Fisher path (dense metric where allowed, mize fallback)
+  ## at the tolerances this round proposes: predicted gain 1e-4, modes 1e-6.
+  pkg_fisher_g4 = list(fit = list(laplaceOptimizer = "fisher", laplaceTol = 1e-4,
+    laplacePersonTol = 1e-6)),
+  pkg_mize_g4 = list(fit = list(laplaceOptimizer = "mize", laplaceTol = 1e-4,
+    laplacePersonTol = 1e-6)),
+  ## The package as it stands, defaults only (for the final comparison; run
+  ## against the new build), with and without empirical Bayes.
+  pkg_default = list(fit = list()),
+  pkg_default_eb = list(fit = list(ebayes = TRUE)),
+  pkg_mize_eb_new = list(fit = list(laplaceOptimizer = "mize", ebayes = TRUE)),
+  sm_add100 = list(proto = list(metric = "sm_add", m = 100L, stop = "gain", gain_tol = 1e-3,
+    polish_steps = 0L), fit = list(laplacePersonTol = 1e-6)),
+  sm_bal1 = list(proto = list(metric = "sm_bal", m = 1L, stop = "gain", gain_tol = 1e-3,
+    polish_steps = 0L), fit = list(laplacePersonTol = 1e-6)),
+  sm_bal30 = list(proto = list(metric = "sm_bal", m = 30L, stop = "gain", gain_tol = 1e-3,
+    polish_steps = 0L), fit = list(laplacePersonTol = 1e-6)),
+  sm_bal100 = list(proto = list(metric = "sm_bal", m = 100L, stop = "gain", gain_tol = 1e-3,
+    polish_steps = 0L), fit = list(laplacePersonTol = 1e-6)),
+  sm_bal300 = list(proto = list(metric = "sm_bal", m = 300L, stop = "gain", gain_tol = 1e-3,
+    polish_steps = 0L), fit = list(laplacePersonTol = 1e-6)),
+  sm_pcg = list(proto = list(metric = "sm_pcg", m = 100L, rtol = 1e-3, stop = "gain",
+    gain_tol = 1e-3, polish_steps = 0L), fit = list(laplacePersonTol = 1e-6)),
+  ## Reference for the scale regimes: tight everything.
+  sm_ref = list(proto = list(metric = "sm_bal", m = 100L, stop = "gain", gain_tol = 1e-7,
+    maxit_mult = 4, polish_steps = 0L), fit = list(laplacePersonTol = 1e-8)),
+  pkg_fisher_pt4 = list(fit = list(laplaceOptimizer = "fisher", laplacePersonTol = 1e-4)),
+  pkg_fisher_pt8 = list(fit = list(laplaceOptimizer = "fisher", laplacePersonTol = 1e-8)),
   pkg_mize_pt6 = list(fit = list(laplaceOptimizer = "mize", laplacePersonTol = 1e-6)),
   ## End to end with the package default ebayes = TRUE: several coarse rounds
   ## and a final pass. The objectives differ between the two (each ends with
@@ -95,6 +129,11 @@ install_variant <- function(v){
     environment(proto_metric) <- ns
     environment(proto_lbfgs) <- ns
     environment(proto_fisher_hessian) <- ns
+    if(exists("sm_ops", envir = globalenv())){
+      for(f in c("sm_ops", "sm_coarse", "sm_precond", "sm_pcg", "sm_minv", "tabulate_sum", "sm_row_q", "sm_block_inverse")){
+        g <- get(f, envir = globalenv()); environment(g) <- ns; assign(f, g, envir = globalenv())
+      }
+    }
     environment(proto_newton) <- ns
     environment(proto_fd_columns) <- ns
     assign("proto_fisher_hessian", proto_fisher_hessian, envir = globalenv())
@@ -260,7 +299,7 @@ proto_optimize_direct <- function(state, sdat, prior_precision,
   corr_paramization = c("normalized_chol", "stan_corsqrt"),
   collect_history = FALSE, plot_callback = NULL, plot_every = 1L,
   verbose = 0L, trace_fn = NULL, stochastic = FALSE, polish_steps = 8L,
-  polish_tol = 1e-8){
+  polish_tol = 1e-8, optimizer = NULL){
   P <- getOption("bigirt.proto")
   corr_paramization <- match.arg(corr_paramization)
   direct_layout <- bigIRT_laplace_direct_layout(sdat, estimateAbilityCorr = estimateAbilityCorr)
@@ -334,6 +373,21 @@ proto_optimize_direct <- function(state, sdat, prior_precision,
       m
     }
   }
+  sm_type <- if(is.character(P$metric) && startsWith(P$metric, "sm_")) sub("^sm_", "", P$metric) else NULL
+  if(!is.null(sm_type)){
+    ## Matrix-free / sparse metrics (scale_metric.R), rebuilt at the accepted
+    ## point every refresh_every iterations.
+    build <- function(e){
+      tm <- proc.time()[["elapsed"]]
+      m <- tryCatch(sm_minv(e, sdat, context, direct_layout, type = sm_type,
+        m = P$m %||% 100L, rtol = P$rtol %||% 1e-3), error = function(err){
+          message("sm metric failed: ", conditionMessage(err)); NULL })
+      t_metric <<- t_metric + proc.time()[["elapsed"]] - tm
+      m
+    }
+    minv <- build(ev_at(init))
+    refresh <- function(en) build(en$ev)
+  }
   if(isTRUE(P$metric)){
     ev0 <- ev_at(init)
     od <- rep(NA_real_, n)
@@ -363,7 +417,7 @@ proto_optimize_direct <- function(state, sdat, prior_precision,
     fit <- proto_lbfgs(init, fg, minv = minv, memory = P$memory %||% 30L, maxit = maxit,
       stop = P$stop %||% "pkg", abs_tol = tol, grad_tol = tol,
       gain_tol = P$gain_tol %||% 0.1, refresh = refresh,
-      refresh_every = if(use_metric) (P$refresh_every %||% 10L) else 0L)
+      refresh_every = if(use_metric || !is.null(sm_type)) (P$refresh_every %||% 10L) else 0L)
   }
   evals_lbfgs <- eval_count
   if(method == "newton"){
