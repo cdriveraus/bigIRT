@@ -15,9 +15,10 @@
 if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
 
   opt_fit <- function(pl = 2, preds = FALSE, seed = 5, ns = 500, ni = 12, K = 1,
-    optimizer = "fisher", ...){
+    optimizer = "fisher", na = ni, ...){
     set.seed(seed)
     args <- list(Nsubs = ns, Nitems = ni, Nscales = K, AMean = 1.2, ASD = .3, BSD = 1,
+      NitemsAnswered = na,
       logitCMean = if(pl >= 3) -1.5 else -20, logitCSD = if(pl >= 3) .5 else 0)
     if(pl == 4){ args$logitDMean <- 2.5; args$logitDSD <- .5 }
     if(preds){
@@ -132,17 +133,30 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     }
   })
 
-  test_that("without a usable metric the Fisher path hands over to mize", {
-    ## An information matrix too dense to hold is refused, and then there is no
-    ## reliable predicted gain either, so the fit must run the mize path with
-    ## its polish rather than an unshaped L-BFGS stopping on a number it
-    ## cannot estimate.
+  test_that("a refused dense metric falls to the block-diagonal one, and no metric to mize", {
+    ## The dense information is refused when too dense to hold; the
+    ## block-diagonal metric then takes over and the fit still stops on its
+    ## predicted gain.
     old <- options(bigIRT.fisher_max_nnz = 1)
     on.exit(options(old))
     f <- opt_fit(pl = 2, ns = 600, ni = 12)
+    expect_identical(f$laplaceStatus$optimizer_metric, "blockdiag")
+    expect_identical(f$laplaceStatus$optimizer_terminate, "gain")
+    options(old)
+    ## With no metric at all there is no reliable predicted gain either, so the
+    ## fit must run the mize path with its polish rather than an unshaped
+    ## L-BFGS stopping on a number it cannot estimate.
+    old2 <- options(bigIRT.laplace_metric = "none")
+    on.exit(options(old2), add = TRUE)
+    f <- opt_fit(pl = 2, ns = 600, ni = 12)
     expect_false(identical(f$laplaceStatus$optimizer_terminate, "gain"))
+    expect_true(is.na(f$laplaceStatus$optimizer_metric))
     expect_gt(f$laplaceStatus$polish_steps, 0L)
     expect_true(isTRUE(f$laplaceStatus$converged))
+    options(old2)
+    ## And the default at this size is the dense metric.
+    f <- opt_fit(pl = 2, ns = 600, ni = 12)
+    expect_identical(f$laplaceStatus$optimizer_metric, "dense")
   })
 
   test_that("the Fisher optimiser reaches the mize optimum in fewer evaluations", {
@@ -165,6 +179,86 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
       expect_gt(score(ff), score(fm) - 2e-3)
       expect_lt(ff$optim$target_evals, fm$optim$target_evals)
       expect_identical(ff$laplaceStatus$optimizer_terminate, "gain")
+    }
+  })
+
+  ## ---- the block-diagonal metric used at scale ----
+
+  test_that("the matrix-free Fisher product equals the dense Fisher information", {
+    f <- opt_fit(pl = 3, preds = TRUE, ns = 600, ni = 20, na = 8)
+    d <- bigIRT:::bigIRT_direct_eval_from_fit(f, keep_covariance = TRUE)
+    P <- bigIRT:::bigIRT_laplace_fisher_parts(d$eval, d$sdat, d$context, d$layout)
+    Fd <- as.matrix(bigIRT:::bigIRT_laplace_fisher_info(d$eval, d$sdat, d$context, d$layout))
+    set.seed(2)
+    for(k in 1:3){
+      v <- rnorm(P$n)
+      expect_lt(max(abs(P$Fv(v) - Fd %*% v)) / max(abs(Fd %*% v)), 1e-10)
+    }
+  })
+
+  test_that("row q is one minus the share each row's own person absorbs, at two dimensions", {
+    f <- opt_fit(pl = 2, K = 2, ns = 300, ni = 6, na = 4)
+    d <- bigIRT:::bigIRT_direct_eval_from_fit(f, keep_covariance = TRUE)
+    D <- bigIRT:::bigIRT_laplace_row_derivatives(d$eval, d$sdat, d$context, d$layout)
+    ids <- as.integer(d$context$row_context$ids)
+    q <- bigIRT:::bigIRT_laplace_row_q(D$W, D$N, D$K, D$P0, ids)
+    ## Direct: per person, Ipp_i = W_i'W_i + P0 and q_r = 1 - w_r' Ipp_i^-1 w_r.
+    W <- as.matrix(D$W)
+    for(i in c(1, 17, 150)){
+      cols <- (i - 1) * 2 + 1:2
+      rows <- which(ids == i)
+      Wi <- W[rows, cols, drop = FALSE]
+      Ii <- crossprod(Wi) + D$P0
+      qd <- 1 - rowSums((Wi %*% solve(Ii)) * Wi)
+      expect_equal(q[rows], qd, tolerance = 1e-10)
+    }
+  })
+
+  test_that("the block-diagonal metric is F's item blocks and shared block, and nothing else", {
+    ## A sparse design with every kind of block: person covariates and an
+    ## estimated ability mean (shared), and a 3PL (three parameters an item).
+    for(cfg in list(list(pl = 3, preds = TRUE, est = c("A", "B", "C", "D")),
+                    list(pl = 2, preds = FALSE, est = c("A", "ability")))){
+      f <- opt_fit(pl = cfg$pl, preds = cfg$preds, ns = 600, ni = 20, na = 8, estMeans = cfg$est)
+      d <- bigIRT:::bigIRT_direct_eval_from_fit(f, keep_covariance = TRUE)
+      Fd <- as.matrix(bigIRT:::bigIRT_laplace_fisher_info(d$eval, d$sdat, d$context, d$layout))
+      n <- nrow(Fd)
+      inv <- bigIRT:::bigIRT_laplace_blockdiag_solver(d$eval, d$par, -d$eval$approx_grad,
+        d$sdat, d$context, d$layout, gfun = function(p) stop("no finite differences expected"))
+      expect_true(is.function(inv))
+      ## Recover Bd from its inverse, column by column.
+      Bi <- sapply(seq_len(n), function(j){ e <- numeric(n); e[j] <- 1; inv(e) })
+      Bd <- solve(Bi)
+      L <- d$layout; ni <- as.integer(d$sdat$Nitems)
+      item_of <- rep(NA_integer_, n)
+      for(b in c("B", "A", "C", "D")) if(length(L[[b]]) == ni) item_of[L[[b]]] <- seq_len(ni)
+      shared <- which(is.na(item_of))
+      expect_gt(length(shared), 0L)
+      same_block <- outer(item_of, item_of, "==")
+      same_block[is.na(same_block)] <- FALSE
+      same_block[shared, shared] <- TRUE
+      scale <- max(abs(Fd))
+      expect_lt(max(abs(Bd[same_block] - Fd[same_block])) / scale, 1e-8)
+      expect_lt(max(abs(Bd[!same_block])) / scale, 1e-8)
+    }
+  })
+
+  test_that("forced to the block-diagonal metric, the optimiser still reaches the mize optimum", {
+    for(cfg in list(list(pl = 2, preds = TRUE), list(pl = 3, preds = FALSE))){
+      fm <- opt_fit(pl = cfg$pl, preds = cfg$preds, ns = 3000, ni = 120, na = 25, optimizer = "mize")
+      old <- options(bigIRT.laplace_metric = "blockdiag"); on.exit(options(old))
+      fb <- opt_fit(pl = cfg$pl, preds = cfg$preds, ns = 3000, ni = 120, na = 25)
+      options(old)
+      expect_identical(fb$laplaceStatus$optimizer_metric, "blockdiag")
+      score <- function(f){
+        d <- bigIRT:::bigIRT_direct_eval_from_fit(f, keep_covariance = TRUE)
+        bigIRT:::bigIRT_laplace_direct_objective(par = d$par, state = d$state, sdat = d$sdat,
+          prior_precision = f$internals$priorPrecision,
+          theta_init = 0 * d$eval$posterior$theta_mode, keep_covariance = TRUE,
+          context = d$context, tol = 1e-10, max_iter = 200L)$value
+      }
+      expect_gt(score(fb), score(fm) - 2e-3)
+      expect_lt(fb$optim$target_evals, fm$optim$target_evals)
     }
   })
 }

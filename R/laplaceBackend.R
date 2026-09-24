@@ -1581,8 +1581,7 @@ bigIRT_laplace_optimize_direct <- function(state, sdat, prior_precision,
       list(f = -r$value, g = -r$approx_grad, ev = r, x = par)
     }
     gfun <- function(par) -get_eval(par)$approx_grad
-    solver <- function(e) bigIRT_laplace_fisher_solver(e$ev, e$x, e$g, sdat, context,
-      direct_layout, gfun)
+    solver <- function(e) bigIRT_laplace_metric_solver(e, sdat, context, direct_layout, gfun)
     minv <- solver(fg_f(init))
     ## Finite-difference columns move the cache and the warm start; put both
     ## back at the point the optimiser is about to use.
@@ -1622,7 +1621,7 @@ bigIRT_laplace_optimize_direct <- function(state, sdat, prior_precision,
     fit <- bigIRT_laplace_lbfgs(init, fg_f, minv = minv, maxit = as.integer(niter),
       gain_tol = tol, refresh = refresh,
       refresh_every = as.integer(getOption("bigIRT.fisher_refresh", 10L)))
-    fit$metric <- "fisher"
+    fit$metric <- attr(minv, "metric")
   } else {
     fit <- mize::mize(
       init,

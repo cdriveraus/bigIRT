@@ -114,42 +114,13 @@ bigIRT_laplace_row_derivatives <- function(ev, sdat, context, layout){
     N = N, K = K, n = n)
 }
 
-## Fisher information of the MINIMISED Laplace objective in the optimiser's
-## coordinates, as a sparse symmetric matrix.
-##
-## The joint (items + persons) information is I_ii = V'V, I_ip = V'W,
-## I_pp = W'W + P0 per person, and the marginal's is the Schur complement
-## V'V - (W'V)' I_pp^-1 (W'V), positive semidefinite because the joint one is.
-## The ability mean enters the person prior only, so it adds I_mm = N P0 and
-## I_pm = -P0 per person. Priors are quadratic and added exactly. Returns NULL
-## when the coupling would be too dense to hold (`max_nnz`), and the caller
-## then uses the mize path.
-bigIRT_laplace_fisher_info <- function(ev, sdat, context, layout,
-  max_nnz = getOption("bigIRT.fisher_max_nnz", 5e7)){
-  D <- bigIRT_laplace_row_derivatives(ev, sdat, context, layout)
-  n <- D$n; N <- D$N; K <- D$K; P0 <- D$P0
-  ## An upper bound on the coupling's nonzeros: no more than n^2, and no more
-  ## than the sum over persons of the square of the parameters their rows
-  ## touch. Beyond `max_nnz` the caller falls back to the mize path.
-  touch <- tabulate(as.integer(context$row_context$ids), nbins = N)
-  per_row <- max(1, Matrix::nnzero(D$V) / max(1, nrow(D$V)))
-  if(min(as.numeric(n)^2, sum((as.numeric(touch) * per_row)^2)) > max_nnz)
-    return(NULL)
-  Ipp <- Matrix::crossprod(D$W) + Matrix::kronecker(Matrix::Diagonal(N),
-    Matrix::Matrix(P0, sparse = TRUE))
-  Ipi <- Matrix::crossprod(D$W, D$V)
-  am <- layout$ability_mean
-  if(length(am)){
-    M <- Matrix::sparseMatrix(i = rep(seq_len(N * K), times = K), j = rep(am, each = N * K),
-      x = as.numeric(vapply(seq_len(K), function(kk) rep(-P0[, kk], times = N), numeric(N * K))),
-      dims = c(N * K, n))
-    Ipi <- Ipi + M
-  }
-  H <- Matrix::crossprod(D$V) - Matrix::crossprod(Ipi,
-    Matrix::solve(Matrix::forceSymmetric(Ipp), Ipi))
-  H <- as(Matrix::forceSymmetric(H), "generalMatrix")
+## Prior curvature of the minimised objective, natural coordinates, n x n
+## sparse: the item priors and their mean hyperparameters, the coefficient
+## priors, and the ability mean's N P0 (it enters only the person prior).
+bigIRT_laplace_prior_curvature <- function(sdat, layout, n, N, P0){
   tr <- list(i = integer(0), j = integer(0), x = numeric(0))
   put <- function(i, j, x){ tr$i <<- c(tr$i, i); tr$j <<- c(tr$j, j); tr$x <<- c(tr$x, x) }
+  am <- layout$ability_mean
   if(length(am)) for(a in seq_along(am)) for(b in seq_along(am)) put(am[a], am[b], N * P0[a, b])
   if(isTRUE(as.logical(sdat$dopriors))){
     pr <- list(list("B", "B_mean", "BSDx", "BMeanSD"), list("A", "A_mean", "invspASD", "AMeanSD"),
@@ -171,17 +142,140 @@ bigIRT_laplace_fisher_info <- function(ev, sdat, context, layout,
     ib <- c(layout$ability_beta, layout$A_beta, layout$B_beta, layout$C_beta, layout$D_beta)
     if(length(ib)) put(ib, ib, rep(1 / bs^2, length(ib)))
   }
-  if(length(tr$i)) H <- H + Matrix::sparseMatrix(i = tr$i, j = tr$j, x = tr$x, dims = c(n, n))
+  Matrix::sparseMatrix(i = tr$i, j = tr$j, x = tr$x, dims = c(n, n))
+}
+
+## The pieces of the Fisher information in the OPTIMISER's coordinates, and
+## F v without forming F.
+##
+## The joint (items + persons) information is I_ii = V'V, I_ip = V'W,
+## I_pp = W'W + P0 per person, and the marginal's is the Schur complement
+##   F = V'V - C' Ipp^-1 C + priors,  C = W'V,
+## positive semidefinite because the joint one is. The ability mean enters the
+## person prior only, so it adds -P0 per person to C and N P0 to the priors.
+## F v costs three sparse passes over the rows (V v, C v, C'u) and a
+## block-diagonal solve; nothing n x n is formed.
+bigIRT_laplace_fisher_parts <- function(ev, sdat, context, layout){
+  D <- bigIRT_laplace_row_derivatives(ev, sdat, context, layout)
+  n <- D$n; N <- D$N; K <- D$K; P0 <- D$P0
   ps <- attr(layout, "par_scale"); if(length(ps) != n) ps <- rep(1, n)
-  H <- Matrix::Diagonal(x = ps) %*% H %*% Matrix::Diagonal(x = ps)
-  attr(H, "undescribed") <- setdiff(seq_len(n), D$described)
+  S <- Matrix::Diagonal(x = ps)
+  Ipp <- Matrix::forceSymmetric(Matrix::crossprod(D$W) +
+    Matrix::kronecker(Matrix::Diagonal(N), Matrix::Matrix(P0, sparse = TRUE)))
+  IppC <- Matrix::Cholesky(Ipp, perm = FALSE, LDL = FALSE)
+  C <- Matrix::crossprod(D$W, D$V)
+  am <- layout$ability_mean
+  if(length(am)){
+    M <- Matrix::sparseMatrix(i = rep(seq_len(N * K), times = K), j = rep(am, each = N * K),
+      x = as.numeric(vapply(seq_len(K), function(kk) rep(-P0[, kk], times = N), numeric(N * K))),
+      dims = c(N * K, n))
+    C <- C + M
+  }
+  V <- D$V %*% S
+  C <- C %*% S
+  Pr <- S %*% bigIRT_laplace_prior_curvature(sdat, layout, n, N, P0) %*% S
+  Fv <- function(v){
+    v <- as.numeric(v)
+    as.numeric(Matrix::crossprod(V, V %*% v) + Pr %*% v -
+      Matrix::crossprod(C, Matrix::solve(IppC, C %*% v, system = "A")))
+  }
+  list(D = D, V = V, C = C, IppC = IppC, Pr = Pr, Fv = Fv, n = n, N = N, K = K, P0 = P0,
+    undescribed = setdiff(seq_len(n), D$described))
+}
+
+## Fisher information of the MINIMISED Laplace objective in the optimiser's
+## coordinates, as a dense-pattern sparse matrix. Returns NULL when the
+## coupling would be too dense to hold (`max_nnz`).
+bigIRT_laplace_fisher_info <- function(ev, sdat, context, layout,
+  max_nnz = getOption("bigIRT.fisher_max_nnz", 5e7), parts = NULL){
+  n <- length(ev$approx_grad)
+  if(as.numeric(n)^2 > max_nnz) return(NULL)
+  P <- if(is.null(parts)) bigIRT_laplace_fisher_parts(ev, sdat, context, layout) else parts
+  H <- Matrix::crossprod(P$V) + P$Pr -
+    Matrix::crossprod(P$C, Matrix::solve(P$IppC, P$C, system = "A"))
+  H <- as(Matrix::forceSymmetric(H), "generalMatrix")
+  attr(H, "undescribed") <- P$undescribed
   H
 }
 
-## A function applying F^-1, from the Fisher information at `ev` (point `x`,
-## minimised-objective gradient `g`). Coordinates the Fisher construction does
-## not describe get their rows and columns from forward differences of the
-## gradient, one evaluation each through `gfun`. NULL if F cannot be built.
+## q_r = 1 - w_r' Ipp_i^-1 w_r, Ipp_i = sum_{r in i} w_r w_r' + P0, for rows
+## grouped by person `ids`: the share of a row's information that its own
+## person does not absorb. W is nr x NK with row r's entries in person i's K
+## columns; they are gathered into an nr x K matrix, the K x K blocks summed by
+## person and inverted by vectorised Gauss-Jordan across persons. (Solving
+## CHOLMOD against the sparse t(W) instead took 42 s at 577k rows.)
+bigIRT_laplace_row_q <- function(W, N, K, P0, ids){
+  Wt <- as(W, "TsparseMatrix")
+  Wd <- matrix(0, nrow(W), K)
+  if(length(Wt@x)) Wd[cbind(Wt@i + 1L, (Wt@j %% K) + 1L)] <- Wt@x
+  A <- array(0, c(K, K, N))
+  for(k in seq_len(K)) for(l in seq_len(K)){
+    s <- numeric(N); a <- rowsum(Wd[, k] * Wd[, l], ids)
+    s[as.integer(rownames(a))] <- a[, 1]
+    A[k, l, ] <- s + P0[k, l]
+  }
+  Ai <- bigIRT_block_inverse(A)
+  q <- rep(1, nrow(W))
+  for(k in seq_len(K)) for(l in seq_len(K)) q <- q - Wd[, k] * Ai[k, l, ids] * Wd[, l]
+  pmax(q, 0)
+}
+
+## Inverse of each K x K slice of a K x K x N array of SPD matrices.
+bigIRT_block_inverse <- function(A){
+  K <- dim(A)[1]; N <- dim(A)[3]
+  if(K == 1L) return(array(1 / A[1, 1, ], c(1L, 1L, N)))
+  M <- A; I <- array(0, c(K, K, N)); for(k in seq_len(K)) I[k, k, ] <- 1
+  for(k in seq_len(K)){
+    piv <- M[k, k, ]
+    M[k, , ] <- sweep(matrix(M[k, , ], K), 2, piv, "/")
+    I[k, , ] <- sweep(matrix(I[k, , ], K), 2, piv, "/")
+    for(r in setdiff(seq_len(K), k)){
+      f <- M[r, k, ]
+      M[r, , ] <- M[r, , ] - sweep(matrix(M[k, , ], K), 2, f, "*")
+      I[r, , ] <- I[r, , ] - sweep(matrix(I[k, , ], K), 2, f, "*")
+    }
+  }
+  I
+}
+
+## Factor a symmetric metric, with a small ridge if rounding or a
+## finite-difference column has broken positive definiteness. CHOLMOD warns as
+## well as failing; the failure is handled here, so the warning is not the
+## user's business. Returns a function applying the inverse, or NULL.
+bigIRT_laplace_factor_metric <- function(H){
+  H <- Matrix::forceSymmetric(H)
+  ridge <- 0
+  for(attempt in 1:6){
+    ch <- tryCatch(suppressWarnings(Matrix::Cholesky(
+      if(ridge > 0) H + Matrix::Diagonal(nrow(H), ridge) else H,
+      perm = TRUE, LDL = FALSE)), error = function(e) NULL)
+    if(!is.null(ch)) return(function(v) as.numeric(Matrix::solve(ch, as.numeric(v), system = "A")))
+    ridge <- if(ridge == 0) 1e-8 * max(abs(Matrix::diag(H))) else ridge * 100
+  }
+  NULL
+}
+
+## Columns of F for `cols`: Fisher-vector products for the ones the Fisher
+## construction describes, forward differences of the gradient (one
+## evaluation each, through `gfun`) for the rest. n x length(cols).
+bigIRT_laplace_fisher_columns <- function(P, cols, x, g, gfun, h = 1e-4){
+  out <- matrix(0, P$n, length(cols))
+  for(k in seq_along(cols)){
+    j <- cols[k]
+    if(j %in% P$undescribed){
+      hj <- h * max(1, abs(x[j]))
+      xp <- x; xp[j] <- xp[j] + hj
+      out[, k] <- (gfun(xp) - g) / hj
+    } else {
+      e <- numeric(P$n); e[j] <- 1
+      out[, k] <- P$Fv(e)
+    }
+  }
+  out
+}
+
+## Dense metric: F itself, with finite-difference rows and columns for the
+## coordinates the construction does not describe. NULL if F cannot be built.
 bigIRT_laplace_fisher_solver <- function(ev, x, g, sdat, context, layout, gfun, h = 1e-4){
   H <- tryCatch(bigIRT_laplace_fisher_info(ev, sdat, context, layout), error = function(e) NULL)
   if(is.null(H)) return(NULL)
@@ -196,21 +290,98 @@ bigIRT_laplace_fisher_solver <- function(ev, x, g, sdat, context, layout, gfun, 
     }
     H <- Matrix::Matrix(H, sparse = TRUE)
   }
-  H <- Matrix::forceSymmetric(H)
-  ## Positive definite up to rounding by construction; cancellation in the
-  ## Schur complement on a weakly identified fit, or a finite-difference
-  ## column, can break that, and a small ridge restores it. CHOLMOD warns as
-  ## well as failing, and the failure is handled here, so the warning is not
-  ## the user's business.
-  ridge <- 0
-  for(attempt in 1:6){
-    ch <- tryCatch(suppressWarnings(Matrix::Cholesky(
-      if(ridge > 0) H + Matrix::Diagonal(nrow(H), ridge) else H,
-      perm = TRUE, LDL = FALSE)), error = function(e) NULL)
-    if(!is.null(ch)) return(function(v) as.numeric(Matrix::solve(ch, v, system = "A")))
-    ridge <- if(ridge == 0) 1e-8 * max(abs(Matrix::diag(H))) else ridge * 100
+  bigIRT_laplace_factor_metric(H)
+}
+
+## Block-diagonal metric, for fits too large for the dense one.
+##
+## F restricted to its item-diagonal blocks, plus the exact block of the
+## parameters shared across items, with the coupling between the two dropped:
+##
+##   Bd = blockdiag( F_jj for each item j,  F_GG ).
+##
+## W Ipp^-1 W' couples only rows of the same person, and a person answers an
+## item once, so the item block F_jj is exactly V_j' diag(q) V_j with q from
+## bigIRT_laplace_row_q -- one pass over the rows. G is every parameter whose
+## rows span more than one item (shared covariate coefficients, person
+## covariates), plus those no row touches (mean hyperparameters, the ability
+## mean, latent correlations); its block comes from length(G) Fisher-vector
+## products, or finite differences where the construction has no rows. Both
+## blocks are principal submatrices of a positive semidefinite F, or blocks
+## of one, so Bd is positive semidefinite.
+##
+## What it leaves out is the coupling between different items through the
+## persons who answered both. In a sparse design, where each person sees a
+## few dozen items, that is a small part of each row's information, and
+## L-BFGS's secant pairs recover the few directions it matters for. Measured
+## at 5,000 to 10,000 items (dev1, dev/optim/): as few evaluations as the
+## exact F applied matrix-free by conjugate gradients, at a fraction of the
+## cost, and 2-4x fewer than mize.
+bigIRT_laplace_blockdiag_solver <- function(ev, x, g, sdat, context, layout, gfun, h = 1e-4){
+  P <- tryCatch(bigIRT_laplace_fisher_parts(ev, sdat, context, layout), error = function(e) NULL)
+  if(is.null(P)) return(NULL)
+  n <- P$n
+  V <- as(P$V, "CsparseMatrix")
+  items <- as.integer(context$row_context$items)
+  ## A column is local when every row it touches belongs to one item: compare
+  ## each nonzero's item with the first in its column (CSC keeps a column's
+  ## nonzeros together), one vectorised pass.
+  cnt <- diff(V@p)
+  nzc <- rep.int(seq_len(n), cnt)
+  nzi <- items[V@i + 1L]
+  has <- cnt > 0L
+  first <- rep(NA_integer_, n)
+  first[has] <- items[V@i[V@p[which(has)] + 1L] + 1L]
+  spans <- logical(n)
+  spans[unique(nzc[nzi != first[nzc]])] <- TRUE
+  item_par <- c(layout$B, layout$A, layout$C, layout$D)
+  local <- which((has & !spans) | (!has & seq_len(n) %in% item_par))
+  G <- setdiff(seq_len(n), local)
+  q <- bigIRT_laplace_row_q(P$D$W, P$N, P$K, P$P0, as.integer(context$row_context$ids))
+  VL <- V[, local, drop = FALSE]
+  Bl <- Matrix::crossprod(VL, Matrix::Diagonal(x = q) %*% VL) + P$Pr[local, local, drop = FALSE]
+  Bl <- as(Bl, "TsparseMatrix")
+  ti <- local[Bl@i + 1L]; tj <- local[Bl@j + 1L]; tx <- Bl@x
+  if(length(G)){
+    FG <- bigIRT_laplace_fisher_columns(P, G, x, g, gfun, h = h)[G, , drop = FALSE]
+    FG <- (FG + t(FG)) / 2
+    ti <- c(ti, rep(G, times = length(G))); tj <- c(tj, rep(G, each = length(G)))
+    tx <- c(tx, as.numeric(FG))
   }
-  NULL
+  Bd <- Matrix::sparseMatrix(i = ti, j = tj, x = tx, dims = c(n, n))
+  ## A parameter no data and no prior reach (possible only in odd
+  ## specifications) still needs a positive diagonal to factor.
+  dg <- Matrix::diag(Bd)
+  fixd <- which(!(dg > 0))
+  if(length(fixd)) Bd <- Bd + Matrix::sparseMatrix(i = fixd, j = fixd,
+    x = rep(max(stats::median(dg[dg > 0]), 1e-8), length(fixd)), dims = c(n, n))
+  bigIRT_laplace_factor_metric(Bd)
+}
+
+## The metric for the Fisher-shaped L-BFGS: dense F where it is cheap and
+## worth it, the block-diagonal Bd otherwise.
+##
+## Measured (dev1, dev/optim/): the dense F is the better metric for small,
+## densely linked designs, where the coupling between items carries real
+## curvature; at 2,000 items and above in sparse designs its assembly and
+## Cholesky cost more than they save, and Bd matched or beat it. So the choice
+## is by the number of free parameters, `bigIRT.dense_metric_max_par` (option).
+bigIRT_laplace_metric_solver <- function(e, sdat, context, layout, gfun,
+  type = getOption("bigIRT.laplace_metric", "auto")){
+  n <- length(e$x)
+  ## "none" builds no metric, which hands the fit to the mize path.
+  if(identical(type, "none")) return(NULL)
+  if(identical(type, "auto"))
+    type <- if(n <= getOption("bigIRT.dense_metric_max_par", 1000)) "dense" else "blockdiag"
+  m <- if(identical(type, "dense"))
+    bigIRT_laplace_fisher_solver(e$ev, e$x, e$g, sdat, context, layout, gfun) else NULL
+  if(is.null(m)){
+    type <- "blockdiag"
+    m <- bigIRT_laplace_blockdiag_solver(e$ev, e$x, e$g, sdat, context, layout, gfun)
+  }
+  if(is.null(m)) return(NULL)
+  attr(m, "metric") <- type
+  m
 }
 
 ## L-BFGS minimising fg(x)$f, with H0 = gamma * minv (identity when minv is

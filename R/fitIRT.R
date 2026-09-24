@@ -2524,7 +2524,10 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
       ebayes_iters = sum(vapply(eb_trace, function(z) z$iters, integer(1)), na.rm = TRUE) +
         as.integer(directFit$optim$iter %||% 0L),
       optimizer_terminate = direct_terminate,
-      optimizer_terminate_value = if(!is.null(directFit$optim$terminate$val)) directFit$optim$terminate$val else NA_real_
+      optimizer_terminate_value = if(!is.null(directFit$optim$terminate$val)) directFit$optim$terminate$val else NA_real_,
+      ## Which curvature shaped the Fisher optimiser: "dense", "blockdiag", or
+      ## NA when the mize path ran.
+      optimizer_metric = if(!is.null(directFit$optim$metric)) as.character(directFit$optim$metric) else NA_character_
     )
     fit$abilityPrior <- list(
       sd = as.numeric(sdat$AbilitySD),
