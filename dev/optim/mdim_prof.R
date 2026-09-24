@@ -33,7 +33,7 @@ for(nm in c("bigIRT_laplace_metric_solver")){
       person = NA_real_, item = NA_real_); r }
   unlockBinding(nm, ns); assign(nm, f, ns); lockBinding(nm, ns)
 }
-for(refine in c("none", "agq")){
+for(refine in c("none", "laplace2")){
   tm$rows <- list()
   t <- system.time(fit <- suppressWarnings(fitIRT(sim$dat, pl = pl, cores = cores, loadings = L,
     marginalApprox = "laplace", estimateAbilityCorr = TRUE, ebayes = FALSE, laplaceRefine = refine,
@@ -44,4 +44,9 @@ for(refine in c("none", "agq")){
     refine, t, sum(x$fn != "metric"), sum(x$sec[x$fn != "metric"]), sum(x$person, na.rm = TRUE),
     sum(x$item, na.rm = TRUE), sum(x$fn == "metric"), sum(x$sec[x$fn == "metric"]),
     t - sum(x$sec[x$fn != "metric"]) - sum(x$sec[x$fn == "metric"])))
+  rf <- fit$laplaceStatus$refine
+  if(!is.null(rf)) cat(sprintf("  refine: iter %d, evals %d, terminate %s (%.2e), laplace %.3f -> start %.3f -> end %.3f; clipped at end %s
+",
+    rf$iter, rf$evals, rf$terminate$what, rf$terminate$val, rf$laplace_value, rf$agq_start, rf$agq_end,
+    format(fit$laplaceStatus$clipped_partial)))
 }

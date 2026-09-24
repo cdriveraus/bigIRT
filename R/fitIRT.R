@@ -1519,9 +1519,10 @@ bigIRT_validate_fit_inputs <- function(dat, score, id, item, scale, pl, controls
 #'   Gauss-Hermite quadrature, centred at the Laplace mode, instead of by the
 #'   Laplace approximation. The refinement starts from the Laplace optimum and
 #'   uses the same optimiser, so it is a short continuation, not a second fit.
-#'   \code{"auto"} (default) refines whenever an asymptote is estimated (3PL,
-#'   4PL): by quadrature up to three dimensions, and beyond that by
-#'   \code{"laplace2"}. \code{"agq"} always refines by quadrature (beyond
+#'   \code{"auto"} (default): with free asymptotes (3PL, 4PL), by quadrature
+#'   up to three dimensions and not at all beyond (with a warning); without,
+#'   by \code{"laplace2"} from two dimensions on, where Laplace put 2PL
+#'   loadings 0.12 to 0.22 standard errors low on simulated data. \code{"agq"} always refines by quadrature (beyond
 #'   three dimensions with quasi-Monte Carlo points, see \code{agqPoints},
 #'   which need many points to be reliable: a 256-point refinement at nine
 #'   dimensions was measured running away). \code{"laplace2"} refines by the
@@ -1542,7 +1543,7 @@ bigIRT_validate_fit_inputs <- function(dat, score, id, item, scale, pl, controls
 #' @param agqNodes Integer. Gauss-Hermite nodes per dimension for
 #'   \code{laplaceRefine} with up to three dimensions. The product rule costs
 #'   \code{agqNodes^K} likelihood passes per person, so the default falls with
-#'   dimension: 9, 5 and 3 for one, two and three dimensions.
+#'   dimension: 9, 7 and 5 for one, two and three dimensions.
 #' @param agqPoints Integer. Beyond three dimensions the product rule is out of
 #'   reach, and the refinement uses this many quasi-Monte Carlo points per
 #'   person instead, in antithetic pairs, as importance sampling through the
@@ -2305,8 +2306,27 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     ## a few points favour -- and 1,024 points still sat up to 1.6 SE from
     ## 4,096. The second-order correction is deterministic and cannot be
     ## exploited that way.
+    ## Measured against 9^K product-rule optima (dev/optim/mdim_lowk.R,
+    ## mdim_refine.R), in standard errors of the loadings:
+    ##   2PL  K = 1: Laplace 0.03 off -- nothing to refine.
+    ##   2PL  K = 2..9: Laplace -0.12 to -0.22 on average; second-order
+    ##        Laplace within 0.02, stable (the curvature is always positive),
+    ##        at about Laplace's own cost.
+    ##   3PL  K = 1: Laplace +0.5; K = 2 and 3: -1.1 to -1.4 on average, up
+    ##        to 4. The product rule with 7 (K = 2) or 5 (K = 3) nodes a
+    ##        dimension is within 0.1; second-order Laplace diverged on one of
+    ##        two such fits, its correction unbounded where the 3PL curvature
+    ##        is not positive.
+    ##   3PL  K >= 4: no rule measured safe yet, so Laplace, with a warning.
+    auto_kind <- if(!free_asymptotes) { if(sdat$Nscales >= 2L) "laplace2" else "none" } else
+      if(sdat$Nscales <= 3L) "agq" else "none"
+    if(identical(laplaceRefine, "auto") && free_asymptotes && sdat$Nscales >= 4L)
+      warning(paste0("Free asymptotes at ", sdat$Nscales, " dimensions: the Laplace estimates are ",
+        "not refined. At two and three dimensions Laplace put 3PL discriminations and ",
+        "difficulties 1 to 2 standard errors low on simulated data; laplaceRefine = \"agq\" ",
+        "with agqPoints of several thousand refines at higher cost."), call. = FALSE)
     refine_kind <- switch(laplaceRefine, none = "none", agq = "agq", laplace2 = "laplace2",
-      auto = if(!free_asymptotes) "none" else if(sdat$Nscales <= 3L) "agq" else "laplace2")
+      auto = auto_kind)
     agq_rule <- switch(refine_kind, none = NULL,
       agq = bigIRT_agq_rules(sdat$Nscales, nodes = agqNodes, points = agqPoints),
       laplace2 = structure(list(desc = "laplace2"), class = "bigIRT_laplace2"))
@@ -2541,7 +2561,8 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
       ## "agq" when the final pass was refined by quadrature (laplaceRefine);
       ## logLik is then the quadrature marginal, and laplace_logLik the Laplace
       ## objective at the Laplace optimum the refinement started from.
-      marginal = if(!is.null(directFit$optim$refine)) directFit$optim$refine$approx else "laplace",
+      marginal = if(!is.null(directFit$optim$refine) && !isTRUE(directFit$optim$refine$reverted))
+        directFit$optim$refine$approx else "laplace",
       ## Persons whose curvature was clipped to positive semidefinite at the
       ## fitted point (each is counted by the mode solve, and by the Laplace
       ## item kernel when that runs).

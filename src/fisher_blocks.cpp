@@ -236,12 +236,66 @@ struct FbWorker : public RcppParallel::Worker {
   }
 };
 
+// The full Fisher information, dense, for fits small enough to hold it:
+//   F = sum_i [ sum_{r in i} v_r v_r'  -  c_i' Ipp_i^-1 c_i ],  c_i = sum_{r in i} w_r v_r' - P0 E_mu,
+// over the parameters person i touches, so the coupling between items that
+// runs through shared persons is all there. The Schur term is a rank-K
+// update, B'B with B = L^-1 c_i. Replaces an R assembly (sparse V and W,
+// CHOLMOD on the person block) that was two thirds of a nine-dimensional
+// fit's wall time.
+struct FbDenseWorker : public RcppParallel::Worker {
+  const FbData& D;
+  const std::vector< std::vector<int> >& obs_by_subj;
+  const MatrixXd& P0;
+  const std::vector<int>& amean;
+  const int n;
+  MatrixXd F;
+  int failure = 0;
+  FbDenseWorker(const FbData& D, const std::vector< std::vector<int> >& obs, const MatrixXd& P0,
+                const std::vector<int>& amean, int n)
+    : D(D), obs_by_subj(obs), P0(P0), amean(amean), n(n), F(MatrixXd::Zero(n, n)) {}
+  FbDenseWorker(const FbDenseWorker& o, RcppParallel::Split)
+    : D(o.D), obs_by_subj(o.obs_by_subj), P0(o.P0), amean(o.amean), n(o.n), F(MatrixXd::Zero(o.n, o.n)) {}
+  void operator()(std::size_t begin, std::size_t end) {
+    const int K = D.K;
+    std::vector<int> loc(static_cast<std::size_t>(n), -1);
+    for (std::size_t s = begin; s < end; ++s) {
+      const int subj = static_cast<int>(s);
+      const std::vector<int>& obs = obs_by_subj[subj];
+      std::vector<FbRow> rows; rows.reserve(obs.size());
+      MatrixXd Ipp = P0;
+      for (int o : obs) { rows.push_back(D.row(o, subj)); Ipp += rows.back().w * rows.back().w.transpose(); }
+      Eigen::LLT<MatrixXd> llt(Ipp);
+      if (llt.info() != Eigen::Success) { failure = 1; continue; }
+      std::vector<int> touched;
+      auto slot = [&](int p) { if (loc[p] < 0) { loc[p] = static_cast<int>(touched.size()); touched.push_back(p); } return loc[p]; };
+      for (const FbRow& r : rows) for (const auto& e : r.v) slot(e.first);
+      for (int p : amean) slot(p);
+      const int m = static_cast<int>(touched.size());
+      MatrixXd c = MatrixXd::Zero(K, m);
+      for (std::size_t k = 0; k < amean.size(); ++k)
+        for (int kk = 0; kk < K; ++kk) c(kk, loc[amean[k]]) -= P0(kk, static_cast<int>(k)) * D.ps[amean[k]];
+      for (const FbRow& r : rows) {
+        for (const auto& ex : r.v) {
+          c.col(loc[ex.first]) += r.w * ex.second;
+          for (const auto& ey : r.v) F(ex.first, ey.first) += ex.second * ey.second;
+        }
+      }
+      const MatrixXd B = llt.matrixL().solve(c);
+      const MatrixXd BB = B.transpose() * B;
+      for (int j = 0; j < m; ++j) for (int i = 0; i < m; ++i) F(touched[i], touched[j]) -= BB(i, j);
+      for (int p : touched) loc[p] = -1;
+    }
+  }
+  void join(const FbDenseWorker& o) { F += o.F; if (o.failure) failure = o.failure; }
+};
+
 } // namespace
 
 // Returns the inverse of every item block (with its prior curvature added)
 // and the shared block without priors; R adds the shared priors, any
 // finite-difference columns, and factors that small dense block.
-extern "C" SEXP _bigIRT_fisher_blocks_cpp_impl(
+static SEXP fb_impl(const bool dense,
     SEXP idSEXP, SEXP itemsSEXP, SEXP theta_modeSEXP, SEXP person_predSEXP,
     SEXP fixed_abilitySEXP, SEXP fixed_ability_valueSEXP,
     SEXP A_refSEXP, SEXP A_fixed_valueSEXP, SEXP A_predSEXP,
@@ -254,7 +308,6 @@ extern "C" SEXP _bigIRT_fisher_blocks_cpp_impl(
     SEXP lay_AbSEXP, SEXP lay_BbSEXP, SEXP lay_CbSEXP, SEXP lay_DbSEXP,
     SEXP lay_abilSEXP, SEXP lay_ameanSEXP, SEXP item_parSEXP, SEXP psSEXP, SEXP prior_diagSEXP,
     SEXP grainSEXP) {
-  BEGIN_RCPP
   Rcpp::IntegerVector id(idSEXP);
   Rcpp::NumericMatrix theta_mode(theta_modeSEXP);
   Rcpp::IntegerVector item_par(item_parSEXP);
@@ -289,6 +342,18 @@ extern "C" SEXP _bigIRT_fisher_blocks_cpp_impl(
     const int s = id[o] - 1;
     if (s < 0 || s >= N) Rcpp::stop("id must be coded from 1 to Nsubs.");
     obs_by_subj[s].push_back(o);
+  }
+
+  if (dense) {
+    MatrixXd P0d(K, K);
+    for (int r = 0; r < K; ++r) for (int c = 0; c < K; ++c) P0d(r, c) = P0r(r, c);
+    FbDenseWorker wd(D, obs_by_subj, P0d, amean, n);
+    RcppParallel::parallelReduce(static_cast<std::size_t>(0), static_cast<std::size_t>(N), wd,
+                                 static_cast<std::size_t>(std::max(1, Rcpp::as<int>(grainSEXP))));
+    if (wd.failure) Rcpp::stop("Fisher information: a person information block could not be factored.");
+    Rcpp::NumericMatrix out(n, n);
+    for (int j = 0; j < n; ++j) for (int i = 0; i < n; ++i) out(i, j) = 0.5 * (wd.F(i, j) + wd.F(j, i));
+    return out;
   }
 
   // Which parameters are local to one item: every row that touches them
@@ -382,5 +447,42 @@ extern "C" SEXP _bigIRT_fisher_blocks_cpp_impl(
     Rcpp::Named("block_inv") = inv, Rcpp::Named("block_dim") = block_dim,
     Rcpp::Named("block_par") = block_par, Rcpp::Named("G") = Rcpp::IntegerVector(Gidx.begin(), Gidx.end()),
     Rcpp::Named("FGG") = FGG, Rcpp::Named("ridged") = ridged);
+}
+
+extern "C" SEXP _bigIRT_fisher_blocks_cpp_impl(
+    SEXP idSEXP, SEXP itemsSEXP, SEXP theta_modeSEXP, SEXP person_predSEXP,
+    SEXP fixed_abilitySEXP, SEXP fixed_ability_valueSEXP,
+    SEXP A_refSEXP, SEXP A_fixed_valueSEXP, SEXP A_predSEXP,
+    SEXP B_refSEXP, SEXP B_fixed_valueSEXP, SEXP B_predSEXP,
+    SEXP C_refSEXP, SEXP C_fixed_valueSEXP, SEXP C_predSEXP,
+    SEXP D_refSEXP, SEXP D_fixed_valueSEXP, SEXP D_predSEXP,
+    SEXP AbilitybetaSEXP, SEXP invspAparsSEXP, SEXP invspAbetaSEXP, SEXP BparsSEXP, SEXP BbetaSEXP,
+    SEXP logitCparsSEXP, SEXP logitCbetaSEXP, SEXP logitDparsSEXP, SEXP logitDbetaSEXP,
+    SEXP P0SEXP, SEXP lay_ASEXP, SEXP lay_BSEXP, SEXP lay_CSEXP, SEXP lay_DSEXP,
+    SEXP lay_AbSEXP, SEXP lay_BbSEXP, SEXP lay_CbSEXP, SEXP lay_DbSEXP,
+    SEXP lay_abilSEXP, SEXP lay_ameanSEXP, SEXP item_parSEXP, SEXP psSEXP, SEXP prior_diagSEXP,
+    SEXP grainSEXP) {
+  BEGIN_RCPP
+  return fb_impl(false, idSEXP, itemsSEXP, theta_modeSEXP, person_predSEXP, fixed_abilitySEXP, fixed_ability_valueSEXP, A_refSEXP, A_fixed_valueSEXP, A_predSEXP, B_refSEXP, B_fixed_valueSEXP, B_predSEXP, C_refSEXP, C_fixed_valueSEXP, C_predSEXP, D_refSEXP, D_fixed_valueSEXP, D_predSEXP, AbilitybetaSEXP, invspAparsSEXP, invspAbetaSEXP, BparsSEXP, BbetaSEXP, logitCparsSEXP, logitCbetaSEXP, logitDparsSEXP, logitDbetaSEXP, P0SEXP, lay_ASEXP, lay_BSEXP, lay_CSEXP, lay_DSEXP, lay_AbSEXP, lay_BbSEXP, lay_CbSEXP, lay_DbSEXP, lay_abilSEXP, lay_ameanSEXP, item_parSEXP, psSEXP, prior_diagSEXP, grainSEXP);
+  END_RCPP
+}
+
+// The dense Fisher information (without priors), same arguments; item_par,
+// prior_diag are unused.
+extern "C" SEXP _bigIRT_fisher_dense_cpp_impl(
+    SEXP idSEXP, SEXP itemsSEXP, SEXP theta_modeSEXP, SEXP person_predSEXP,
+    SEXP fixed_abilitySEXP, SEXP fixed_ability_valueSEXP,
+    SEXP A_refSEXP, SEXP A_fixed_valueSEXP, SEXP A_predSEXP,
+    SEXP B_refSEXP, SEXP B_fixed_valueSEXP, SEXP B_predSEXP,
+    SEXP C_refSEXP, SEXP C_fixed_valueSEXP, SEXP C_predSEXP,
+    SEXP D_refSEXP, SEXP D_fixed_valueSEXP, SEXP D_predSEXP,
+    SEXP AbilitybetaSEXP, SEXP invspAparsSEXP, SEXP invspAbetaSEXP, SEXP BparsSEXP, SEXP BbetaSEXP,
+    SEXP logitCparsSEXP, SEXP logitCbetaSEXP, SEXP logitDparsSEXP, SEXP logitDbetaSEXP,
+    SEXP P0SEXP, SEXP lay_ASEXP, SEXP lay_BSEXP, SEXP lay_CSEXP, SEXP lay_DSEXP,
+    SEXP lay_AbSEXP, SEXP lay_BbSEXP, SEXP lay_CbSEXP, SEXP lay_DbSEXP,
+    SEXP lay_abilSEXP, SEXP lay_ameanSEXP, SEXP item_parSEXP, SEXP psSEXP, SEXP prior_diagSEXP,
+    SEXP grainSEXP) {
+  BEGIN_RCPP
+  return fb_impl(true, idSEXP, itemsSEXP, theta_modeSEXP, person_predSEXP, fixed_abilitySEXP, fixed_ability_valueSEXP, A_refSEXP, A_fixed_valueSEXP, A_predSEXP, B_refSEXP, B_fixed_valueSEXP, B_predSEXP, C_refSEXP, C_fixed_valueSEXP, C_predSEXP, D_refSEXP, D_fixed_valueSEXP, D_predSEXP, AbilitybetaSEXP, invspAparsSEXP, invspAbetaSEXP, BparsSEXP, BbetaSEXP, logitCparsSEXP, logitCbetaSEXP, logitDparsSEXP, logitDbetaSEXP, P0SEXP, lay_ASEXP, lay_BSEXP, lay_CSEXP, lay_DSEXP, lay_AbSEXP, lay_BbSEXP, lay_CbSEXP, lay_DbSEXP, lay_abilSEXP, lay_ameanSEXP, item_parSEXP, psSEXP, prior_diagSEXP, grainSEXP);
   END_RCPP
 }

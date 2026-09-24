@@ -84,9 +84,11 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
       l3 <- vapply(r, function(k) der(eta[k], k, 3), 1)
       l4 <- vapply(r, function(k) der(eta[k], k, 4), 1)
       ## Observed curvature, which for the 3PL can be negative row by row; a
-      ## person whose total data curvature is not PSD gets no correction.
+      ## person whose total data curvature is not PSD has it clipped to the
+      ## nearest PSD matrix, as in the Laplace path.
       Dw <- crossprod(a, a * (-l2))
-      if(min(eigen(Dw, symmetric = TRUE, only.values = TRUE)$values) < 0) next
+      ee <- eigen(Dw, symmetric = TRUE)
+      if(min(ee$values) < 0) Dw <- ee$vectors %*% diag(pmax(ee$values, 0), K) %*% t(ee$vectors)
       H <- P0 + Dw; S <- solve(H)
       C <- a %*% S %*% t(a); cd <- diag(C)
       corr <- corr + sum(l4 * cd^2) / 8 + sum(outer(l3, l3) * (3 * outer(cd, cd) * C + 2 * C^3)) / 24

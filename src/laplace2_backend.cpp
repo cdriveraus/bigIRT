@@ -216,9 +216,21 @@ struct L2Worker : public RcppParallel::Worker {
         for (int c = 0; c < d; ++c) P0a(r, c) = P0(act[r], act[c]); }
       MatrixXd Dw = MatrixXd::Zero(d, d);
       for (int oi = 0; oi < n; ++oi) Dw += (-l2[oi]) * A.row(oi).transpose() * A.row(oi);
+      // Where the data curvature is not positive semidefinite, clip it to
+      // the nearest matrix that is, as the Laplace path does. Clipping is
+      // continuous, so the objective stays continuous across the boundary
+      // (skipping these persons instead made their correction jump to zero
+      // there, and stalled the line search on 3PL data); H is then locally
+      // constant in the rows, exactly so at one dimension, and its
+      // derivative terms are dropped.
+      bool clipped = false;
       {
-        Eigen::LDLT<MatrixXd> ldl(Dw);
-        if (ldl.info() != Eigen::Success || ldl.vectorD().minCoeff() < 0) { ++skipped; continue; }
+        Eigen::SelfAdjointEigenSolver<MatrixXd> es(Dw);
+        if (es.eigenvalues().minCoeff() < 0) {
+          VectorXd lam = es.eigenvalues().cwiseMax(0.0);
+          Dw = es.eigenvectors() * lam.asDiagonal() * es.eigenvectors().transpose();
+          clipped = true; ++skipped;
+        }
       }
       const MatrixXd H = P0a + Dw;
       Eigen::LLT<MatrixXd> llt(H);
@@ -254,11 +266,12 @@ struct L2Worker : public RcppParallel::Worker {
       MatrixXd ga(n, d);
       for (int r = 0; r < n; ++r) {
         const double aHa = AH.row(r).dot(A.row(r));
-        dl2[r] = -aHa;                                   // w = -l2
+        dl2[r] = clipped ? 0.0 : -aHa;                   // w = -l2; H frozen where clipped
         geta[r] = dl2[r] * l3[r] + dl3[r] * l4[r] + dl4[r] * l5[r];
         gc[r] = dl2[r] * l2c[r] + dl3[r] * l3c[r] + dl4[r] * l4c[r];
         gd[r] = dl2[r] * l2d[r] + dl3[r] * l3d[r] + dl4[r] * l4d[r];
-        ga.row(r) = 2.0 * GQ.row(r) + 2.0 * (-l2[r]) * AH.row(r);
+        ga.row(r) = 2.0 * GQ.row(r);
+        if (!clipped) ga.row(r) += 2.0 * (-l2[r]) * AH.row(r);
         gm += geta[r] * A.row(r).transpose();
       }
       // Mode adjoint.

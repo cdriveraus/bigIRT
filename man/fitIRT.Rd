@@ -376,9 +376,10 @@ the marginal likelihood with each person's integral done by adaptive
 Gauss-Hermite quadrature, centred at the Laplace mode, instead of by the
 Laplace approximation. The refinement starts from the Laplace optimum and
 uses the same optimiser, so it is a short continuation, not a second fit.
-\code{"auto"} (default) refines whenever an asymptote is estimated (3PL,
-4PL): by quadrature up to three dimensions, and beyond that by
-\code{"laplace2"}. \code{"agq"} always refines by quadrature (beyond
+\code{"auto"} (default): with free asymptotes (3PL, 4PL), by quadrature
+up to three dimensions and not at all beyond (with a warning); without,
+by \code{"laplace2"} from two dimensions on, where Laplace put 2PL
+loadings 0.12 to 0.22 standard errors low on simulated data. \code{"agq"} always refines by quadrature (beyond
 three dimensions with quasi-Monte Carlo points, see \code{agqPoints},
 which need many points to be reliable: a 256-point refinement at nine
 dimensions was measured running away). \code{"laplace2"} refines by the
@@ -400,7 +401,7 @@ it alone. The reported \code{logLik} is then the quadrature marginal;
 \item{agqNodes}{Integer. Gauss-Hermite nodes per dimension for
 \code{laplaceRefine} with up to three dimensions. The product rule costs
 \code{agqNodes^K} likelihood passes per person, so the default falls with
-dimension: 9, 5 and 3 for one, two and three dimensions.}
+dimension: 9, 7 and 5 for one, two and three dimensions.}
 
 \item{agqPoints}{Integer. Beyond three dimensions the product rule is out of
 reach, and the refinement uses this many quasi-Monte Carlo points per

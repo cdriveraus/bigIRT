@@ -33,7 +33,13 @@ fitv <- function(refine, points = NULL){
 }
 options(bigIRT.agq_default_inflate = 1.15)
 fits <- list(laplace = fitv("none"), laplace2 = fitv("laplace2"))
-for(M in c(4096L, 16384L)) fits[[paste0("qmc", M)]] <- fitv("agq", M)
+if(K <= 3){
+  fits$agq_default <- fitv("agq")
+  ref_fit <- suppressWarnings(fitIRT(sim$dat, pl = pl, cores = cores, loadings = L,
+    marginalApprox = "laplace", estimateAbilityCorr = TRUE, ebayes = FALSE, laplaceRefine = "agq",
+    agqNodes = 9L, keepInternals = TRUE, dropPerfectScores = FALSE))
+  fits$qmc16384 <- ref_fit   # the reference slot: a 9^K product rule here
+} else for(M in c(4096L, 16384L)) fits[[paste0("qmc", M)]] <- fitv("agq", M)
 d <- G("bigIRT_direct_eval_from_fit")(fits$laplace, keep_covariance = TRUE, cores = cores)
 m <- G("bigIRT_laplace_metric_solver")(list(ev = d$eval, x = d$par, g = -d$eval$approx_grad),
   d$sdat, d$context, d$layout, gfun = function(p) stop("no differences expected"))

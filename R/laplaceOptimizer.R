@@ -340,6 +340,8 @@ bigIRT_laplace_fisher_columns <- function(P, cols, x, g, gfun, h = 1e-4){
 ## Dense metric: F itself, with finite-difference rows and columns for the
 ## coordinates the construction does not describe. NULL if F cannot be built.
 bigIRT_laplace_fisher_solver <- function(ev, x, g, sdat, context, layout, gfun, h = 1e-4){
+  if(!identical(getOption("bigIRT.dense_impl", "cpp"), "R"))
+    return(bigIRT_laplace_fisher_solver_cpp(ev, x, g, sdat, context, layout, gfun, h = h))
   H <- tryCatch(bigIRT_laplace_fisher_info(ev, sdat, context, layout), error = function(e) NULL)
   if(is.null(H)) return(NULL)
   und <- attr(H, "undescribed")
@@ -437,12 +439,11 @@ bigIRT_laplace_blockdiag_solver <- function(ev, x, g, sdat, context, layout, gfu
 ## options(bigIRT.blockdiag_impl = "R"), and the tests hold the two equal.
 ## Only the coordinates the construction does not describe (latent
 ## correlations) are still differenced, one gradient evaluation each.
-bigIRT_laplace_blockdiag_solver_cpp <- function(ev, x, g, sdat, context, layout, gfun, h = 1e-4){
-  n <- length(ev$approx_grad); K <- as.integer(sdat$Nscales); N <- as.integer(sdat$Nsubs)
+## Marshal the fitted state for the C++ Fisher kernels (src/fisher_blocks.cpp):
+## `entry` is "blocks" (block-diagonal) or "dense".
+bigIRT_fisher_kernel_call <- function(entry, ev, sdat, context, layout, ps, prior_diag){
+  n <- length(ev$approx_grad); K <- as.integer(sdat$Nscales)
   rc <- context$row_context; st <- ev$state; rows <- context$train_rows
-  ps <- attr(layout, "par_scale"); if(length(ps) != n) ps <- rep(1, n)
-  P0 <- as.matrix(ev$prior_mats$precision)
-  Pr <- bigIRT_laplace_prior_curvature(sdat, layout, n, N, P0)
   person_pred <- rc$person_pred; ab <- st$Abilitybeta
   if(!length(person_pred) || ncol(person_pred) == 0L){
     person_pred <- matrix(0, length(rows), 1L); ab <- matrix(0, K, 1L)
@@ -450,7 +451,7 @@ bigIRT_laplace_blockdiag_solver_cpp <- function(ev, x, g, sdat, context, layout,
   item_par <- integer(n); item_par[c(layout$B, layout$A, layout$C, layout$D)] <- 1L
   iv <- function(x) as.integer(if(is.null(x)) integer(0) else x)
   nr <- length(rows)
-  out <- tryCatch(.Call(`_bigIRT_fisher_blocks_cpp_impl`,
+  a <- list(
     as.integer(sdat$id[rows]), as.integer(rc$items), as.matrix(ev$posterior$theta_mode),
     as.matrix(person_pred), bigirt_int_matrix(rc$fixed_ability, nr, K), as.matrix(rc$fixed_ability_value),
     bigirt_int_matrix(rc$A_ref, nr, K), as.matrix(rc$fixed_A_value), as.matrix(rc$A_pred),
@@ -459,12 +460,63 @@ bigIRT_laplace_blockdiag_solver_cpp <- function(ev, x, g, sdat, context, layout,
     as.integer(rc$D_ref), as.numeric(rc$D_fixed_value), as.matrix(rc$D_pred),
     as.matrix(ab), as.numeric(st$invspApars), as.matrix(st$invspAbeta), as.numeric(st$Bpars),
     as.matrix(st$Bbeta), as.numeric(st$logitCpars), as.matrix(st$logitCbeta),
-    as.numeric(st$logitDpars), as.matrix(st$logitDbeta), P0,
+    as.numeric(st$logitDpars), as.matrix(st$logitDbeta), as.matrix(ev$prior_mats$precision),
     iv(layout$A), iv(layout$B), iv(layout$C), iv(layout$D),
     iv(layout$A_beta), iv(layout$B_beta), iv(layout$C_beta), iv(layout$D_beta),
     iv(layout$ability_beta), iv(layout$ability_mean), item_par, as.numeric(ps),
-    as.numeric(Matrix::diag(Pr)) * ps^2, as.integer(context$grain_size %||% 64L)),
-    error = function(e) NULL)
+    as.numeric(prior_diag), as.integer(context$grain_size %||% 64L))
+  ## Literal .Call()s: configure regenerates the native registration by
+  ## scanning the R code for them, so the routine must be named at the call.
+  if(identical(entry, "dense")) .Call(`_bigIRT_fisher_dense_cpp_impl`, a[[1]], a[[2]], a[[3]], a[[4]], a[[5]], a[[6]], a[[7]], a[[8]], a[[9]], a[[10]], a[[11]], a[[12]], a[[13]], a[[14]], a[[15]], a[[16]], a[[17]], a[[18]], a[[19]], a[[20]], a[[21]], a[[22]], a[[23]], a[[24]], a[[25]], a[[26]], a[[27]], a[[28]], a[[29]], a[[30]], a[[31]], a[[32]], a[[33]], a[[34]], a[[35]], a[[36]], a[[37]], a[[38]], a[[39]], a[[40]], a[[41]], a[[42]])
+  else .Call(`_bigIRT_fisher_blocks_cpp_impl`, a[[1]], a[[2]], a[[3]], a[[4]], a[[5]], a[[6]], a[[7]], a[[8]], a[[9]], a[[10]], a[[11]], a[[12]], a[[13]], a[[14]], a[[15]], a[[16]], a[[17]], a[[18]], a[[19]], a[[20]], a[[21]], a[[22]], a[[23]], a[[24]], a[[25]], a[[26]], a[[27]], a[[28]], a[[29]], a[[30]], a[[31]], a[[32]], a[[33]], a[[34]], a[[35]], a[[36]], a[[37]], a[[38]], a[[39]], a[[40]], a[[41]], a[[42]])
+}
+
+## Dense metric, assembled in C++: the full F with its item-item coupling, in
+## one parallel pass over persons, plus the priors and the closed-form
+## correlation block. The R assembly (bigIRT_laplace_fisher_info) stays behind
+## options(bigIRT.dense_impl = "R"), and the tests hold the two equal.
+bigIRT_laplace_fisher_solver_cpp <- function(ev, x, g, sdat, context, layout, gfun, h = 1e-4){
+  n <- length(ev$approx_grad); N <- as.integer(sdat$Nsubs)
+  if(as.numeric(n)^2 > getOption("bigIRT.fisher_max_nnz", 5e7)) return(NULL)
+  ps <- attr(layout, "par_scale"); if(length(ps) != n) ps <- rep(1, n)
+  P0 <- as.matrix(ev$prior_mats$precision)
+  Fm <- tryCatch(bigIRT_fisher_kernel_call("dense", ev, sdat, context,
+    layout, ps, numeric(n)), error = function(e) NULL)
+  if(is.null(Fm)) return(NULL)
+  Fm <- Fm + as.matrix(bigIRT_laplace_prior_curvature(sdat, layout, n, N, P0)) * outer(ps, ps)
+  described <- unique(c(layout$B, layout$B_beta, layout$A, layout$A_beta, layout$C, layout$C_beta,
+    layout$D, layout$D_beta, layout$B_mean, layout$A_mean, layout$C_mean, layout$D_mean,
+    layout$ability_beta, layout$ability_mean))
+  und <- setdiff(seq_len(n), described)
+  if(length(und)){
+    cb <- bigIRT_laplace_use_corr_block(Fm, layout$corr, ev, sdat, context, layout)
+    Fm <- cb$M
+    for(j in setdiff(und, cb$done)){
+      hj <- h * max(1, abs(x[j]))
+      xp <- x; xp[j] <- xp[j] + hj
+      col <- (gfun(xp) - g) / hj
+      Fm[, j] <- col; Fm[j, ] <- col
+    }
+  }
+  Fm <- (Fm + t(Fm)) / 2
+  ch <- NULL; ridge <- 0
+  for(attempt in 1:6){
+    ch <- tryCatch(chol(if(ridge > 0) Fm + diag(ridge, n) else Fm), error = function(e) NULL)
+    if(!is.null(ch)) break
+    ridge <- if(ridge == 0) 1e-8 * max(abs(diag(Fm))) else ridge * 100
+  }
+  if(is.null(ch)) return(NULL)
+  function(v) backsolve(ch, forwardsolve(t(ch), as.numeric(v)))
+}
+
+bigIRT_laplace_blockdiag_solver_cpp <- function(ev, x, g, sdat, context, layout, gfun, h = 1e-4){
+  n <- length(ev$approx_grad); K <- as.integer(sdat$Nscales); N <- as.integer(sdat$Nsubs)
+  rc <- context$row_context; st <- ev$state; rows <- context$train_rows
+  ps <- attr(layout, "par_scale"); if(length(ps) != n) ps <- rep(1, n)
+  P0 <- as.matrix(ev$prior_mats$precision)
+  Pr <- bigIRT_laplace_prior_curvature(sdat, layout, n, N, P0)
+  out <- tryCatch(bigIRT_fisher_kernel_call("blocks", ev, sdat, context,
+    layout, ps, as.numeric(Matrix::diag(Pr)) * ps^2), error = function(e) NULL)
   if(is.null(out)) return(NULL)
   G <- out$G
   described <- unique(c(layout$B, layout$B_beta, layout$A, layout$A_beta, layout$C, layout$C_beta,

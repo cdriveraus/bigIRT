@@ -30,14 +30,17 @@ bigIRT_gh_rule <- function(Q){
 
 ## Nodes per dimension for a fit with K free dimensions. The product rule
 ## costs Q^K likelihood passes per person, so fewer per dimension as K grows.
-bigIRT_agq_default_nodes <- function(K) c(9L, 5L, 3L)[min(max(as.integer(K), 1L), 3L)]
+## Measured against 9^K optima on 2PL and 3PL data with cross loadings
+## (dev/optim/mdim_lowk.R): 3 nodes a dimension left loadings and difficulties
+## up to 1.7 SE off at K = 2 and 3; 5 up to 0.4; 7 within 0.06.
+bigIRT_agq_default_nodes <- function(K) c(9L, 7L, 5L)[min(max(as.integer(K), 1L), 3L)]
 
 ## The rules the quadrature kernel uses, one for each number d = 1..K of free
 ## dimensions a person can have. Each is a node matrix Z (M x d) for a
 ## standard normal weight and its log weights.
 ##
 ## Up to three dimensions: the product Gauss-Hermite rule, `nodes` per
-## dimension (default 9, 5, 3). Beyond that the product rule is out of reach
+## dimension (default 9, 7, 5). Beyond that the product rule is out of reach
 ## (3^9 = 19,683 nodes per person at nine dimensions), and the fully symmetric
 ## and sparse-grid rules that stay polynomial in d have negative weights from
 ## about four dimensions on, which an exponentiated integrand does not

@@ -282,6 +282,29 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     expect_gt(length(bigIRT:::bigIRT_direct_eval_from_fit(f2)$layout$corr), 0L)
   })
 
+  test_that("the C++ dense metric equals the R assembly", {
+    set.seed(72)
+    s2 <- simIRT(Nsubs = 400, Nitems = 24, Nscales = 2, NitemsAnswered = 12, AMean = 1.2, ASD = .3,
+      BSD = 1, logitCMean = -20, logitCSD = 0)
+    f2 <- suppressWarnings(fitIRT(dat = s2$dat, pl = 2, marginalApprox = "laplace", cores = 1,
+      ebayes = FALSE, keepInternals = TRUE, estimateAbilityCorr = TRUE, laplaceOuterIter = 5))
+    f1 <- opt_fit(pl = 3, preds = TRUE, ns = 400, ni = 16, na = 10, estMeans = c("A", "ability"))
+    for(f in list(f1, f2)){
+      d <- bigIRT:::bigIRT_direct_eval_from_fit(f, keep_covariance = TRUE)
+      gfun <- function(p) stop("no differences expected")
+      solve_with <- function(impl){
+        old <- options(bigIRT.dense_impl = impl); on.exit(options(old))
+        bigIRT:::bigIRT_laplace_fisher_solver(d$eval, d$par, -d$eval$approx_grad, d$sdat,
+          d$context, d$layout, gfun = gfun)
+      }
+      mc <- solve_with("cpp"); mr <- solve_with("R")
+      n <- length(d$par)
+      V <- matrix(rnorm(n * 5), n, 5)
+      rel <- max(abs(apply(V, 2, mc) - apply(V, 2, mr))) / max(abs(apply(V, 2, mr)))
+      expect_lt(rel, 1e-8)
+    }
+  })
+
   test_that("the closed-form correlation information matches its direct definition", {
     ## 1/2 sum_i tr(W_i dS_j W_i dS_l), W_i = (Sigma + D_i^-1)^-1, computed the
     ## long way -- explicit inverses and traces -- against the Kronecker

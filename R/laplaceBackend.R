@@ -137,11 +137,11 @@ bigIRT_laplace_direct_block_fg_cpp_impl <- function(id, score, theta_init,
     as.integer(score),
     as.matrix(theta_init),
     as.matrix(person_pred),
-    matrix(as.integer(fixed_ability), nrow = nrow(person_pred), ncol = ncol(theta_init)),
+    bigirt_int_matrix(fixed_ability, nrow(person_pred), ncol(theta_init)),
     as.matrix(fixed_ability_value),
-    matrix(as.integer(A_ref), nrow = nrow(person_pred), ncol = ncol(theta_init)),
+    bigirt_int_matrix(A_ref, nrow(person_pred), ncol(theta_init)),
     as.matrix(A_fixed_value),
-    matrix(as.integer(A_beta_row), nrow = nrow(person_pred), ncol = ncol(theta_init)),
+    bigirt_int_matrix(A_beta_row, nrow(person_pred), ncol(theta_init)),
     as.matrix(A_pred),
     as.integer(B_ref),
     as.numeric(B_fixed_value),
@@ -166,7 +166,7 @@ bigIRT_laplace_direct_block_fg_cpp_impl <- function(id, score, theta_init,
     as.matrix(logitDbeta),
     as.matrix(prior_mean),
     prior_precision,
-    matrix(as.integer(free_mask), nrow = nrow(theta_init), ncol = ncol(theta_init)),
+    bigirt_int_matrix(free_mask, nrow(theta_init), ncol(theta_init)),
     as.numeric(jitter),
     as.integer(max_attempts),
     as.integer(max_iter),
@@ -1062,11 +1062,11 @@ bigIRT_laplace_person_step_block_cpp_impl <- function(id, score, theta_init,
     as.integer(score),
     as.matrix(theta_init),
     as.matrix(person_pred),
-    matrix(as.integer(fixed_ability), nrow = nrow(person_pred), ncol = ncol(theta_init)),
+    bigirt_int_matrix(fixed_ability, nrow(person_pred), ncol(theta_init)),
     as.matrix(fixed_ability_value),
-    matrix(as.integer(A_ref), nrow = nrow(person_pred), ncol = ncol(theta_init)),
+    bigirt_int_matrix(A_ref, nrow(person_pred), ncol(theta_init)),
     as.matrix(A_fixed_value),
-    matrix(as.integer(A_beta_row), nrow = nrow(person_pred), ncol = ncol(theta_init)),
+    bigirt_int_matrix(A_beta_row, nrow(person_pred), ncol(theta_init)),
     as.matrix(A_pred),
     as.integer(B_ref),
     as.numeric(B_fixed_value),
@@ -1091,7 +1091,7 @@ bigIRT_laplace_person_step_block_cpp_impl <- function(id, score, theta_init,
     as.matrix(logitDbeta),
     as.matrix(prior_mean),
     prior_precision,
-    matrix(as.integer(free_mask), nrow = nrow(theta_init), ncol = ncol(theta_init)),
+    bigirt_int_matrix(free_mask, nrow(theta_init), ncol(theta_init)),
     as.numeric(jitter),
     as.integer(max_attempts),
     as.integer(max_iter),
@@ -1168,9 +1168,9 @@ bigIRT_laplace_direct_objective <- function(par, state, sdat, prior_precision,
     ## smooth function whose exact gradient is the Fisher-identity one, which
     ## is what the gradient tests use.
     posterior_q <- if(!is.null(context$agq_centre)) context$agq_centre else bigIRT_laplace_person_step_block_cpp_impl(
-      id = sdat$id[context$train_rows], score = sdat$score[context$train_rows],
+      id = row_context$ids, score = context$score_rows %||% sdat$score[context$train_rows],
       theta_init = theta_init, person_pred = person_pred,
-      fixed_ability = row_context$fixed_ability, fixed_ability_value = row_context$fixed_ability_value,
+      fixed_ability = row_context$fixed_ability_int %||% row_context$fixed_ability, fixed_ability_value = row_context$fixed_ability_value,
       A_ref = row_context$A_ref, A_fixed_value = row_context$fixed_A_value,
       A_beta_row = row_context$A_beta_row, A_pred = row_context$A_pred,
       B_ref = row_context$B_ref, B_fixed_value = row_context$B_fixed_value,
@@ -1188,9 +1188,9 @@ bigIRT_laplace_direct_objective <- function(par, state, sdat, prior_precision,
       grain_size = context$grain_size)
     t_p1 <- wall_time_sec()
     aq <- bigIRT_agq_fg_cpp_impl(
-      id = sdat$id[context$train_rows], score = sdat$score[context$train_rows],
+      id = row_context$ids, score = context$score_rows %||% sdat$score[context$train_rows],
       theta_mode = posterior_q$theta_mode, precision = posterior_q$precision,
-      person_pred = person_pred, fixed_ability = row_context$fixed_ability,
+      person_pred = person_pred, fixed_ability = row_context$fixed_ability_int %||% row_context$fixed_ability,
       fixed_ability_value = row_context$fixed_ability_value,
       A_ref = row_context$A_ref, A_fixed_value = row_context$fixed_A_value,
       A_beta_row = row_context$A_beta_row, A_pred = row_context$A_pred,
@@ -1211,11 +1211,11 @@ bigIRT_laplace_direct_objective <- function(par, state, sdat, prior_precision,
       timings = list(personKernelSec = t_p1 - t_p0, itemKernelSec = t_p2 - t_p1,
         kernelSec = t_p2 - t_p0))
   } else direct_fg <- bigIRT_laplace_direct_block_fg_cpp_impl(
-    id = sdat$id[context$train_rows],
-    score = sdat$score[context$train_rows],
+    id = row_context$ids,
+    score = context$score_rows %||% sdat$score[context$train_rows],
     theta_init = theta_init,
     person_pred = person_pred,
-    fixed_ability = row_context$fixed_ability,
+    fixed_ability = row_context$fixed_ability_int %||% row_context$fixed_ability,
     fixed_ability_value = row_context$fixed_ability_value,
     A_ref = row_context$A_ref,
     A_fixed_value = row_context$fixed_A_value,
@@ -1403,9 +1403,9 @@ bigIRT_laplace_direct_objective <- function(par, state, sdat, prior_precision,
   laplace2_value <- 0; laplace2_skipped <- NA_integer_
   if(isTRUE(context$laplace2) && is.null(agq_rule)){
     l2 <- bigIRT_laplace2_fg_cpp_impl(
-      id = sdat$id[context$train_rows], score = sdat$score[context$train_rows],
+      id = row_context$ids, score = context$score_rows %||% sdat$score[context$train_rows],
       theta_mode = posterior$theta_mode, person_pred = person_pred,
-      fixed_ability = row_context$fixed_ability, fixed_ability_value = row_context$fixed_ability_value,
+      fixed_ability = row_context$fixed_ability_int %||% row_context$fixed_ability, fixed_ability_value = row_context$fixed_ability_value,
       A_ref = row_context$A_ref, A_fixed_value = row_context$fixed_A_value, A_pred = row_context$A_pred,
       B_ref = row_context$B_ref, B_fixed_value = row_context$B_fixed_value, B_pred = row_context$B_pred,
       C_ref = row_context$C_ref, C_fixed_value = row_context$C_fixed_value, C_pred = row_context$C_pred,
@@ -1546,6 +1546,8 @@ bigIRT_laplace_optimize_direct <- function(state, sdat, prior_precision,
   context <- bigIRT_laplace_item_context(sdat, layout = item_layout)
   context$grain_size <- bigIRT_laplace_subject_grain(sdat$Nsubs, cores)
   context$direct_layout <- direct_layout
+  ## Data, not parameters: taken once rather than subset on every evaluation.
+  context$score_rows <- as.integer(sdat$score[context$train_rows])
   context$estimateAbilityCorr <- isTRUE(estimateAbilityCorr)
   context$corr_paramization <- corr_paramization
   state$laplaceCorrParam <- corr_paramization
@@ -1826,6 +1828,7 @@ bigIRT_laplace_optimize_direct <- function(state, sdat, prior_precision,
   ## second fit. The convergence verdict is then the refinement's.
   if(!is.null(refine) && !isTRUE(stochastic)){
     lap_value <- get_eval(fit$par)$value
+    lap_par <- fit$par
     lap_evals <- eval_count
     if(inherits(refine, "bigIRT_agq_rules")) context$agq <- refine else context$laplace2 <- TRUE
     ## Nodes are held where the Laplace posterior puts them and re-centred at
@@ -1882,6 +1885,28 @@ bigIRT_laplace_optimize_direct <- function(state, sdat, prior_precision,
     fit$par <- rf$par
     fit$iter <- rf$iter
     fit$terminate <- rf$terminate
+    ## Guard. A legitimate refinement moves the objective by a few nats (17
+    ## on a 20,000-person 3PL); an approximation the optimiser has learned to
+    ## exploit moves it without bound (a second-order Laplace refinement of a
+    ## two-dimensional 3PL went to 1e13). Past half a nat per person, go back
+    ## to the Laplace optimum rather than report the exploited point.
+    gain_r <- -rf$f - (-e_r$f)
+    if(!is.finite(gain_r) || abs(gain_r) > max(50, 0.5 * as.numeric(sdat$Nsubs))){
+      warning(sprintf(paste0("The %s refinement moved the objective by %.3g nats, which no ",
+        "approximation error of this size can explain; the fit reverts to the Laplace optimum. ",
+        if(identical(fit$refine$approx, "laplace2"))
+          "Second-order Laplace is not reliable with free asymptotes; laplaceRefine = \"agq\" is." else
+          "Refit with more quadrature points (agqNodes, agqPoints), or laplaceRefine = \"none\"."),
+        fit$refine$approx, gain_r), call. = FALSE)
+      context$agq <- NULL; context$laplace2 <- FALSE; context$agq_centre <- NULL
+      cache_par <- NULL; cache_eval <- NULL
+      e_l <- fg_f(lap_par)
+      rl <- bigIRT_laplace_lbfgs(lap_par, fg_f, minv = solver(e_l), maxit = as.integer(niter),
+        gain_tol = tol, refresh = function(e){ m <- solver(e); get_eval(e$x); m },
+        refresh_every = as.integer(getOption("bigIRT.fisher_refresh", 10L)))
+      fit$par <- rl$par; fit$iter <- rl$iter; fit$terminate <- rl$terminate
+      fit$refine$reverted <- TRUE
+    }
   }
   ## The final evaluation is fresh, with the clipping counters reset, so they
   ## describe the fitted point rather than every trial point the line search
