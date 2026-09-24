@@ -91,6 +91,21 @@ res <- rbindlist(lapply(scored, function(i){
   C <- a %*% S %*% t(a); cd <- diag(C)
   out$laplace2 <- lapv + sum(l4 * cd^2) / 8 +
     sum(outer(l3, l3) * (3 * outer(cd, cd) * C + 2 * C^3)) / 24
+  ## Floored variants: inside the correction only, each row's curvature is
+  ## max(w, kappa w_F) (smoothly), w_F the Fisher information in eta, so S
+  ## shrinks as loadings grow whatever the observed curvature does.
+  pr <- pmin(pmax(cc[r] + (dd[r] - cc[r]) * plogis(e0), 1e-12), 1 - 1e-12)
+  sr <- (dd[r] - cc[r]) * plogis(e0) * (1 - plogis(e0))
+  wF <- sr^2 / pmax(pr * (1 - pr), 1e-12)
+  wO <- -dl(e0, y[r], cc[r], dd[r], 2)
+  for(kap in c(0.25, 0.5, 1)){
+    fl <- kap * wF
+    w <- as.numeric(pmax(as.numeric(wO), as.numeric(fl)))
+    Hc <- P0 + crossprod(a, sweep(a, 1, w, "*")); Sc <- solve(Hc)
+    Cc <- a %*% Sc %*% t(a); cdc <- diag(Cc)
+    out[[sprintf("l2floor%.2g", kap)]] <- lapv + sum(l4 * cdc^2) / 8 +
+      sum(outer(l3, l3) * (3 * outer(cdc, cdc) * Cc + 2 * Cc^3)) / 24
+  }
   as.data.table(c(list(i = i, ref = ref[i]), out))
 }))
 meth <- setdiff(names(res), c("i", "ref"))

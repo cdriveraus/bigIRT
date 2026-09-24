@@ -1,6 +1,6 @@
 # Wall-clock split of one package fit: setup before the optimiser, objective
 # evaluations (and their kernels), metric builds, and what is left.
-#   Rscript prof_split.R <regime> <seed> <cores>
+#   Rscript prof_split.R <regime> <seed> <cores> [laplaceRefine]
 args <- commandArgs(TRUE); regime <- args[1]; seed <- as.integer(args[2]); cores <- as.integer(args[3])
 lib <- Sys.getenv("BIGIRT_LIB"); if(nzchar(lib)) .libPaths(c(lib, .libPaths()))
 suppressPackageStartupMessages({library(bigIRT); library(data.table)})
@@ -21,6 +21,7 @@ wrap("bigIRT_laplace_metric_solver", "metric")
 wrap("bigIRT_laplace_optimize_direct", "optimise")
 dat <- bench_data(regime, seed)
 fa <- modifyList(bench_fit_args(regime), list(cores = cores))
+if(length(args) >= 4 && nzchar(args[4])) fa$laplaceRefine <- args[4]
 t0 <- proc.time()[["elapsed"]]
 fit <- suppressWarnings(do.call(fitIRT, c(list(dat = dat), fa)))
 tot <- proc.time()[["elapsed"]] - t0
