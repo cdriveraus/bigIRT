@@ -47,7 +47,7 @@ fitIRT(
   ebayesIter = 5L,
   ebayesMethod = c("laplace", "moment"),
   ebayesMinSD = 0.05,
-  ebayesCoarse = 100,
+  ebayesCoarse = 1000,
   estMeans = c("A", "B", "C", "D"),
   priors = TRUE,
   marginalApprox = c("none", "laplace", "laplace_fast", "laplace_direct"),
@@ -55,7 +55,7 @@ fitIRT(
   laplaceCorrParam = c("stan_corsqrt", "normalized_chol"),
   keepInternals = FALSE,
   laplaceOuterIter = 500,
-  laplaceTol = 0.001,
+  laplaceTol = 1e-04,
   laplaceTolScale = c("relative", "per_obs"),
   laplaceGradTol = 1e-04,
   laplacePolish = 8L,
@@ -213,7 +213,9 @@ the floor decides how hard those blocks pool. It does not apply to
 empirical-Bayes refits on the Laplace backend. Those rounds exist only to
 produce estimates to update the hyperparameters from, so they are run at
 \code{laplaceTol * ebayesCoarse}; the final fit always uses
-\code{laplaceTol}. Default is 100.}
+\code{laplaceTol}. Default is 1000, so that with the default
+\code{laplaceTol} the rounds stop at 0.1 nats as before (the defaults
+were 100 and 1e-3 until September 2026).}
 
 \item{estMeans}{Character vector. Which means to estimate, from 'ability',
 'A', 'B', 'C', 'D'. Default is \code{c('A','B','C','D')}: the item means
@@ -304,7 +306,11 @@ the primary convergence criterion. Default is 500.}
 \code{marginalApprox="laplace"}. Under \code{laplaceOptimizer = "fisher"}
 it is the predicted remaining gain in log-likelihood, in nats, at which
 the optimiser stops; under \code{"mize"} it is mize's absolute tolerance
-on the change in objective and on the gradient norm. Default is 1e-3.}
+on the change in objective and on the gradient norm. Default is 1e-4
+(1e-3 until September 2026): the predicted gain is itself an estimate,
+and at 1e-3 the block-diagonal metric ended 1.1e-3 to 1.3e-3 nats short of
+the optimum in 6 of 18 large fits; at 1e-4, none of 18 ended more than
+2e-4 short, for 3 to 5 per cent more time.}
 
 \item{laplaceTolScale}{Character. What the objective-change tolerances in
 \code{laplaceTol} are measured against on the Laplace path.

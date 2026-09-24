@@ -1429,7 +1429,9 @@ bigIRT_validate_fit_inputs <- function(dat, score, id, item, scale, pl, controls
 #'   empirical-Bayes refits on the Laplace backend. Those rounds exist only to
 #'   produce estimates to update the hyperparameters from, so they are run at
 #'   \code{laplaceTol * ebayesCoarse}; the final fit always uses
-#'   \code{laplaceTol}. Default is 100.
+#'   \code{laplaceTol}. Default is 1000, so that with the default
+#'   \code{laplaceTol} the rounds stop at 0.1 nats as before (the defaults
+#'   were 100 and 1e-3 until September 2026).
 #' @param ebayesMinSD Numeric. Floor on a prior SD estimated by
 #'   \code{ebayesMethod = "moment"}. That rule subtracts a sampling-noise term
 #'   and reaches zero whenever the data cannot support item-level variation, so
@@ -1469,7 +1471,11 @@ bigIRT_validate_fit_inputs <- function(dat, score, id, item, scale, pl, controls
 #'   \code{marginalApprox="laplace"}. Under \code{laplaceOptimizer = "fisher"}
 #'   it is the predicted remaining gain in log-likelihood, in nats, at which
 #'   the optimiser stops; under \code{"mize"} it is mize's absolute tolerance
-#'   on the change in objective and on the gradient norm. Default is 1e-3.
+#'   on the change in objective and on the gradient norm. Default is 1e-4
+#'   (1e-3 until September 2026): the predicted gain is itself an estimate,
+#'   and at 1e-3 the block-diagonal metric ended 1.1e-3 to 1.3e-3 nats short of
+#'   the optimum in 6 of 18 large fits; at 1e-4, none of 18 ended more than
+#'   2e-4 short, for 3 to 5 per cent more time.
 #' @param laplaceTolScale Character. What the objective-change tolerances in
 #'   \code{laplaceTol} are measured against on the Laplace path.
 #'   \code{\"relative\"} (the default, and the historical behaviour) divides
@@ -1639,12 +1645,12 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   AMeanSD=1,BMeanSD=BSD,logitCMeanSD=logitCSD,logitDMeanSD=logitDSD,
   AbilityMeanSD=array(1,dim=c(length(unique(dat[[scale]])))),
   iter=2000,cores=6,carefulfit=FALSE,
-  ebayes=TRUE,ebayesmultiplier=2,ebayesFromFixed=FALSE,ebayesIter=5L,ebayesMethod=c("laplace","moment"),ebayesMinSD=0.05,ebayesCoarse=100,
+  ebayes=TRUE,ebayesmultiplier=2,ebayesFromFixed=FALSE,ebayesIter=5L,ebayesMethod=c("laplace","moment"),ebayesMinSD=0.05,ebayesCoarse=1000,
   estMeans=c('A','B','C','D'),priors=TRUE,
   marginalApprox=c("none","laplace","laplace_fast","laplace_direct"),
   estimateAbilityCorr=FALSE,
   laplaceCorrParam=c("stan_corsqrt","normalized_chol"),
-  keepInternals=FALSE,laplaceOuterIter=500,laplaceTol=1e-3,laplaceTolScale=c("relative","per_obs"),laplaceGradTol=1e-4,laplacePolish=8L,laplacePersonTol=1e-6,laplaceOptimizer=c("fisher","mize"),
+  keepInternals=FALSE,laplaceOuterIter=500,laplaceTol=1e-4,laplaceTolScale=c("relative","per_obs"),laplaceGradTol=1e-4,laplacePolish=8L,laplacePersonTol=1e-6,laplaceOptimizer=c("fisher","mize"),
   laplaceKeepCovariance=FALSE,laplaceDiagnostics=FALSE,laplacePlot=FALSE,laplacePlotEvery=1L,
   laplaceJitter=1e-6,noptimsteps=10,
   normalise=FALSE,normaliseScale=1,normaliseMean=0,
