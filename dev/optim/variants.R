@@ -73,6 +73,11 @@ VARIANTS <- list(
   ## against the new build), with and without empirical Bayes.
   pkg_default = list(fit = list()),
   pkg_default_eb = list(fit = list(ebayes = TRUE)),
+  pkg_stage = list(fit = list(), opts = list(bigIRT.laplace_stage_asymptotes = TRUE)),
+  ## Threaded kernel: the evaluations get faster and the metric build (R,
+  ## single-threaded) takes a larger share.
+  pkg_default_c8 = list(fit = list(cores = 8L)),
+  pkg_mize_c8 = list(fit = list(laplaceOptimizer = "mize", cores = 8L)),
   pkg_mize_eb_new = list(fit = list(laplaceOptimizer = "mize", ebayes = TRUE)),
   sm_add100 = list(proto = list(metric = "sm_add", m = 100L, stop = "gain", gain_tol = 1e-3,
     polish_steps = 0L), fit = list(laplacePersonTol = 1e-6)),
