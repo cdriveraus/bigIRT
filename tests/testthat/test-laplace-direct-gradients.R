@@ -66,6 +66,23 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     expect_lt(slot_relerr(d, d$layout$ability_beta), 1e-6)
   })
 
+  test_that("direct Laplace ability_beta gradient is right with correlations estimated", {
+    ## Together, not separately: the beta adjoint used the prior precision at
+    ## the starting correlation rather than the current one, which only shows
+    ## when both blocks are live and rho is away from its start.
+    set.seed(4005)
+    Np <- 400
+    sim <- simIRT(Nsubs = Np, Nitems = 40, Nscales = 2, NitemsAnswered = 20,
+      AMean = 1, ASD = .3, BMean = 0, BSD = 1, AbilityMean = 0, AbilitySD = 1,
+      logitCMean = -20, logitCSD = 0, logitDMean = 20, logitDSD = 0,
+      personPreds = matrix(stats::rnorm(Np * 2), Np, 2),
+      AbilityPredEffects = matrix(c(.5, -.3, .4, -.2), 2, 2))
+    d <- direct_evaluator(sim, list(personPreds = c("V1", "V2"), betaScale = 2), ecorr = TRUE)
+    expect_gt(length(d$layout$corr), 0L)
+    d$par[d$layout$corr] <- 0.5
+    expect_lt(slot_relerr(d, d$layout$ability_beta), 1e-6)
+  })
+
   test_that("direct Laplace correlation gradient matches finite differences", {
     set.seed(4002)
     sim <- simIRT(Nsubs = 500, Nitems = 45, Nscales = 3, NitemsAnswered = 24,

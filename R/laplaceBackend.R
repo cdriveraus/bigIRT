@@ -1354,7 +1354,14 @@ bigIRT_laplace_direct_objective <- function(par, state, sdat, prior_precision,
         posterior = posterior,
         row_context = row_context,
         layout = context$direct_layout,
-        prior_precision = prior_precision,
+        ## The prior precision AT THE CURRENT CORRELATION. This used to pass
+        ## the function's `prior_precision` argument -- the precision at the
+        ## correlation the fit started from -- so with correlations estimated
+        ## the adjoint term Q Sigma g used a stale Q, and the gradient missed
+        ## by 1.4 to 4 per cent at rho = 0.5 against central differences.
+        ## Each of the two blocks had its own test and neither ran with the
+        ## other (test-laplace-direct-gradients.R now does).
+        prior_precision = prior_mats$precision_array,
         person_terms = person_terms,
         row_effective = row_effective,
         fused_beta = if(!is.null(fused)) fused$beta else NULL
