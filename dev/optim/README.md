@@ -89,7 +89,7 @@ accurate as second-order Laplace at the Laplace optimum and stays accurate at
 the points where the others fail (the 256-point QMC runaway, the reference
 optimum 7 SE away): K = 5 3PL rmse 0.004-0.007 against laplace2's 0.009-0.013
 (max 0.098). QMC with the second-order Taylor polynomial as a control variate
-(candidate 2 below) cut the error at the Laplace optimum but not elsewhere,
+(below) cut the error at the Laplace optimum but not elsewhere,
 and was not built.
 
 Still open: the 4PL residual (-0.39 / 1.95 at K = 5, -0.19 / 1.02 at K = 9
@@ -117,7 +117,6 @@ seed per cell.
 - **Additive 1-D corrections** (cut-HDMR, `add5_chol` in `mdim_rules.R`):
   bounded, but remove only ~70% of the per-person error at K = 9.
 - **Mixture decomposition of the 3PL**: exact for one response, 2^k beyond.
-
 - **QMC with a control variate** (the second-order Taylor polynomial, whose
   Gaussian expectation is the laplace2 correction exactly; `mdim_pairs.R`):
   per-person error at the Laplace optimum 0.0005 against plain QMC's 0.003,
