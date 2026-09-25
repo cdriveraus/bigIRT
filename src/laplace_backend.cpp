@@ -2383,7 +2383,17 @@ extern "C" SEXP _bigIRT_laplace_person_step_block_cpp_impl(
             chol_jitter *= 10.0;
           }
         }
-        if (!success) Rcpp::stop("Cholesky failed while finalizing person precision.");
+        // Rcpp::stop here would longjmp out of a worker thread, which is
+        // undefined behaviour (see the comment above the sub-block guard in
+        // this same worker). Record it and fall back to an identity/jitter
+        // precision, as the equivalent finalisation failure does elsewhere,
+        // so this subject's output slots stay well-defined; the caller raises
+        // once every subject has been processed and the workers have joined.
+        if (!success) {
+          status_code[subj] = 5;
+          prec = MatrixXd::Identity(K, K) / jitter;
+          llt_full.compute(prec);
+        }
 
         MatrixXd L = llt_full.matrixL();
         double logdet = 0.0;
@@ -2423,6 +2433,20 @@ extern "C" SEXP _bigIRT_laplace_person_step_block_cpp_impl(
   // in predictor-bearing fits. The inputs are now owned copies (as in the item
   // kernel), and the outputs are written per subject, disjointly.
   RcppParallel::parallelFor(static_cast<std::size_t>(0), static_cast<std::size_t>(Nsubs), worker, grain_size);
+
+  // Raise here, on the main thread, rather than inside the worker (see the
+  // comment at the status_code[subj] = 5 assignment above): every subject has
+  // now been processed and the workers have joined, so this is safe.
+  {
+    int n_fatal = 0, first_fatal = -1;
+    for (int i = 0; i < Nsubs; ++i) {
+      if (status_code[i] == 5) { ++n_fatal; if (first_fatal < 0) first_fatal = i; }
+    }
+    if (n_fatal > 0) {
+      Rcpp::stop("Cholesky failed while finalizing person precision for %d of %d "
+        "subject(s) (first: subject %d).", n_fatal, Nsubs, first_fatal + 1);
+    }
+  }
 
   if (keep_covariance) {
     return Rcpp::List::create(
