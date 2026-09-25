@@ -457,12 +457,16 @@ vcov.bigIRT_fit <- function(object, what = c("item", "covariate", "person"), cor
 #'   decrement and the worst-parameter measure.
 #'
 #' @return An object of class `bigIRT_convergence`, carrying `blocks`,
-#'   `newton_decrement`, `objective_remaining` and `worst_parameter_se_units`.
+#'   `newton_decrement`, `objective_remaining`, `worst_parameter_se_units` and
+#'   the fit's `certificate`.
 #'
 #' @section Note:
 #' The decrement uses the block-diagonal item curvature, the same model the
 #' Newton polish steps in, so it is self-certifying. Compare decrements within
-#' one algorithm, and compare algorithms by the objective.
+#' one algorithm, and compare algorithms by the objective. The certificate a
+#' Laplace fit carries (`fitIRT(laplaceCertify = )`) is computed on the exact
+#' Hessian of the fitted objective instead; it is returned as `certificate`,
+#' and it is the verdict `converged` follows.
 #'
 #' @export
 checkConvergence <- function(fit, cores = 1L, se = TRUE){
@@ -515,6 +519,7 @@ checkConvergence <- function(fit, cores = 1L, se = TRUE){
     objective_remaining = if(is.finite(newton)) newton / 2 else NA_real_,
     worst_parameter_se_units = worst,
     worst_parameter = worst_at,
+    certificate = st$certificate,
     n_parameters = length(g))
   class(out) <- "bigIRT_convergence"
   out
@@ -526,6 +531,7 @@ print.bigIRT_convergence <- function(x, ...){
     if(isTRUE(x$converged)) "converged" else "NOT converged", x$reason %||% "unknown"))
   cat(sprintf("Scaled total gradient: %.3e over %d parameters\n",
     x$scaled_gradient, x$n_parameters))
+  if(!is.null(x$certificate)) cat(bigIRT_certificate_line(x$certificate), "\n", sep = "")
   if(is.finite(x$newton_decrement))
     cat(sprintf("Newton decrement: %.3e  (objective still available: %.3e)\n",
       x$newton_decrement, x$objective_remaining))

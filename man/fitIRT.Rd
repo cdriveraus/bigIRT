@@ -64,6 +64,7 @@ fitIRT(
   laplaceRefine = c("auto", "agq", "laplace2", "none"),
   agqNodes = NULL,
   agqPoints = NULL,
+  laplaceCertify = 60,
   laplaceKeepCovariance = FALSE,
   laplaceDiagnostics = FALSE,
   laplacePlot = FALSE,
@@ -417,6 +418,26 @@ uses this many quasi-Monte Carlo points per person instead of the
 pairwise expansion, in antithetic pairs, as importance sampling through
 the Laplace Gaussian. Held fixed during the fit they can be exploited
 unless there are many thousands. Default \code{NULL}.}
+
+\item{laplaceCertify}{Numeric. Seconds the convergence certificate may
+take on the Laplace path. After the final pass the exact Hessian of the
+objective the fit ended on -- Laplace, or the refined marginal -- is
+taken by central differences of the analytic gradient, and the fit is
+certified when the predicted gain \eqn{\frac{1}{2} g' H^{-1} g} is below
+ten times \code{laplaceTol} nats, no direction has negative curvature,
+and stepping along the directions with no curvature gains nothing. A
+discrimination, asymptote or latent correlation whose transform has gone
+flat is pulled back towards its live range instead, and a fit that gains
+from that is not a maximum. The optimiser's own stopping rule is a
+limited-memory estimate of the same quantity and cannot see a flat
+transform, where the gradient and the curvature vanish together.
+\code{converged} then follows the certificate, and
+\code{laplaceStatus$certificate} holds it. The curvature costs two
+gradient evaluations per free parameter, so one evaluation is timed and
+the curvature is skipped, and says so, when the projection exceeds this
+budget; the flat-transform check runs regardless. \code{0} keeps only
+that check, \code{Inf} or \code{TRUE} insists on the curvature, and
+\code{FALSE} turns the certificate off. Default 60.}
 
 \item{laplaceKeepCovariance}{Logical. Whether to keep full person covariance
 matrices on the Laplace path. Covariances are otherwise retained only when

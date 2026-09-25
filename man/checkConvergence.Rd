@@ -16,7 +16,8 @@ decrement and the worst-parameter measure.}
 }
 \value{
 An object of class \code{bigIRT_convergence}, carrying \code{blocks},
-\code{newton_decrement}, \code{objective_remaining} and \code{worst_parameter_se_units}.
+\code{newton_decrement}, \code{objective_remaining}, \code{worst_parameter_se_units} and
+the fit's \code{certificate}.
 }
 \description{
 A single scaled gradient norm cannot say which block failed to settle, it
@@ -29,6 +30,9 @@ Newton decrement, which estimates how much objective is still available.
 
 The decrement uses the block-diagonal item curvature, the same model the
 Newton polish steps in, so it is self-certifying. Compare decrements within
-one algorithm, and compare algorithms by the objective.
+one algorithm, and compare algorithms by the objective. The certificate a
+Laplace fit carries (\code{fitIRT(laplaceCertify = )}) is computed on the exact
+Hessian of the fitted objective instead; it is returned as \code{certificate},
+and it is the verdict \code{converged} follows.
 }
 
