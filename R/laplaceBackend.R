@@ -573,21 +573,6 @@ bigIRT_laplace_row_effective <- function(state, sdat, thetaBase = state$AbilityB
   out
 }
 
-bigIRT_laplace_fixed_row_ability <- function(state, sdat, thetaBase = state$AbilityBase,
-  rows = seq_len(sdat$Nobs), context = NULL){
-  context <- if(is.null(context)) bigIRT_laplace_row_context(sdat, rows = rows) else context
-  nrows <- length(context$rows)
-  K <- sdat$Nscales
-  ability_offset <- if(sdat$NpersonPreds > 0 && length(state$Abilitybeta)) {
-    context$person_pred %*% t(state$Abilitybeta)
-  } else {
-    matrix(0, nrow = nrows, ncol = K)
-  }
-  row_ability <- thetaBase[context$ids,, drop = FALSE] + ability_offset
-  row_ability[context$fixed_ability] <- context$fixed_ability_value[context$fixed_ability]
-  row_ability
-}
-
 ## How many parameters a layout covers. The layouts are built once per fit and
 ## then packed and unpacked on every iteration, and max(unlist(layout)) rebuilds
 ## an index vector the size of the whole parameter set each time it is asked.
