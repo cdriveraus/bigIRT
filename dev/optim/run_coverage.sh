@@ -15,7 +15,9 @@ export BIGIRT_LIB=${BIGIRT_LIB:?set BIGIRT_LIB to the library under test}
 # One BLAS/OpenMP thread per process, so parallel cells do not contend.
 export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1
 echo $$ > "$out/GRID_PID"
-grep -v '^#' "$cells" | grep -v '^$' | xargs -P "$par" -L 1 bash -c \
+# A cell file from a Windows checkout has CRLF endings, and a carriage return
+# left on the last field reaches the script as part of the arm's name.
+tr -d '\r' < "$cells" | grep -v '^#' | grep -v '^$' | xargs -P "$par" -L 1 bash -c \
   'f='"$out"'/$(printf "%s_%s_%03d" "$0" "$2" "$1"); [ -f "$f.rds" ] && exit 0;
    Rscript coverage_cell.R "$0" "$1" "$2" '"$out"' > "$f.log" 2>&1; tail -n 1 "$f.log"'
 date > "$out/GRID_DONE"
