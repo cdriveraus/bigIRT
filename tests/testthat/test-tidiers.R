@@ -59,7 +59,11 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     ii <- itemInformation(f, method = "profile")
     if("C" %in% ii$active){
       est <- as.numeric(as.data.frame(f$itemPars)$C)
-      expect_equal(sort(cc$std.error), sort(ii$se[, "C"] * est * (1 - est)),
+      ## C = logistic(z)/2 (R/fitIRT.R's cfunc), so dC/dz = C(1 - 2C), not the
+      ## plain-logistic C(1 - C): verified against finite differences of
+      ## cfunc() at bigIRT_dc_dx()'s own definition (R/inference.R). The two
+      ## formulas differ by (1-C)/(1-2C), about 12% for the fitted C here.
+      expect_equal(sort(cc$std.error), sort(ii$se[, "C"] * bigIRT:::bigIRT_dc_dx(est)),
         tolerance = 1e-8)
     }
   })
