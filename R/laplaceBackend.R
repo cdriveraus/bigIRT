@@ -1190,7 +1190,9 @@ bigIRT_laplace_direct_objective <- function(par, state, sdat, prior_precision,
       logitCbeta = curState$logitCbeta, logitDpars = curState$logitDpars, logitDbeta = curState$logitDbeta,
       prior_mean = prior_mean, prior_precision = prior_mats$precision_array,
       free_mask = 1L - sdat$fixedAbilityLogical, rule = agq_rule,
-      want_person = isTRUE(context$agq_want_person), grain_size = context$grain_size)
+      want_person = isTRUE(context$agq_want_person), grain_size = context$grain_size,
+      ## The certificate's item blocks (R/certify.R), when it asks.
+      block_items = if(isTRUE(context$agq_blocks)) row_context$items else integer(0))
     t_p2 <- wall_time_sec()
     direct_fg <- list(value = aq$value, posterior = posterior_q, item_fg = aq,
       timings = list(personKernelSec = t_p1 - t_p0, itemKernelSec = t_p2 - t_p1,
@@ -1523,7 +1525,8 @@ bigIRT_laplace_optimize_direct <- function(state, sdat, prior_precision,
   corr_paramization = c("normalized_chol", "stan_corsqrt"),
   collect_history = FALSE, plot_callback = NULL, plot_every = 1L,
   verbose = 0L, trace_fn = NULL, stochastic = FALSE, polish_steps = NA_integer_,
-  polish_tol = 1e-8, optimizer = c("fisher", "mize"), refine = NULL){
+  polish_tol = 1e-8, optimizer = c("fisher", "mize"), refine = NULL,
+  certify = NULL){
   corr_paramization <- match.arg(corr_paramization)
   optimizer <- match.arg(optimizer)
   direct_layout <- bigIRT_laplace_direct_layout(sdat, estimateAbilityCorr = estimateAbilityCorr)
@@ -1926,6 +1929,18 @@ bigIRT_laplace_optimize_direct <- function(state, sdat, prior_precision,
   fit$target_evals <- eval_count
   fit$logLik <- final$value
   fit$timings <- final$timings
+  ## The curvature certificate (R/certify.R), on the objective the fit ended
+  ## on and at the point it ended at. `certify` is list(budget, tolerance), or
+  ## NULL on the empirical-Bayes rounds, whose estimates are thrown away. After
+  ## the fitted point's clip count is taken and outside `get_eval`, so neither
+  ## that count nor the optimiser's warm start sees its evaluations.
+  if(!is.null(certify) && !isTRUE(stochastic))
+    fit$certificate <- tryCatch(bigIRT_certify(final = final, par = fit$par,
+      context = context, state = state, sdat = sdat, prior_precision = prior_precision,
+      layout = direct_layout, jitter = jitter, route = certify$route %||% "fast",
+      budget = certify$budget %||% Inf, tolerance = certify$tolerance),
+      error = function(e) list(status = "unknown", certified = FALSE, converged = NA,
+        reason = paste0("the certificate could not be computed: ", conditionMessage(e))))
   if(length(history)){
     history[[length(history)]][["optimizerIter"]] <- if(!is.null(fit$iter)) fit$iter else NA_integer_
     history[[length(history)]][["optimizerTerminate"]] <- if(!is.null(fit$terminate$what)) as.character(fit$terminate$what) else NA_character_

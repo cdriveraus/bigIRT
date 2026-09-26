@@ -8,7 +8,8 @@ tidyIRT(
   x,
   conf.int = FALSE,
   conf.level = 0.95,
-  method = "profile",
+  method = if (is.null(x$laplaceStatus$certificate$covariance$items)) "profile" else
+    "exact",
   cores = 1L,
   ...
 )
@@ -20,7 +21,9 @@ tidyIRT(
 
 \item{conf.level}{Numeric. Interval coverage.}
 
-\item{method}{Character. Passed to \code{\link[=itemInformation]{itemInformation()}}.}
+\item{method}{Character. Passed to \code{\link[=itemInformation]{itemInformation()}}. By default
+\code{"exact"} when the fit's convergence certificate kept the exact
+covariance, which costs nothing, and \code{"profile"} otherwise.}
 
 \item{cores}{Integer. Cores for the information calculation.}
 

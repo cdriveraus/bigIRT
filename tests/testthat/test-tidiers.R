@@ -38,7 +38,10 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
 
   test_that("standard errors are carried onto the reported parameter scale", {
     f <- fit_t()
-    ti <- tidyIRT(f, conf.int = TRUE)
+    ## The delta method is under test, and it holds for whichever standard
+    ## error it is handed, so both sides name the same method; which one
+    ## tidyIRT defaults to is test-certify.R's question.
+    ti <- tidyIRT(f, conf.int = TRUE, method = "profile")
     ii <- itemInformation(f, method = "profile")
     a <- ti[order(ti$item), ]
     a <- a[a$term == "A", ]
@@ -53,7 +56,7 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
 
   test_that("asymptote errors are transformed and intervals stay in the unit interval", {
     f <- fit_t(pl = 3L)
-    ti <- tidyIRT(f, conf.int = TRUE)
+    ti <- tidyIRT(f, conf.int = TRUE, method = "profile")
     cc <- ti[ti$term == "C", ]
     expect_true(all(cc$conf.low >= 0 & cc$conf.high <= 1))
     ii <- itemInformation(f, method = "profile")
@@ -98,7 +101,7 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
       pl = 4L, marginalApprox = "laplace", cores = 1L, verbose = 0L, plot = FALSE,
       priors = TRUE, ebayes = FALSE, normalise = FALSE, dropPerfectScores = FALSE,
       keepInternals = TRUE, laplaceKeepCovariance = TRUE)
-    ti4 <- tidyIRT(fit4, conf.int = TRUE)
+    ti4 <- tidyIRT(fit4, conf.int = TRUE, method = "profile")
     ii4 <- itemInformation(fit4, method = "profile")
     ip4 <- as.data.frame(fit4$itemPars)
     for(b in intersect(c("C", "D"), ii4$active)){

@@ -1,0 +1,7 @@
+# cert_cost.R scale cells: persons items pl (25 items a person)
+10000 400 3
+40000 400 3
+10000 1600 3
+40000 1600 3
+100000 4000 3
+40000 1600 2

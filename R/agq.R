@@ -197,7 +197,8 @@ bigIRT_agq_fg_cpp_impl <- function(id, score, theta_mode, precision,
   C_ref, C_fixed_value, C_beta_row, C_pred,
   D_ref, D_fixed_value, D_beta_row, D_pred,
   Abilitybeta, invspApars, invspAbeta, Bpars, Bbeta, logitCpars, logitCbeta, logitDpars, logitDbeta,
-  prior_mean, prior_precision, free_mask, rule, want_person = FALSE, grain_size = 64L){
+  prior_mean, prior_precision, free_mask, rule, want_person = FALSE, grain_size = 64L,
+  block_items = integer(0)){
   nr <- length(id); K <- ncol(theta_mode)
   .Call(`_bigIRT_agq_fg_cpp_impl`,
     as.integer(id), as.integer(score), as.matrix(theta_mode), as.numeric(precision),
@@ -218,7 +219,10 @@ bigIRT_agq_fg_cpp_impl <- function(id, score, theta_mode, precision,
     if(any(!vapply(rule$groups, is.null, TRUE))) lapply(rule$groups, function(g)
       if(is.null(g)) NULL else matrix(as.integer(g), ncol = 2L)) else NULL,
     if(any(!vapply(rule$groups, is.null, TRUE))) lapply(rule$coefs, function(g) if(is.null(g)) NULL else as.numeric(g)) else NULL,
-    as.logical(want_person)[1], as.integer(grain_size))
+    as.logical(want_person)[1], as.integer(grain_size),
+    ## The item of each row, to have the item blocks of the Hessian back
+    ## (R/certify.R); empty for none.
+    as.integer(block_items))
 }
 
 ## Second-order Laplace (src/laplace2_backend.cpp): the leading correction to

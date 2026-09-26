@@ -12,7 +12,7 @@ Rcpp::Rostream<false>& Rcpp::Rcerr = Rcpp::Rcpp_cerr_get();
 #endif
 
 
-RcppExport SEXP _bigIRT_agq_fg_cpp_impl(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
+RcppExport SEXP _bigIRT_agq_fg_cpp_impl(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
 RcppExport SEXP _bigIRT_fisher_blocks_cpp_impl(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
 RcppExport SEXP _bigIRT_fisher_dense_cpp_impl(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
 RcppExport SEXP _bigIRT_item_info_accum_cpp_impl(SEXP, SEXP, SEXP, SEXP);
@@ -37,7 +37,7 @@ RcppExport SEXP _rcpp_module_boot_stan_fit4irt_mod();
 
 static const R_CallMethodDef CallEntries[] = {
     {"_rcpp_module_boot_stan_fit4irt_mod", (DL_FUNC) &_rcpp_module_boot_stan_fit4irt_mod, 0},
-    {"_bigIRT_agq_fg_cpp_impl",                       (DL_FUNC) &_bigIRT_agq_fg_cpp_impl,                       41},
+    {"_bigIRT_agq_fg_cpp_impl",                       (DL_FUNC) &_bigIRT_agq_fg_cpp_impl,                       42},
     {"_bigIRT_fisher_blocks_cpp_impl",                (DL_FUNC) &_bigIRT_fisher_blocks_cpp_impl,                42},
     {"_bigIRT_fisher_dense_cpp_impl",                 (DL_FUNC) &_bigIRT_fisher_dense_cpp_impl,                 42},
     {"_bigIRT_item_info_accum_cpp_impl",              (DL_FUNC) &_bigIRT_item_info_accum_cpp_impl,               4},

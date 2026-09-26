@@ -64,6 +64,7 @@ fitIRT(
   laplaceRefine = c("auto", "agq", "laplace2", "none"),
   agqNodes = NULL,
   agqPoints = NULL,
+  laplaceCertify = TRUE,
   laplaceKeepCovariance = FALSE,
   laplaceDiagnostics = FALSE,
   laplacePlot = FALSE,
@@ -315,20 +316,21 @@ and at 1e-3 the block-diagonal metric ended 1.1e-3 to 1.3e-3 nats short of
 the optimum in 6 of 18 large fits; at 1e-4, none of 18 ended more than
 2e-4 short, for 3 to 5 per cent more time.}
 
-\item{laplaceTolScale}{Character. What the objective-change tolerances in
-\code{laplaceTol} are measured against on the Laplace path.
+\item{laplaceTolScale}{Character. What the scaled gradient norm compared
+against \code{laplaceGradTol} is measured against on the Laplace path
+(\code{laplaceTol} itself is the separate, unscaled predicted-gain
+criterion under \code{laplaceOptimizer = "fisher"}).
 \code{\"relative\"} (the default, and the historical behaviour) divides
-the change by the size of the objective. Because the objective grows
-with the number of responses, the same nominal tolerance becomes laxer
-as data grow: on several million responses a relative change of 1e-3 is
-an absolute change in the thousands, and a fit can stop while it is
-still moving. \code{\"per_obs\"} divides by the number of responses
-instead, so the quantity thresholded is the change in mean
-log-likelihood per response and does not depend on data size. Prefer it
-when comparing fits across designs of very different sizes, but note
-that it is far stricter at large N: a tolerance chosen for
-\code{\"relative\"} should not be carried over unchanged. The scale used
-is recorded in \code{laplaceStatus$tolerance_scale}.}
+the raw gradient norm by the size of the objective. Because the
+objective grows with the number of responses, the same nominal
+tolerance becomes laxer as data grow: on several million responses a
+relative change of 1e-3 is an absolute change in the thousands, and a
+fit can stop while it is still moving. \code{\"per_obs\"} divides by the
+number of responses instead, so the quantity thresholded is the
+gradient per response and does not depend on data size. Prefer it when
+comparing fits across designs of very different sizes, but note that it
+is far stricter at large N: a tolerance chosen for \code{\"relative\"}
+should not be carried over unchanged.}
 
 \item{laplaceGradTol}{Numeric. Tolerance for the item-block gradient,
 measured relative to the objective rather than as a raw norm: the reported
@@ -421,6 +423,48 @@ uses this many quasi-Monte Carlo points per person instead of the
 pairwise expansion, in antithetic pairs, as importance sampling through
 the Laplace Gaussian. Held fixed during the fit they can be exploited
 unless there are many thousands. Default \code{NULL}.}
+
+\item{laplaceCertify}{Logical, character or numeric. How to certify
+convergence on the Laplace path, on the curvature of the objective the
+fit ended on (Laplace, or the refined marginal). The optimiser's own
+stopping rule is a limited-memory estimate of the same quantity and
+cannot see a transform that has gone flat, where the gradient and the
+curvature vanish together (a correlation parked at 1.000 with a gradient
+of exactly zero); the certificate can.
+
+The fit is certified when the predicted gain
+\eqn{\frac{1}{2} g' H^{-1} g} is below ten times \code{laplaceTol} nats,
+no direction has negative curvature, and stepping along the directions
+with no curvature gains nothing; a discrimination, asymptote or latent
+correlation whose transform has gone flat is pulled back towards its
+live range, and a fit that gains from that is not a maximum.
+\code{converged} follows the verdict, \code{laplaceStatus$certificate}
+holds it, and the default standard errors of \code{\link{itemInformation}},
+\code{summary()} and \code{tidyIRT()} come from its curvature.
+
+\code{TRUE} or \code{"fast"} (the default): each item's block of the
+Hessian in one quadrature pass, the parameters shared across items by
+differencing, items coupled through those, which drops only the coupling
+between two items through the persons who answered both. It takes the
+time of about five to seven evaluations whatever the number of items or
+persons, a few per cent of a fit. On a fit that was not refined
+(\code{laplaceRefine = "none"}, or a 2PL at one dimension under
+\code{"auto"}) this curvature is the quadrature marginal's at the fitted
+modes rather than the Laplace objective's; the two agree near the
+optimum, and far from it a fit the exact route calls
+\code{"suboptimal"} may be called \code{"notmaximum"} here -- neither
+certifies it.
+
+\code{"exact"}: the whole Hessian by central differences of the
+gradient, two evaluations per free parameter, which roughly doubles a
+small fit and is out of reach for large ones. Ask for it to have the
+fitted objective's own curvature, with the coupling between items kept,
+when a small fit's standard errors or an unrefined fit's verdict are what
+will be reported. A number is the exact route with a budget in seconds,
+skipped with a message when one timed evaluation projects past it.
+\code{FALSE} turns the certificate off: \code{converged} is then the
+optimiser's own verdict and the default standard errors the closed-form
+profile ones. Default \code{TRUE}.}
 
 \item{laplaceKeepCovariance}{Logical. Whether to keep full person covariance
 matrices on the Laplace path. Covariances are otherwise retained only when

@@ -1152,6 +1152,7 @@ print.bigIRT_fit <- function(x, ...){
       status$outer_iters %||% NA_integer_, status$reason %||% "unknown"))
     if(isTRUE(status$beta_frozen)) cat("Note: person-predictor effects were held fixed.\n")
   }
+  if(!is.null(status$certificate)) cat(bigIRT_certificate_line(status$certificate), "\n", sep = "")
   invisible(x)
 }
 
@@ -1159,11 +1160,15 @@ print.bigIRT_fit <- function(x, ...){
 summary.bigIRT_fit <- function(object, se = TRUE, ...){
   ability <- as.matrix(object$pars$Ability)
   items <- as.data.frame(object$itemPars)
-  ## The fast closed-form weight, not the differenced one: a summary should not
-  ## cost hundreds of objective evaluations. Its standard errors run about six
-  ## per cent small, which is said on the printed output.
-  info <- if(isTRUE(se) && !is.null(object$internals))
-    tryCatch(itemInformation(object, method = "profile"), error = function(e) NULL) else NULL
+  ## The exact covariance when the fit's certificate kept it (R/certify.R),
+  ## which costs nothing here. Otherwise the fast closed-form weight, not the
+  ## differenced one: a summary should not cost hundreds of objective
+  ## evaluations. Its standard errors run about six per cent small, which is
+  ## said on the printed output.
+  exact <- !is.null(object$laplaceStatus$certificate$covariance$items)
+  info <- if(isTRUE(se) && (exact || !is.null(object$internals)))
+    tryCatch(itemInformation(object, method = if(exact) "exact" else "profile"),
+      error = function(e) NULL) else NULL
   rel <- tryCatch(reliability(object), error = function(e) NULL)
   ic <- tryCatch(IRTic(object), error = function(e) NULL)
   out <- list(
@@ -1173,6 +1178,7 @@ summary.bigIRT_fit <- function(object, se = TRUE, ...){
     item_summary = if(nrow(items)) summary(items[, intersect(c("A", "B", "C", "D"), names(items)), drop = FALSE]) else NULL,
     ability_summary = if(length(ability)) summary(ability) else NULL,
     se_summary = if(!is.null(info)) apply(info$se, 2, stats::median, na.rm = TRUE) else NULL,
+    se_method = if(!is.null(info)) info$method else NULL,
     edf = if(!is.null(info)) info$edf_total else NULL,
     reliability = rel,
     aic = if(!is.null(ic)) ic$value[ic$criterion == "AIC" & ic$df_type == "effective"][1] else NULL,
@@ -1192,8 +1198,10 @@ print.summary.bigIRT_fit <- function(x, ...){
   if(!is.null(x$aic)) cat(sprintf("AIC (effective df): %.1f\n", x$aic))
   if(!is.null(x$item_summary)){ cat("\nItem parameters:\n"); print(x$item_summary) }
   if(!is.null(x$se_summary))
-    cat(sprintf("Median standard error: %s  (about 6%% small; see ?itemInformation)\n",
-      paste(sprintf("%s %.3f", names(x$se_summary), x$se_summary), collapse = "  ")))
+    cat(sprintf("Median standard error: %s  (%s)\n",
+      paste(sprintf("%s %.3f", names(x$se_summary), x$se_summary), collapse = "  "),
+      if(identical(x$se_method, "exact")) "the certificate's curvature; see ?itemInformation" else
+        "about 6% small; see ?itemInformation"))
   if(!is.null(x$edf)) cat(sprintf("Effective item parameters: %.1f\n", x$edf))
   if(!is.null(x$ability_summary)){ cat("\nAbilities:\n"); print(x$ability_summary) }
   if(!is.null(x$reliability)){ cat("\nReliability:\n"); print(x$reliability, row.names = FALSE) }
@@ -1562,6 +1570,47 @@ bigIRT_validate_fit_inputs <- function(dat, score, id, item, scale, pl, controls
 #'   pairwise expansion, in antithetic pairs, as importance sampling through
 #'   the Laplace Gaussian. Held fixed during the fit they can be exploited
 #'   unless there are many thousands. Default \code{NULL}.
+#' @param laplaceCertify Logical, character or numeric. How to certify
+#'   convergence on the Laplace path, on the curvature of the objective the
+#'   fit ended on (Laplace, or the refined marginal). The optimiser's own
+#'   stopping rule is a limited-memory estimate of the same quantity and
+#'   cannot see a transform that has gone flat, where the gradient and the
+#'   curvature vanish together (a correlation parked at 1.000 with a gradient
+#'   of exactly zero); the certificate can.
+#'
+#'   The fit is certified when the predicted gain
+#'   \eqn{\frac{1}{2} g' H^{-1} g} is below ten times \code{laplaceTol} nats,
+#'   no direction has negative curvature, and stepping along the directions
+#'   with no curvature gains nothing; a discrimination, asymptote or latent
+#'   correlation whose transform has gone flat is pulled back towards its
+#'   live range, and a fit that gains from that is not a maximum.
+#'   \code{converged} follows the verdict, \code{laplaceStatus$certificate}
+#'   holds it, and the default standard errors of \code{\link{itemInformation}},
+#'   \code{summary()} and \code{tidyIRT()} come from its curvature.
+#'
+#'   \code{TRUE} or \code{"fast"} (the default): each item's block of the
+#'   Hessian in one quadrature pass, the parameters shared across items by
+#'   differencing, items coupled through those, which drops only the coupling
+#'   between two items through the persons who answered both. It takes the
+#'   time of about five to seven evaluations whatever the number of items or
+#'   persons, a few per cent of a fit. On a fit that was not refined
+#'   (\code{laplaceRefine = "none"}, or a 2PL at one dimension under
+#'   \code{"auto"}) this curvature is the quadrature marginal's at the fitted
+#'   modes rather than the Laplace objective's; the two agree near the
+#'   optimum, and far from it a fit the exact route calls
+#'   \code{"suboptimal"} may be called \code{"notmaximum"} here -- neither
+#'   certifies it.
+#'
+#'   \code{"exact"}: the whole Hessian by central differences of the
+#'   gradient, two evaluations per free parameter, which roughly doubles a
+#'   small fit and is out of reach for large ones. Ask for it to have the
+#'   fitted objective's own curvature, with the coupling between items kept,
+#'   when a small fit's standard errors or an unrefined fit's verdict are what
+#'   will be reported. A number is the exact route with a budget in seconds,
+#'   skipped with a message when one timed evaluation projects past it.
+#'   \code{FALSE} turns the certificate off: \code{converged} is then the
+#'   optimiser's own verdict and the default standard errors the closed-form
+#'   profile ones. Default \code{TRUE}.
 #' @param laplaceGradTol Numeric. Tolerance for the item-block gradient,
 #'   measured relative to the objective rather than as a raw norm: the reported
 #'   norm is divided by the same denominator \code{laplaceTolScale} selects for
@@ -1700,6 +1749,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   laplaceCorrParam=c("stan_corsqrt","normalized_chol"),
   keepInternals=FALSE,laplaceOuterIter=500,laplaceTol=1e-4,laplaceTolScale=c("relative","per_obs"),laplaceGradTol=1e-4,laplacePolish=NA,laplacePersonTol=1e-6,laplaceOptimizer=c("fisher","mize"),
   laplaceRefine=c("auto","agq","laplace2","none"),agqNodes=NULL,agqPoints=NULL,
+  laplaceCertify=TRUE,
   laplaceKeepCovariance=FALSE,laplaceDiagnostics=FALSE,laplacePlot=FALSE,laplacePlotEvery=1L,
   laplaceJitter=1e-6,noptimsteps=10,
   normalise=FALSE,normaliseScale=1,normaliseMean=0,
@@ -1792,6 +1842,11 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   laplaceCorrParam <- match.arg(laplaceCorrParam)
   laplaceOptimizer <- match.arg(laplaceOptimizer)
   laplaceRefine <- match.arg(laplaceRefine)
+  if(!(isTRUE(laplaceCertify) || isFALSE(laplaceCertify) ||
+       identical(laplaceCertify, "fast") || identical(laplaceCertify, "exact") ||
+       (is.numeric(laplaceCertify) && length(laplaceCertify) == 1L && !is.na(laplaceCertify))))
+    stop("laplaceCertify must be FALSE, TRUE, 'fast', 'exact', or a number of ",
+      "seconds for the exact route.", call. = FALSE)
 
   itemPreds <- unique(c(AitemPreds,BitemPreds,CitemPreds,DitemPreds))
 
@@ -2390,7 +2445,14 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
       ## and 0.46. Costs 15 to 25 per cent there. options(bigIRT.agq_eb_rounds
       ## = FALSE) refines the final pass only.
       refine = if(eb_rounds > 0L && eb_round <= eb_rounds &&
-        !isTRUE(getOption("bigIRT.agq_eb_rounds", TRUE))) NULL else agq_rule
+        !isTRUE(getOption("bigIRT.agq_eb_rounds", TRUE))) NULL else agq_rule,
+      ## The certificate belongs to the pass whose estimates are returned.
+      certify = if((eb_rounds > 0L && eb_round <= eb_rounds) || isFALSE(laplaceCertify) ||
+        is.null(laplaceCertify)) NULL else
+        list(route = if(isTRUE(laplaceCertify) || identical(laplaceCertify, "fast")) "fast" else "exact",
+          budget = if(is.numeric(laplaceCertify))
+            max(0, as.numeric(laplaceCertify)[1], na.rm = TRUE) else Inf,
+          tolerance = 10 * laplaceTol)
     )
 
       if(eb_round > eb_rounds) break
@@ -2523,6 +2585,11 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     gain_converged <- identical(laplaceOptimizer, "fisher") &&
       direct_terminate %in% c("gain", "noise_floor")
     strict_direct <- isTRUE(directGradScaled < laplaceGradTol) || gain_converged
+    ## Where the curvature certificate reached a verdict (R/certify.R), it
+    ## decides `converged`: the rules above are estimates of the same quantity
+    ## and cannot see a transform that has gone flat. NA keeps them.
+    certificate <- directFit$optim$certificate
+    cert_converged <- if(is.null(certificate)) NA else bigIRT_certificate_converged(certificate$status)
     ## A single scaled norm sums over every parameter, so it cannot say which
     ## block is responsible and it hides one stuck parameter among thousands.
     ## It also lets a small block with a naturally larger gradient dominate the
@@ -2552,11 +2619,15 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
       }
     }
     fit$laplaceStatus <- list(
-      converged = strict_direct,
-      reason = if(gain_converged) "predicted_gain" else
+      ## The certificate's verdict when it reached one (R/certify.R), the
+      ## optimiser's own labels otherwise.
+      converged = if(is.na(cert_converged)) strict_direct else cert_converged,
+      reason = if(!is.na(cert_converged)) certificate$status else
+        if(gain_converged) "predicted_gain" else
         if(isTRUE(strict_direct)) "approx_gradient" else
         if(direct_terminate %in% c("linesearch_failed", "not_descent")) "linesearch_failed" else
         "max_iter",
+      certificate = certificate,
       outer_iters = if(!is.null(directFit$optim$iter)) directFit$optim$iter else max(2L, as.integer(laplaceOuterIter)),
       beta_frozen = bigIRT_laplace_beta_frozen(sdat, directFit$optim$layout),
       initialized_from = "prior_anchored",
@@ -2612,6 +2683,16 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
         "fitted point, where the log-determinant gradient is then approximate; treat item ",
         "standard errors and convergence diagnostics with care, or refit with ",
         "laplaceRefine = \"agq\"."), as.integer(clip_persons), as.integer(sdat$Nsubs)), call. = FALSE)
+    ## The certificate's verdict, in its own words: a gradient means nothing
+    ## to anyone reading it, the objective still available does.
+    if(isFALSE(cert_converged))
+      warning(sprintf("The fit is not certified as converged (%s): %s. See laplaceStatus$certificate.",
+        certificate$status, certificate$reason), call. = FALSE)
+    if(identical(certificate$status, "saturated"))
+      message("Boundary estimate: ", certificate$reason, ".")
+    if((identical(certificate$status, "skipped") && isTRUE(certificate$budget > 0)) ||
+       identical(certificate$status, "unknown"))
+      message("Convergence was not certified: ", certificate$reason, ".")
     fit$abilityPrior <- list(
       sd = as.numeric(sdat$AbilitySD),
       corr = as.matrix(if(!is.null(state$AbilityCorr)) state$AbilityCorr else sdat$AbilityCorr),
@@ -2931,7 +3012,10 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     ## failure, so no branch below claimed it. That is the loudest case there
     ## is -- the optimiser gave up while the gradient was still large.
     status$stalled <- !isTRUE(status$converged) && !isTRUE(status$iteration_limit) &&
-      !isTRUE(status$numerical_failure) && !isTRUE(status$person_mode_failures > 0L)
+      !isTRUE(status$numerical_failure) && !isTRUE(status$person_mode_failures > 0L) &&
+      ## A certificate that reached a verdict has already warned in its own
+      ## terms, in nats rather than a gradient.
+      is.na(bigIRT_certificate_converged(status$certificate$status))
     intolerable_modes <- isTRUE(status$person_mode_failures > 0L)
     if(isTRUE(status$iteration_limit) || intolerable_modes ||
        isTRUE(status$numerical_failure) || isTRUE(status$stalled)){
