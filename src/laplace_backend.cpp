@@ -236,7 +236,10 @@ extern "C" SEXP _bigIRT_laplace_row_terms_debug_cpp_impl(
 // than the posterior it is approximating. Measured on a simulated 4PL fit,
 // one person in 800 came back with a posterior SD of 2.72 where quadrature
 // said 0.81 (Fisher said 0.50). Fisher information cannot do this, being
-// positive term by term, so those persons fall back to it.
+// positive term by term, but those persons are not switched to it -- their
+// curvature is clipped to the nearest positive semidefinite matrix instead
+// (bigirt_psd_clip below); see its comment for why clipping replaced an
+// earlier design that switched.
 //
 // For K = 1 this reduces to
 // "the summed observed information from the responses is not negative".
@@ -1044,9 +1047,10 @@ struct BigIRTLaplaceItemObjectiveWorker : public RcppParallel::Worker {
 
       // Same guard as the person kernels, reached from identical inputs so it
       // reaches the identical decision: if the data's own curvature is not
-      // positive semidefinite this person falls back to Fisher. `guarded`
-      // also switches the gradient terms below, so the value and the gradient
-      // continue to describe one function.
+      // positive semidefinite it is clipped to the nearest PSD matrix
+      // (bigirt_psd_clip), not switched to Fisher. `guarded` also switches
+      // the gradient terms below, so the value and the gradient continue to
+      // describe one function.
       bool guarded = false;
       {
         const MatrixXd like = Q - Q_prior;
@@ -1501,9 +1505,10 @@ struct BigIRTLaplaceItemBlockWorker : public RcppParallel::Worker {
 
       // Same guard as the person kernels, reached from identical inputs so it
       // reaches the identical decision: if the data's own curvature is not
-      // positive semidefinite this person falls back to Fisher. `guarded`
-      // also switches the adjoint and gradient terms below, so the value and
-      // the gradient continue to describe one function.
+      // positive semidefinite it is clipped to the nearest PSD matrix
+      // (bigirt_psd_clip), not switched to Fisher. `guarded` also switches
+      // the adjoint and gradient terms below, so the value and the gradient
+      // continue to describe one function.
       bool guarded = false;
       {
         const MatrixXd like = Q - Q_prior;
