@@ -639,6 +639,63 @@ bigIRT_certify <- function(final, par, context, state, sdat, prior_precision,
   finish(out)
 }
 
+## itemInformation(method = "exact"): each item block of the full inverse of the
+## exact Hessian of the fitted objective, so every item's standard error allows
+## for the other items and the shared parameters being estimated too -- the
+## marginal variance, where "hessian" inverts the item's own block alone and
+## gives the conditional one. Read from the certificate when it kept the
+## covariance, which needs neither internals nor any evaluation; computed
+## afresh otherwise, at the cost of the certificate's curvature.
+bigIRT_iteminfo_exact <- function(fit, cores = 1L){
+  cov <- fit$laplaceStatus$certificate$covariance
+  if(is.null(cov$items)){
+    if(is.null(fit$internals))
+      stop("This fit kept no exact covariance (its certificate was skipped or off) and ",
+        "carries no prepared data to compute one. Refit with `keepInternals = TRUE`.")
+    d <- bigIRT_direct_eval_from_fit(fit, keep_covariance = TRUE, cores = cores)
+    ce <- bigIRT_certify(final = d$eval, par = d$par, context = d$context,
+      state = fit$internals$state, sdat = d$sdat,
+      prior_precision = fit$internals$priorPrecision, layout = d$layout,
+      budget = Inf, tolerance = fit$laplaceStatus$certificate$tolerance %||% 1e-3)
+    cov <- ce$covariance
+    if(is.null(cov$items))
+      stop("The exact curvature of this fit cannot be inverted for standard errors (",
+        ce$status, ": ", ce$reason, "). A direction with no curvature would get a ",
+        "finite standard error from an inverse over the rest; see ",
+        "itemInformation(method = \"hessian\") for the item blocks alone.")
+  }
+  V <- cov$items
+  active <- dimnames(V)[[1]]; P <- length(active); ni <- dim(V)[3]
+  sdat <- fit$prepared
+  prior_sd <- c(B = "BSDx", A = "invspASD", C = "logitCSD", D = "logitDSD")
+  prec <- matrix(0, nrow = P, ncol = ni, dimnames = list(active, NULL))
+  if(isTRUE(as.logical(sdat$dopriors))) for(b in active){
+    sd_b <- as.numeric(sdat[[prior_sd[[b]]]])
+    if(length(sd_b)) prec[b, ] <- 1 / rep_len(pmax(sd_b, 1e-8), ni)^2
+  }
+  se <- matrix(NA_real_, ni, P, dimnames = list(NULL, active))
+  edf <- se
+  info <- array(NA_real_, c(P, P, ni), dimnames = list(active, active, NULL))
+  for(j in seq_len(ni)){
+    Vj <- matrix(V[, , j], P, P)
+    if(anyNA(Vj)) next
+    se[j, ] <- sqrt(pmax(diag(Vj), 0))
+    ## Effective parameters as the other methods define them, diag(S V) with S
+    ## the likelihood part: diag(I - prior V), since S = H - prior.
+    edf[j, ] <- pmax(pmin(1 - prec[, j] * diag(Vj), 1), 0)
+    Ij <- try(solve(Vj), silent = TRUE)
+    if(!inherits(Ij, "try-error")) info[, , j] <- Ij
+  }
+  structure(list(
+    ## The inverse of each marginal block: the information an item's own
+    ## parameters carry once everything else is allowed to move.
+    information = info, prior_precision = prec * 0,
+    covariance = V, se = se, edf = edf, active = active, method = "exact",
+    penalised = isTRUE(as.logical(sdat$dopriors)),
+    n_items = ni, edf_total = sum(edf, na.rm = TRUE)
+  ), class = "bigIRT_iteminfo")
+}
+
 ## Item-block and shared-block covariances in natural coordinates, from the
 ## inverse information over the kept coordinates (optimiser coordinates).
 bigIRT_certificate_covariance <- function(V, keep, layout, sdat, names_all){

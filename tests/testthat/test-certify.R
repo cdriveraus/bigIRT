@@ -348,6 +348,28 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     expect_true(all(t(se_cert) >= ih$se[, rownames(se_cert)] * (1 - 1e-3)))
   })
 
+  test_that("standard errors come from the exact covariance the certificate kept", {
+    f <- fit3$fit
+    ii <- itemInformation(f)
+    expect_equal(ii$method, "exact")
+    V <- f$laplaceStatus$certificate$covariance$items
+    expect_equal(ii$se, t(sqrt(apply(V, 3, diag))), check.attributes = FALSE)
+    ## Computed afresh it is the same matrix, and without internals the stored
+    ## one still serves; with neither, it says what is missing.
+    f2 <- f; f2$laplaceStatus$certificate$covariance <- NULL
+    expect_equal(itemInformation(f2, method = "exact")$se, ii$se, tolerance = 1e-8)
+    f3 <- f; f3$internals <- NULL
+    expect_equal(itemInformation(f3)$se, ii$se)
+    f4 <- f2; f4$internals <- NULL
+    expect_error(itemInformation(f4, method = "exact"), "keepInternals")
+    ## summary(), vcov() and tidyIRT() follow it.
+    expect_equal(summary(f)$se_method, "exact")
+    expect_equal(vcov(f), V)
+    td <- suppressMessages(tidyIRT(f, conf.int = TRUE))
+    b <- td[td$term == "B", ]
+    expect_equal(b$std.error, ii$se[match(b$item, as.character(f$itemPars$Item)), "B"])
+  })
+
   test_that("a fit stopped early is not certified, and says how far it is", {
     f <- suppressWarnings(fitIRT(fit3$sim$dat, pl = 3L, marginalApprox = "laplace",
       cores = 1L, ebayes = FALSE, dropPerfectScores = FALSE, laplaceOuterIter = 3,

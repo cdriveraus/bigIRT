@@ -210,13 +210,22 @@ bigIRT_item_info_blocks <- function(state, sdat, context, row_effective, posteri
 #' `priors = TRUE` the fit is penalised, so these describe posterior curvature
 #' rather than repeated sampling.
 #'
-#' @param fit A fitted object from [fitIRT()], fitted with `keepInternals = TRUE`.
+#' @param fit A fitted object from [fitIRT()], fitted with `keepInternals = TRUE`
+#'   (not needed for `"exact"` when the certificate kept the covariance).
 #' @param cores Integer. Cores for the objective evaluations.
-#' @param method Character. `"auto"` times one evaluation and takes the exact
-#'   route when it fits `time_budget`. `"hessian"` differences the analytic
-#'   gradient per item block and is exact up to a block-diagonal term worth
-#'   about one per cent. `"profile"` uses a closed-form weight and costs
-#'   nothing, but its standard errors run about six per cent small.
+#' @param method Character. `"exact"` takes each item's block of the full
+#'   inverse of the exact Hessian of the fitted objective -- the refined
+#'   marginal when `laplaceRefine` ran -- so every standard error allows for
+#'   the other items and the shared parameters being estimated too; it is read
+#'   from the fit's convergence certificate when that kept it (see
+#'   `laplaceCertify` in [fitIRT()]), which costs nothing and needs no
+#'   internals, and computed otherwise. `"auto"` takes `"exact"` when the
+#'   certificate kept it, and otherwise times one evaluation and takes
+#'   `"hessian"` when it fits `time_budget`. `"hessian"` differences the
+#'   analytic gradient per item block and inverts each block alone, which
+#'   holds everything else at its estimate. `"profile"` uses a closed-form
+#'   weight and costs nothing, but its standard errors run about six per cent
+#'   small.
 #' @param person_tol Numeric. Person-mode tolerance for the differenced method.
 #'   Must be far tighter than the fitting default, or the difference quotient
 #'   measures frozen-mode curvature instead.
@@ -226,19 +235,27 @@ bigIRT_item_info_blocks <- function(state, sdat, context, row_effective, posteri
 #'
 #' @return An object of class `bigIRT_iteminfo`:
 #' \describe{
-#'   \item{information}{P x P x Nitems array of likelihood information.}
-#'   \item{prior_precision}{Matching prior precision, zero without priors.}
-#'   \item{covariance}{Inverse of each block.}
+#'   \item{information}{P x P x Nitems array of likelihood information; for
+#'     `"exact"`, the inverse of each item's covariance block, prior included.}
+#'   \item{prior_precision}{Matching prior precision, zero without priors or
+#'     where `information` already carries it.}
+#'   \item{covariance}{Inverse of each block; for `"exact"`, each item's block
+#'     of the full inverse.}
 #'   \item{se}{Nitems x P matrix of standard errors.}
 #'   \item{edf}{Effective parameters per item and block.}
 #' }
 #'
 #' @seealso [checkConvergence()]
 #' @export
-itemInformation <- function(fit, cores = 1L, method = c("auto", "profile", "hessian"),
+itemInformation <- function(fit, cores = 1L, method = c("auto", "exact", "profile", "hessian"),
                             person_tol = 1e-8, eps = 1e-4, max_blocks = 2000L,
                             time_budget = 60){
   method <- match.arg(method)
+  ## The full inverse of the exact Hessian (R/certify.R), free when the fit's
+  ## certificate kept it.
+  if(identical(method, "exact") || (identical(method, "auto") &&
+     !is.null(fit$laplaceStatus$certificate$covariance$items)))
+    return(bigIRT_iteminfo_exact(fit, cores = cores))
   t0 <- as.numeric(proc.time()[["elapsed"]])
   d <- bigIRT_direct_eval_from_fit(fit, keep_covariance = TRUE, cores = cores)
   eval_sec <- max(as.numeric(proc.time()[["elapsed"]]) - t0, 1e-4)
@@ -329,8 +346,9 @@ print.bigIRT_iteminfo <- function(x, ...){
   cat(sprintf("Standard errors are %s, by the %s method%s.\n",
     if(isTRUE(x$penalised)) "posterior (the fit is penalised by priors)" else "likelihood-based",
     if(is.null(x$method)) "profile" else x$method,
-    if(identical(if(is.null(x$method)) "profile" else x$method, "profile"))
-      " (about 6% small; see ?itemInformation)" else ""))
+    switch(if(is.null(x$method)) "profile" else x$method,
+      profile = " (about 6% small; see ?itemInformation)",
+      exact = " (the full inverse of the exact Hessian of the fitted objective)", "")))
   cat(sprintf("Effective parameters: %.1f of %d\n", x$edf_total, x$n_items * length(x$active)))
   print(summary(as.data.frame(x$se)))
   invisible(x)

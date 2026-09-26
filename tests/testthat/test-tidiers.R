@@ -21,7 +21,11 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     fitIRT(s$dat, score = "score", id = "id", item = "Item", scale = "Scale",
       pl = pl, marginalApprox = "laplace", cores = 1L, verbose = 0L, plot = FALSE,
       priors = TRUE, ebayes = FALSE, normalise = FALSE, dropPerfectScores = FALSE,
-      trainingRows = tr, keepInternals = TRUE, laplaceKeepCovariance = TRUE)
+      trainingRows = tr, keepInternals = TRUE, laplaceKeepCovariance = TRUE,
+      ## These tests hold the delta-method scaling against the profile
+      ## errors; with a certificate tidyIRT would default to the exact ones
+      ## (test-certify.R covers that).
+      laplaceCertify = FALSE)
   }
 
   test_that("tidy returns one row per item parameter with usable intervals", {

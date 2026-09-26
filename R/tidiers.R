@@ -19,7 +19,9 @@
 #' @param x A fitted object from [fitIRT()].
 #' @param conf.int Logical. Compute standard errors and intervals.
 #' @param conf.level Numeric. Interval coverage.
-#' @param method Character. Passed to [itemInformation()].
+#' @param method Character. Passed to [itemInformation()]. By default
+#'   `"exact"` when the fit's convergence certificate kept the exact
+#'   covariance, which costs nothing, and `"profile"` otherwise.
 #' @param cores Integer. Cores for the information calculation.
 #' @param ... Unused.
 #'
@@ -27,7 +29,9 @@
 #'   standard error and interval.
 #'
 #' @export
-tidyIRT <- function(x, conf.int = FALSE, conf.level = 0.95, method = "profile",
+tidyIRT <- function(x, conf.int = FALSE, conf.level = 0.95,
+                    method = if(is.null(x$laplaceStatus$certificate$covariance$items))
+                      "profile" else "exact",
                     cores = 1L, ...){
   ip <- as.data.frame(x$itemPars)
   if(!nrow(ip)) stop("This fit carries no item parameters.")

@@ -1161,11 +1161,15 @@ print.bigIRT_fit <- function(x, ...){
 summary.bigIRT_fit <- function(object, se = TRUE, ...){
   ability <- as.matrix(object$pars$Ability)
   items <- as.data.frame(object$itemPars)
-  ## The fast closed-form weight, not the differenced one: a summary should not
-  ## cost hundreds of objective evaluations. Its standard errors run about six
-  ## per cent small, which is said on the printed output.
-  info <- if(isTRUE(se) && !is.null(object$internals))
-    tryCatch(itemInformation(object, method = "profile"), error = function(e) NULL) else NULL
+  ## The exact covariance when the fit's certificate kept it (R/certify.R),
+  ## which costs nothing here. Otherwise the fast closed-form weight, not the
+  ## differenced one: a summary should not cost hundreds of objective
+  ## evaluations. Its standard errors run about six per cent small, which is
+  ## said on the printed output.
+  exact <- !is.null(object$laplaceStatus$certificate$covariance$items)
+  info <- if(isTRUE(se) && (exact || !is.null(object$internals)))
+    tryCatch(itemInformation(object, method = if(exact) "exact" else "profile"),
+      error = function(e) NULL) else NULL
   rel <- tryCatch(reliability(object), error = function(e) NULL)
   ic <- tryCatch(IRTic(object), error = function(e) NULL)
   out <- list(
@@ -1175,6 +1179,7 @@ summary.bigIRT_fit <- function(object, se = TRUE, ...){
     item_summary = if(nrow(items)) summary(items[, intersect(c("A", "B", "C", "D"), names(items)), drop = FALSE]) else NULL,
     ability_summary = if(length(ability)) summary(ability) else NULL,
     se_summary = if(!is.null(info)) apply(info$se, 2, stats::median, na.rm = TRUE) else NULL,
+    se_method = if(!is.null(info)) info$method else NULL,
     edf = if(!is.null(info)) info$edf_total else NULL,
     reliability = rel,
     aic = if(!is.null(ic)) ic$value[ic$criterion == "AIC" & ic$df_type == "effective"][1] else NULL,
@@ -1194,8 +1199,10 @@ print.summary.bigIRT_fit <- function(x, ...){
   if(!is.null(x$aic)) cat(sprintf("AIC (effective df): %.1f\n", x$aic))
   if(!is.null(x$item_summary)){ cat("\nItem parameters:\n"); print(x$item_summary) }
   if(!is.null(x$se_summary))
-    cat(sprintf("Median standard error: %s  (about 6%% small; see ?itemInformation)\n",
-      paste(sprintf("%s %.3f", names(x$se_summary), x$se_summary), collapse = "  ")))
+    cat(sprintf("Median standard error: %s  (%s)\n",
+      paste(sprintf("%s %.3f", names(x$se_summary), x$se_summary), collapse = "  "),
+      if(identical(x$se_method, "exact")) "exact Hessian; see ?itemInformation" else
+        "about 6% small; see ?itemInformation"))
   if(!is.null(x$edf)) cat(sprintf("Effective item parameters: %.1f\n", x$edf))
   if(!is.null(x$ability_summary)){ cat("\nAbilities:\n"); print(x$ability_summary) }
   if(!is.null(x$reliability)){ cat("\nReliability:\n"); print(x$reliability, row.names = FALSE) }

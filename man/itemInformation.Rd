@@ -7,7 +7,7 @@
 itemInformation(
   fit,
   cores = 1L,
-  method = c("auto", "profile", "hessian"),
+  method = c("auto", "exact", "profile", "hessian"),
   person_tol = 1e-08,
   eps = 1e-04,
   max_blocks = 2000L,
@@ -15,15 +15,24 @@ itemInformation(
 )
 }
 \arguments{
-\item{fit}{A fitted object from \code{\link[=fitIRT]{fitIRT()}}, fitted with \code{keepInternals = TRUE}.}
+\item{fit}{A fitted object from \code{\link[=fitIRT]{fitIRT()}}, fitted with \code{keepInternals = TRUE}
+(not needed for \code{"exact"} when the certificate kept the covariance).}
 
 \item{cores}{Integer. Cores for the objective evaluations.}
 
-\item{method}{Character. \code{"auto"} times one evaluation and takes the exact
-route when it fits \code{time_budget}. \code{"hessian"} differences the analytic
-gradient per item block and is exact up to a block-diagonal term worth
-about one per cent. \code{"profile"} uses a closed-form weight and costs
-nothing, but its standard errors run about six per cent small.}
+\item{method}{Character. \code{"exact"} takes each item's block of the full
+inverse of the exact Hessian of the fitted objective -- the refined
+marginal when \code{laplaceRefine} ran -- so every standard error allows for
+the other items and the shared parameters being estimated too; it is read
+from the fit's convergence certificate when that kept it (see
+\code{laplaceCertify} in \code{\link[=fitIRT]{fitIRT()}}), which costs nothing and needs no
+internals, and computed otherwise. \code{"auto"} takes \code{"exact"} when the
+certificate kept it, and otherwise times one evaluation and takes
+\code{"hessian"} when it fits \code{time_budget}. \code{"hessian"} differences the
+analytic gradient per item block and inverts each block alone, which
+holds everything else at its estimate. \code{"profile"} uses a closed-form
+weight and costs nothing, but its standard errors run about six per cent
+small.}
 
 \item{person_tol}{Numeric. Person-mode tolerance for the differenced method.
 Must be far tighter than the fitting default, or the difference quotient
@@ -38,9 +47,12 @@ measures frozen-mode curvature instead.}
 \value{
 An object of class \code{bigIRT_iteminfo}:
 \describe{
-\item{information}{P x P x Nitems array of likelihood information.}
-\item{prior_precision}{Matching prior precision, zero without priors.}
-\item{covariance}{Inverse of each block.}
+\item{information}{P x P x Nitems array of likelihood information; for
+\code{"exact"}, the inverse of each item's covariance block, prior included.}
+\item{prior_precision}{Matching prior precision, zero without priors or
+where \code{information} already carries it.}
+\item{covariance}{Inverse of each block; for \code{"exact"}, each item's block
+of the full inverse.}
 \item{se}{Nitems x P matrix of standard errors.}
 \item{edf}{Effective parameters per item and block.}
 }
