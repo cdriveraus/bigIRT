@@ -207,7 +207,11 @@ test_that("laplace returns posterior outputs and finite MIRT parameters", {
   expect_true(all(c("mode", "precision", "precision_chol", "logdet_precision") %in% names(fit$personPosterior)))
   expect_true(is.list(fit$laplaceStatus))
   expect_s3_class(fit, "bigIRT_fit")
-  expect_true(all(c("strict_convergence", "stable_plateau", "iteration_limit",
+  ## stable_plateau is not in this list: it could only ever be TRUE when
+  ## status$reason == "stability_patience", which no code path sets, so it
+  ## was always FALSE and has been removed (R/fitIRT.R) rather than kept as a
+  ## field that can never be informative.
+  expect_true(all(c("strict_convergence", "iteration_limit",
     "person_mode_failures", "numerical_failure", "frozen_effects",
     "covariance_retained") %in% names(fit$laplaceStatus)))
   expect_match(paste(capture.output(print(fit)), collapse = "\n"), "Laplace")

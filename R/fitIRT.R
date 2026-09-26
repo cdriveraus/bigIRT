@@ -1148,7 +1148,7 @@ print.bigIRT_fit <- function(x, ...){
   status <- x$laplaceStatus
   if(!is.null(status)){
     cat(sprintf("Laplace: %s after %s iteration(s) [%s]\n",
-      if(isTRUE(status$converged)) "strictly converged" else if(isTRUE(status$stable_plateau)) "stable plateau" else "not strictly converged",
+      if(isTRUE(status$converged)) "strictly converged" else "not strictly converged",
       status$outer_iters %||% NA_integer_, status$reason %||% "unknown"))
     if(isTRUE(status$approximate_gradient)) cat("Note: direct Laplace uses approximate global derivatives.\n")
     if(isTRUE(status$beta_frozen)) cat("Note: person-predictor effects were held fixed.\n")
@@ -2553,7 +2553,9 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     fit$laplaceStatus <- list(
       converged = strict_direct,
       reason = if(gain_converged) "predicted_gain" else
-        if(isTRUE(strict_direct)) "approx_gradient" else "max_iter",
+        if(isTRUE(strict_direct)) "approx_gradient" else
+        if(direct_terminate %in% c("linesearch_failed", "not_descent")) "linesearch_failed" else
+        "max_iter",
       outer_iters = if(!is.null(directFit$optim$iter)) directFit$optim$iter else max(2L, as.integer(laplaceOuterIter)),
       beta_frozen = bigIRT_laplace_beta_frozen(sdat, directFit$optim$layout),
       initialized_from = "prior_anchored",
@@ -2583,6 +2585,10 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
       clipped_partial = as.integer(directFit$optim$clip_final[["partial"]] %||% NA_integer_),
       clipped_full = as.integer(directFit$optim$clip_final[["full"]] %||% NA_integer_),
       agq_rule = if(!is.null(directFit$optim$refine)) directFit$optim$refine$rule else NULL,
+      ## Persons where the second-order correction itself (not the mode
+      ## solve) was skipped, e.g. for a numerically unusable local expansion.
+      ## NA when laplace2 did not run at all (no refinement, or agq instead).
+      laplace2_skipped = directFit$eval$laplace2_skipped,
       laplace_logLik = if(!is.null(directFit$optim$refine)) directFit$optim$refine$laplace_value else directFit$eval$value,
       refine = directFit$optim$refine,
       item_grad_denominator = directGradDenom,
@@ -2781,8 +2787,8 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
         ## latent one. With normalise = TRUE the estimated correlation was
         ## therefore unreachable from the returned object, which is how a
         ## Mindsteps fit came to report .320 for both.
-        if(!is.null(fit$laplaceStatus$ability_corr))
-          fit$abilityPrior$corr_latent <- as.matrix(fit$laplaceStatus$ability_corr)
+        if(!is.null(fit$abilityPrior$corr))
+          fit$abilityPrior$corr_latent <- as.matrix(fit$abilityPrior$corr)
         fit$abilityPrior$corr <- stats::cor(fit$pars$Ability, use = "pairwise.complete.obs")
         fit$abilityPrior$precision <- solve(
           diag(fit$abilityPrior$sd, ncol(fit$pars$Ability)) %*%
@@ -2905,7 +2911,6 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   if(!is.null(fit$laplaceStatus)){
     status <- fit$laplaceStatus
     status$strict_convergence <- isTRUE(status$converged)
-    status$stable_plateau <- identical(status$reason, "stability_patience")
     ## Two backends reported hitting the cap differently: the outer loop said
     ## "max_outer_iter", the direct optimiser says "max_iter". Both mean the
     ## fit stopped because it ran out of iterations, and both must warn.
@@ -2915,15 +2920,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
       sum(!fit$personPosterior$converged) else NA_integer_
     status$numerical_failure <- !is.finite(fit$optim$logLik) ||
       (!is.null(status$last_item_grad_norm) && !is.finite(status$last_item_grad_norm))
-    ## A tolerated number of unresolved modes must not relabel a genuine stable
-    ## plateau as a failure: the fit stopped because it settled, and the
-    ## unresolved count is reported separately.  Only an intolerable share, or
-    ## an absent tolerance, overrides the recorded reason.
-    status$person_modes_tolerated <- isTRUE(is.finite(status$person_converged_fraction)) &&
-      isTRUE(is.finite(status$person_fail_fraction_allowed)) &&
-      isTRUE(status$person_converged_fraction >= 1 - status$person_fail_fraction_allowed)
-    if(!isTRUE(status$converged) && isTRUE(status$person_mode_failures > 0L) &&
-       !isTRUE(status$person_modes_tolerated))
+    if(!isTRUE(status$converged) && isTRUE(status$person_mode_failures > 0L))
       status$reason <- "person_mode_failures"
     if(isTRUE(status$numerical_failure)) status$reason <- "numerical_failure"
     status$covariance_retained <- !is.null(fit$personPosterior$covariance)
@@ -2935,10 +2932,8 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     ## failure, so no branch below claimed it. That is the loudest case there
     ## is -- the optimiser gave up while the gradient was still large.
     status$stalled <- !isTRUE(status$converged) && !isTRUE(status$iteration_limit) &&
-      !isTRUE(status$stable_plateau) && !isTRUE(status$numerical_failure) &&
-      !isTRUE(status$person_mode_failures > 0L)
-    intolerable_modes <- isTRUE(status$person_mode_failures > 0L) &&
-      !isTRUE(status$person_modes_tolerated)
+      !isTRUE(status$numerical_failure) && !isTRUE(status$person_mode_failures > 0L)
+    intolerable_modes <- isTRUE(status$person_mode_failures > 0L)
     if(isTRUE(status$iteration_limit) || intolerable_modes ||
        isTRUE(status$numerical_failure) || isTRUE(status$stalled)){
       warning(sprintf("%s stopped with %s%s.", fit$backend,
@@ -2951,14 +2946,6 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
           else "")
         else "person-mode failures",
         if(isTRUE(status$person_mode_failures > 0L)) sprintf(" (%d unresolved)", status$person_mode_failures) else ""), call. = FALSE)
-    } else if(isTRUE(status$stable_plateau)){
-      message(sprintf("%s stopped on a stable plateau; this is a qualified, not strict-convergence result.%s",
-        fit$backend,
-        if(isTRUE(status$person_mode_failures > 0L))
-          sprintf(" %d of %d person modes (%.2f%%) remained unresolved, within the tolerated share.",
-            status$person_mode_failures,
-            length(fit$personPosterior$converged),
-            100 * (1 - status$person_converged_fraction)) else ""))
     }
   }
   class(fit) <- c("bigIRT_fit", "list")
