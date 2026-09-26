@@ -58,7 +58,7 @@ fitIRT(
   laplaceTol = 1e-04,
   laplaceTolScale = c("relative", "per_obs"),
   laplaceGradTol = 1e-04,
-  laplacePolish = 8L,
+  laplacePolish = NA,
   laplacePersonTol = 1e-06,
   laplaceOptimizer = c("fisher", "mize"),
   laplaceRefine = c("auto", "agq", "laplace2", "none"),
@@ -346,8 +346,12 @@ early on large problems: at eight million responses it reported no further
 progress while a single Newton step still recovered 146 units of objective.
 The curvature is the per-item information already used for standard errors,
 so a step costs one closed-form assembly and a short backtracking search.
-Set to 0 to disable. Default is 8. Applies to
-\code{laplaceOptimizer = "mize"} only.}
+Applies to \code{laplaceOptimizer = "mize"} only -- the Fisher-shaped
+optimizer has no polish stage, because it already reaches the optimum
+L-BFGS gives up short of. Default is \code{NA}, meaning the optimiser's
+own choice: 8 under \code{"mize"}, none under \code{"fisher"}. Set to 0 to
+disable under \code{"mize"}; an explicit nonzero value under
+\code{"fisher"} is refused rather than silently ignored.}
 
 \item{laplacePersonTol}{Numeric. Newton tolerance for person-mode updates in
 \code{"laplace"}: the gradient norm at which each person's mode solve

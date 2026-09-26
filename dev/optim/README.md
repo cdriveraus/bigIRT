@@ -29,7 +29,10 @@ repo); the full round-1/2 evidence is `optimisation-review-2026-09.md` there.
     free asymptotes -> agq at every K.
   - Guard: a refinement moving the objective by more than max(50, N/2) nats
     reverts to the Laplace optimum.
-- One CSR person->rows index (`src/bigirt_obsindex.h`) shared by all kernels.
+- One CSR person->rows index type (`src/bigirt_obsindex.h`, built by counting
+  sort), used identically by every kernel -- but each `.Call` still builds
+  its own from `id` rather than sharing one instance across kernels or
+  calls; see the handoff, "Remaining serial work per kernel call".
 
 ## Laplace bias, against near-exact optima (SE units of the estimates)
 

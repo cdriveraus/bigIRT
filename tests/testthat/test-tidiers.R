@@ -59,8 +59,60 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     ii <- itemInformation(f, method = "profile")
     if("C" %in% ii$active){
       est <- as.numeric(as.data.frame(f$itemPars)$C)
-      expect_equal(sort(cc$std.error), sort(ii$se[, "C"] * est * (1 - est)),
+      ## C = logistic(z)/2 (R/fitIRT.R's cfunc), so dC/dz = C(1 - 2C), not the
+      ## plain-logistic C(1 - C): verified against finite differences of
+      ## cfunc() at bigIRT_dc_dx()'s own definition (R/inference.R). The two
+      ## formulas differ by (1-C)/(1-2C), about 12% for the fitted C here.
+      expect_equal(sort(cc$std.error), sort(ii$se[, "C"] * bigIRT:::bigIRT_dc_dx(est)),
         tolerance = 1e-8)
+    }
+  })
+
+  test_that("bigIRT_dc_dx/bigIRT_dd_dx match finite differences of the actual transform", {
+    ## The chain-rule factor is a fact about cfunc/dfunc (R/fitIRT.R), not
+    ## about any fit, so check it directly against central finite differences
+    ## first -- independent of sampling noise, optimiser behaviour or which
+    ## parameters happen to be free in a given model.
+    cfunc <- bigIRT:::cfunc; dfunc <- bigIRT:::dfunc
+    z <- c(-3, -1.4, -0.2, 0.5, 2.1)
+    h <- 1e-6
+    fd_c <- (cfunc(z + h) - cfunc(z - h)) / (2 * h)
+    fd_d <- (dfunc(z + h) - dfunc(z - h)) / (2 * h)
+    expect_equal(bigIRT:::bigIRT_dc_dx(cfunc(z)), fd_c, tolerance = 1e-6)
+    expect_equal(bigIRT:::bigIRT_dd_dx(dfunc(z)), fd_d, tolerance = 1e-6)
+    ## The plain-logistic factors a bug once used are NOT close, so this is
+    ## not a tolerance wide enough to pass by accident.
+    expect_gt(max(abs(cfunc(z) * (1 - cfunc(z)) - fd_c)), 1e-3)
+    expect_gt(max(abs(dfunc(z) * (1 - dfunc(z)) - fd_d)), 1e-3)
+  })
+
+  test_that("tidyIRT's C and D errors agree with itemInformation on a 4PL, both free", {
+    ## pl = 4 with both asymptotes at non-degenerate values (away from the 0/1
+    ## boundary, where either factor would read near zero and the two could
+    ## look equal by coincidence rather than by formula).
+    set.seed(41)
+    s <- simIRT(Nsubs = 1400L, Nitems = 24L, Nscales = 1, NitemsAnswered = 16L,
+      AMean = 1.1, ASD = .25, BMean = 0, BSD = 1, AbilityMean = 0, AbilitySD = 1,
+      logitCMean = -1.6, logitCSD = .2, logitDMean = 0.6, logitDSD = .15)
+    fit4 <- fitIRT(s$dat, score = "score", id = "id", item = "Item", scale = "Scale",
+      pl = 4L, marginalApprox = "laplace", cores = 1L, verbose = 0L, plot = FALSE,
+      priors = TRUE, ebayes = FALSE, normalise = FALSE, dropPerfectScores = FALSE,
+      keepInternals = TRUE, laplaceKeepCovariance = TRUE)
+    ti4 <- tidyIRT(fit4, conf.int = TRUE)
+    ii4 <- itemInformation(fit4, method = "profile")
+    ip4 <- as.data.frame(fit4$itemPars)
+    for(b in intersect(c("C", "D"), ii4$active)){
+      est <- as.numeric(ip4[[b]])
+      ## Both C and D estimates land away from 0/1 here, so the plain-logistic
+      ## and correct factors disagree by a wide margin (checked below), not a
+      ## rounding-sized one.
+      expect_true(all(est > 0.05 & est < 0.95), label = b)
+      tb <- ti4[ti4$term == b, ]
+      tb <- tb[order(match(tb$item, ip4$Item)), ]
+      factor_fn <- if(b == "C") bigIRT:::bigIRT_dc_dx else bigIRT:::bigIRT_dd_dx
+      expect_equal(tb$std.error, ii4$se[, b] * factor_fn(est), tolerance = 1e-8, label = b)
+      plain <- ii4$se[, b] * est * (1 - est)
+      expect_gt(max(abs(tb$std.error - plain)) / mean(tb$std.error), 0.05, label = b)
     }
   })
 

@@ -350,4 +350,25 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
       expect_lt(fb$optim$target_evals, fm$optim$target_evals)
     }
   })
+
+  test_that("an explicit laplacePolish under the fisher optimizer is refused, not silently ignored", {
+    ## The block-Newton polish only runs after mize (see the comment above the
+    ## polish block in bigIRT_laplace_optimize_direct); under fisher it used
+    ## to be a silent no-op whatever laplacePolish was set to. A nonzero,
+    ## explicitly requested value should now fail loudly by name instead.
+    expect_error(
+      opt_fit(pl = 2, ns = 300, ni = 12, optimizer = "fisher", laplacePolish = 4L),
+      "fisher"
+    )
+    ## The default (NA) resolves to the optimiser's own choice, silently:
+    ## none under fisher, some under mize.
+    f_fisher <- opt_fit(pl = 2, ns = 300, ni = 12, optimizer = "fisher")
+    expect_identical(f_fisher$laplaceStatus$polish_steps, 0L)
+    f_mize <- opt_fit(pl = 2, ns = 300, ni = 12, optimizer = "mize")
+    expect_gt(f_mize$laplaceStatus$polish_steps, 0L)
+    ## An explicit 0 is always allowed, on either optimiser -- it asks for no
+    ## polish, which fisher already gives it.
+    f0 <- opt_fit(pl = 2, ns = 300, ni = 12, optimizer = "fisher", laplacePolish = 0L)
+    expect_identical(f0$laplaceStatus$polish_steps, 0L)
+  })
 }

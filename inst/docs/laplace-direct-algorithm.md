@@ -71,14 +71,24 @@ finite differences with the modes re-solved at every perturbation: correlation
 1.000000, maximum absolute difference 8e-08, with each factor of the implicit
 term also matching individually at ratio 1.0000.
 
-Two approximations remain, and they are approximations of substance rather than
-of bookkeeping:
+One approximation remains, of substance rather than of bookkeeping:
 
-- The curvature \(H_i\) uses expected (Fisher) information rather than the
-  observed Hessian. For the 2PL these coincide exactly, so the distinction bites
-  only for the 3PL and 4PL.
 - The person modes are solved to a tolerance, not exactly, so the envelope
   argument holds only to that tolerance.
+
+\(H_i\) itself used to use expected (Fisher) information rather than the
+observed Hessian -- coinciding exactly for the 2PL, which is why that
+distinction went unnoticed until it was checked on the 3PL and 4PL. Since
+September 2026 it is the observed Hessian everywhere; see CLAUDE.md, "The
+Laplace curvature, and the gradient test that proved nothing" for why that
+was a correctness fix rather than a refinement. Fisher information is still
+used elsewhere, for the Newton step that solves each mode, because its
+guaranteed positive definiteness is what makes that solve robust from a cold
+start -- a different role with a different curvature (see the note at the
+top of `src/laplace_backend.cpp`). When the data's own contribution to
+\(H_i\) is not itself positive semidefinite, it is clipped to the nearest
+PSD matrix rather than switched to Fisher, which was tried and found to
+introduce a discontinuity in the objective.
 
 Every parameter block now carries its adjoint. Writing \(s_i\) for the score,
 \(H_i\) for the person precision, \(Q\) for the prior precision, \(r_i\) for the
@@ -146,9 +156,10 @@ belongs to the priors, not to where an optimiser happens to stall.
 This is the backend `marginalApprox = "laplace"` selects, and the one the
 legacy names `"laplace_fast"` and `"laplace_direct"` now resolve to.
 
-The remaining approximation is the curvature: \(H_i\) uses expected (Fisher)
-information rather than the observed Hessian. The two coincide for the 2PL, so
-the distinction bites only for the 3PL and 4PL.
+The remaining approximation is the person modes, solved to a tolerance rather
+than exactly. \(H_i\) itself is the observed Hessian, not expected (Fisher)
+information, since September 2026 -- see "What is exact and what is
+approximate" above.
 
 Person and item predictors are both supported. Their gradients were checked
 against central finite differences of the objective: the item beta slots agree
