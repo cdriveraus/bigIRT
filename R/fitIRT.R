@@ -1501,8 +1501,12 @@ bigIRT_validate_fit_inputs <- function(dat, score, id, item, scale, pl, controls
 #'   progress while a single Newton step still recovered 146 units of objective.
 #'   The curvature is the per-item information already used for standard errors,
 #'   so a step costs one closed-form assembly and a short backtracking search.
-#'   Set to 0 to disable. Default is 8. Applies to
-#'   \code{laplaceOptimizer = "mize"} only.
+#'   Applies to \code{laplaceOptimizer = "mize"} only -- the Fisher-shaped
+#'   optimizer has no polish stage, because it already reaches the optimum
+#'   L-BFGS gives up short of. Default is \code{NA}, meaning the optimiser's
+#'   own choice: 8 under \code{"mize"}, none under \code{"fisher"}. Set to 0 to
+#'   disable under \code{"mize"}; an explicit nonzero value under
+#'   \code{"fisher"} is refused rather than silently ignored.
 #' @param laplaceOptimizer Character. Optimiser for the Laplace backend.
 #'   \code{"fisher"} (default) is L-BFGS whose initial inverse Hessian is
 #'   shaped by the Fisher information of the marginal likelihood, including
@@ -1694,7 +1698,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   marginalApprox=c("none","laplace","laplace_fast","laplace_direct"),
   estimateAbilityCorr=FALSE,
   laplaceCorrParam=c("stan_corsqrt","normalized_chol"),
-  keepInternals=FALSE,laplaceOuterIter=500,laplaceTol=1e-4,laplaceTolScale=c("relative","per_obs"),laplaceGradTol=1e-4,laplacePolish=8L,laplacePersonTol=1e-6,laplaceOptimizer=c("fisher","mize"),
+  keepInternals=FALSE,laplaceOuterIter=500,laplaceTol=1e-4,laplaceTolScale=c("relative","per_obs"),laplaceGradTol=1e-4,laplacePolish=NA,laplacePersonTol=1e-6,laplaceOptimizer=c("fisher","mize"),
   laplaceRefine=c("auto","agq","laplace2","none"),agqNodes=NULL,agqPoints=NULL,
   laplaceKeepCovariance=FALSE,laplaceDiagnostics=FALSE,laplacePlot=FALSE,laplacePlotEvery=1L,
   laplaceJitter=1e-6,noptimsteps=10,

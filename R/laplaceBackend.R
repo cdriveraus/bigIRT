@@ -1522,7 +1522,7 @@ bigIRT_laplace_optimize_direct <- function(state, sdat, prior_precision,
   keep_covariance = FALSE, cores = 1L, estimateAbilityCorr = FALSE,
   corr_paramization = c("normalized_chol", "stan_corsqrt"),
   collect_history = FALSE, plot_callback = NULL, plot_every = 1L,
-  verbose = 0L, trace_fn = NULL, stochastic = FALSE, polish_steps = 8L,
+  verbose = 0L, trace_fn = NULL, stochastic = FALSE, polish_steps = NA_integer_,
   polish_tol = 1e-8, optimizer = c("fisher", "mize"), refine = NULL){
   corr_paramization <- match.arg(corr_paramization)
   optimizer <- match.arg(optimizer)
@@ -1768,9 +1768,22 @@ bigIRT_laplace_optimize_direct <- function(state, sdat, prior_precision,
   polish <- list(steps = 0L, gain = 0)
   ## The polish is a block-diagonal Newton step, the item-diagonal part of the
   ## curvature the Fisher-shaped optimiser already uses; after it there is
-  ## nothing for the polish to find, so it runs after mize only.
-  if(polish_steps > 0L && !identical(optimizer, "fisher")){
-    for(sIt in seq_len(as.integer(polish_steps))){
+  ## nothing for the polish to find, so it runs after mize only. `NA` (the
+  ## default) defers to that: 8 steps under mize, none under fisher -- the
+  ## same resolved `optimizer`, so a fisher run that fell back from an
+  ## unavailable metric (above) still gets the mize default. An explicit
+  ## nonzero count under fisher would silently do nothing, which is worse
+  ## than refusing it by name.
+  resolved_polish_steps <- if(is.na(polish_steps)){
+    if(identical(optimizer, "fisher")) 0L else 8L
+  } else if(identical(optimizer, "fisher") && as.integer(polish_steps) != 0L){
+    stop("laplacePolish has no effect under laplaceOptimizer = \"fisher\": the ",
+      "block-Newton polish only runs after the \"mize\" optimizer. Leave ",
+      "laplacePolish at its default (NA), pass 0, or set laplaceOptimizer = \"mize\".",
+      call. = FALSE)
+  } else as.integer(polish_steps)
+  if(resolved_polish_steps > 0L && !identical(optimizer, "fisher")){
+    for(sIt in seq_len(resolved_polish_steps)){
       cur <- bigIRT_laplace_direct_objective(
         par = fit$par, state = state, sdat = sdat, prior_precision = prior_precision,
         theta_init = theta_warm, jitter = jitter, tol = person_tol,
