@@ -406,6 +406,10 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
       laplaceRefine = "none", laplaceCertify = TRUE))
     expect_false(ff$laplaceStatus$converged)
     expect_true(ff$laplaceStatus$certificate$status %in% c("suboptimal", "notmaximum"))
+    ## And when it says "not a maximum" it says by whose curvature, and what to
+    ## ask for instead.
+    if(identical(ff$laplaceStatus$certificate$status, "notmaximum"))
+      expect_match(ff$laplaceStatus$certificate$reason, "laplaceCertify = \"exact\"", fixed = TRUE)
   })
 
   test_that("a certificate over budget is skipped, says so, and leaves the optimiser's verdict", {
@@ -426,17 +430,21 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
       laplaceCertify = "yes"), "laplaceCertify must be")
   })
 
-  test_that("by default there is no certificate, and the standard errors are the profile ones", {
-    ## Off unless asked for: `converged` is the optimiser's own verdict and the
-    ## default standard errors are the closed-form ones, as before the
-    ## certificate existed.
+  test_that("by default a fit is certified by the fast route, and its errors come from it", {
+    ## The default: `converged` follows the fast certificate, and the default
+    ## standard errors are its curvature's. FALSE, tested above, restores the
+    ## optimiser's verdict and the profile errors.
     f <- fitIRT(fit3$sim$dat, pl = 3L, marginalApprox = "laplace", cores = 1L,
       ebayes = FALSE, dropPerfectScores = FALSE, keepInternals = TRUE)
-    expect_null(f$laplaceStatus$certificate)
-    expect_equal(f$laplaceStatus$reason, "predicted_gain")
+    ce <- f$laplaceStatus$certificate
+    expect_equal(ce$route, "fast")
+    expect_equal(ce$status, "certified")
+    expect_equal(f$laplaceStatus$reason, "certified")
     expect_true(f$laplaceStatus$converged)
-    expect_equal(summary(f)$se_method, "profile")
-    expect_equal(suppressMessages(itemInformation(f, time_budget = 0))$method, "profile")
+    expect_equal(summary(f)$se_method, "exact")
+    expect_equal(itemInformation(f)$method, "exact")
+    expect_equal(itemInformation(f)$se, t(sqrt(apply(ce$covariance$items, 3, diag))),
+      check.attributes = FALSE)
   })
 
   ## The fast route's item blocks come from the quadrature kernel by the Louis

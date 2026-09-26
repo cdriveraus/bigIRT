@@ -64,7 +64,7 @@ fitIRT(
   laplaceRefine = c("auto", "agq", "laplace2", "none"),
   agqNodes = NULL,
   agqPoints = NULL,
-  laplaceCertify = FALSE,
+  laplaceCertify = TRUE,
   laplaceKeepCovariance = FALSE,
   laplaceDiagnostics = FALSE,
   laplacePlot = FALSE,
@@ -424,16 +424,13 @@ pairwise expansion, in antithetic pairs, as importance sampling through
 the Laplace Gaussian. Held fixed during the fit they can be exploited
 unless there are many thousands. Default \code{NULL}.}
 
-\item{laplaceCertify}{Logical, character or numeric. Whether to certify
+\item{laplaceCertify}{Logical, character or numeric. How to certify
 convergence on the Laplace path, on the curvature of the objective the
-fit ended on (Laplace, or the refined marginal). Off by default: the
-optimiser's own stopping rule is what \code{converged} reports. Turn it
-on before reporting a fit whose convergence matters and is in doubt --
-a small fit, a 3PL or 4PL, estimated correlations, weakly identified
-asymptotes -- since the optimiser's rule is a limited-memory estimate of
-the same quantity and cannot see a transform that has gone flat, where
-the gradient and the curvature vanish together (a correlation parked at
-1.000 with a gradient of exactly zero).
+fit ended on (Laplace, or the refined marginal). The optimiser's own
+stopping rule is a limited-memory estimate of the same quantity and
+cannot see a transform that has gone flat, where the gradient and the
+curvature vanish together (a correlation parked at 1.000 with a gradient
+of exactly zero); the certificate can.
 
 The fit is certified when the predicted gain
 \eqn{\frac{1}{2} g' H^{-1} g} is below ten times \code{laplaceTol} nats,
@@ -441,20 +438,33 @@ no direction has negative curvature, and stepping along the directions
 with no curvature gains nothing; a discrimination, asymptote or latent
 correlation whose transform has gone flat is pulled back towards its
 live range, and a fit that gains from that is not a maximum.
-\code{converged} then follows the verdict, \code{laplaceStatus$certificate}
-holds it, and the standard errors of \code{\link{itemInformation}},
+\code{converged} follows the verdict, \code{laplaceStatus$certificate}
+holds it, and the default standard errors of \code{\link{itemInformation}},
 \code{summary()} and \code{tidyIRT()} come from its curvature.
 
-\code{TRUE} or \code{"fast"}: each item's block of the Hessian in one
-quadrature pass, the parameters shared across items by differencing,
-items coupled through those; it costs about one evaluation plus two per
-shared parameter the data reach (a latent correlation, the ability mean,
-a covariate coefficient), whatever the number of items or persons.
+\code{TRUE} or \code{"fast"} (the default): each item's block of the
+Hessian in one quadrature pass, the parameters shared across items by
+differencing, items coupled through those, which drops only the coupling
+between two items through the persons who answered both. It takes the
+time of about five to seven evaluations whatever the number of items or
+persons, a few per cent of a fit. On a fit that was not refined
+(\code{laplaceRefine = "none"}, or a 2PL at one dimension under
+\code{"auto"}) this curvature is the quadrature marginal's at the fitted
+modes rather than the Laplace objective's; the two agree near the
+optimum, and far from it a fit the exact route calls
+\code{"suboptimal"} may be called \code{"notmaximum"} here -- neither
+certifies it.
+
 \code{"exact"}: the whole Hessian by central differences of the
 gradient, two evaluations per free parameter, which roughly doubles a
-small fit and is out of reach for large ones; a number is the exact
-route with a budget in seconds, skipped with a message when one timed
-evaluation projects past it. Default \code{FALSE}.}
+small fit and is out of reach for large ones. Ask for it to have the
+fitted objective's own curvature, with the coupling between items kept,
+when a small fit's standard errors or an unrefined fit's verdict are what
+will be reported. A number is the exact route with a budget in seconds,
+skipped with a message when one timed evaluation projects past it.
+\code{FALSE} turns the certificate off: \code{converged} is then the
+optimiser's own verdict and the default standard errors the closed-form
+profile ones. Default \code{TRUE}.}
 
 \item{laplaceKeepCovariance}{Logical. Whether to keep full person covariance
 matrices on the Laplace path. Covariances are otherwise retained only when

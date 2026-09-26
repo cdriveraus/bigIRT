@@ -348,7 +348,7 @@ print.bigIRT_iteminfo <- function(x, ...){
     if(is.null(x$method)) "profile" else x$method,
     switch(if(is.null(x$method)) "profile" else x$method,
       profile = " (about 6% small; see ?itemInformation)",
-      exact = " (the full inverse of the exact Hessian of the fitted objective)", "")))
+      exact = " (the inverse of the convergence certificate's curvature)", "")))
   cat(sprintf("Effective parameters: %.1f of %d\n", x$edf_total, x$n_items * length(x$active)))
   print(summary(as.data.frame(x$se)))
   invisible(x)

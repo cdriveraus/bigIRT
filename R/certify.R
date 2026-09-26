@@ -776,6 +776,9 @@ bigIRT_certify <- function(final, par, context, state, sdat, prior_precision,
   }
   v <- bigIRT_certify_verdict(gap, probe, tolerance = tolerance,
     saturated = out$saturated, overshoot = overshoot)
+  if(fast && !agq && identical(v$status, "notmaximum") && isTRUE(gap$nnegative > 0L))
+    v$reason <- paste0(v$reason, " (by the quadrature marginal's curvature, as this fit ",
+      "was not refined; laplaceCertify = \"exact\" measures the fitted objective's own)")
   out$status <- v$status; out$certified <- v$certified; out$reason <- v$reason
   ## The covariance of the item blocks and of the shared block, from the full
   ## inverse, for the standard errors (itemInformation(method = "exact")):
