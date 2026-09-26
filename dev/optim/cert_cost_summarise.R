@@ -17,7 +17,7 @@ if(length(st)){
   cat("\n=== study fits: fast against exact, same fitted point ===\n")
   print(s[, .(reps = .N, host = paste(unique(host), collapse = ","), npar = npar[1],
     fit_s = round(median(fit), 1), fast_s = round(median(fast), 2),
-    fast_over_fit = round(median(fast / fit), 3), fast_evals = median(fast_evals),
+    fast_over_fit = round(median(fast / fit), 3), fast_evals = as.numeric(median(fast_evals)),
     exact_s = round(median(exact), 1), exact_over_fit = round(median(exact / fit), 2),
     same_verdict = sum(fast_status == exact_status),
     verdicts = paste(unique(paste(fast_status, exact_status, sep = "/")), collapse = " "),
