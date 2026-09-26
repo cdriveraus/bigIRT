@@ -32,10 +32,31 @@
 ## packages on different release cycles. Where the copy departs from ctsem it
 ## says so.
 ##
-## ## The Hessian
+## ## Two routes to the Hessian
 ##
-## Central differences (step 1e-4) of the analytic gradient in every free
-## coordinate, in the optimiser's coordinates. On a quadrature-refined fit the
+## "fast" (what `laplaceCertify = TRUE` runs). Each item's block comes from one
+## quadrature pass: with the nodes held at the fitted posterior the objective
+## is an ordinary sum over persons, and its item blocks are, by the Louis
+## identity, the node-weighted sum of each row's h + s s' less the outer product
+## of its weighted score (src/agq_backend.cpp). That keeps the coupling between
+## an item and its own persons exact and drops only the coupling between two
+## items through the persons who answered both. The parameters shared across
+## items get full columns: the mean hyperparameters from the item prior alone,
+## which is all they enter, and the rest -- latent correlations, the ability
+## mean, covariate coefficients -- by differencing the gradient. Items meet
+## each other only through that shared block's Schur complement. Cost: about
+## one evaluation for the blocks plus two per shared parameter that the data
+## reach, whatever the number of items or persons. On a quadrature fit the
+## blocks are the fitted objective's own; on a Laplace or second-order Laplace
+## fit they are the curvature of the refinement's quadrature marginal at the
+## fitted modes, which the fitted objective's equals up to the Laplace error
+## near the optimum. Far from it the two can differ even in sign: a Laplace fit
+## stopped after three iterations read "suboptimal" by the exact route and
+## "notmaximum" by this one -- both true, neither certifying.
+##
+## "exact" (`laplaceCertify = "exact"`, or a number of seconds as its
+## budget). Central differences (step 1e-4) of the analytic gradient in every
+## free coordinate, in the optimiser's coordinates. On a quadrature-refined fit the
 ## nodes are held at the fitted centre, where the Fisher-identity gradient is
 ## the exact gradient of a smooth function and no person mode is re-solved; on
 ## a Laplace or second-order Laplace fit every person mode is re-solved to
@@ -58,12 +79,12 @@
 ## measured where the full matrix is affordable, is in round 4 of the
 ## optimisation review.
 ##
-## The cost is two gradient evaluations per free parameter whichever form is
-## kept -- dropping the coupling saves memory and a factorisation, not
-## evaluations -- so it is gated the way itemInformation(method = "auto") is:
-## one evaluation is timed, and the curvature is computed only if the
-## projection fits `laplaceCertify` seconds. A skipped certificate says so, and
-## `converged` is then the optimiser's verdict.
+## The exact route costs two gradient evaluations per free parameter whichever
+## form is kept -- dropping the coupling saves memory and a factorisation, not
+## evaluations -- so it can be given a budget the way itemInformation(method =
+## "auto") is: one evaluation is timed, and the curvature is computed only if
+## the projection fits. A skipped certificate says so, and `converged` is then
+## the optimiser's verdict.
 ##
 ## ## Numerical noise
 ##
@@ -476,6 +497,122 @@ bigIRT_certify_pullback <- function(evaluate, par, saturated, layout, value,
   list(gain = best, moved = moved, groups = length(unique(grp)))
 }
 
+## --- the fast route ----------------------------------------------------------------
+
+## The Hessian over the kept coordinates as item blocks, their rows against the
+## shared coordinates, and the shared block (see the header). `run(p, ctx)`
+## evaluates the objective; `ctx_h` is the fitted objective with any
+## quadrature nodes held at the fitted centre.
+bigIRT_certify_fast_hessian <- function(par, keep, context, final, run, ctx_h,
+                                        state, sdat, layout, eps = 1e-4){
+  n <- length(par); m <- length(keep); pos <- match(seq_len(n), keep)
+  K <- as.integer(sdat$Nscales)
+  rc <- context$row_context
+  ## One pass with the nodes held at the fitted posterior: the fit's own rule,
+  ## or the refinement's default one for a fit that was not refined.
+  ctx_b <- context
+  if(is.null(ctx_b$agq)) ctx_b$agq <- bigIRT_agq_rules(K)
+  ctx_b$agq_centre <- final$posterior
+  ctx_b$agq_blocks <- TRUE
+  arr <- run(par, ctx_b)$item_fg$item_blocks
+  if(is.null(arr)) stop("the quadrature kernel returned no item blocks")
+  S <- K + 3L
+  ## Each item's coordinates, slot by slot (B, the loading on each dimension,
+  ## C, D), from its first row: every row of an item frees the same ones.
+  first <- match(seq_len(dim(arr)[3]), rc$items)
+  Aref <- if(is.null(dim(rc$A_ref))) matrix(as.integer(rc$A_ref), ncol = 1L) else rc$A_ref
+  slot_coord <- function(r) c(
+    if(length(layout$B) && rc$B_ref[r] > 0L) layout$B[rc$B_ref[r]] else NA_integer_,
+    vapply(seq_len(K), function(k)
+      if(length(layout$A) && Aref[r, k] > 0L) layout$A[Aref[r, k]] else NA_integer_, 1L),
+    if(length(layout$C) && rc$C_ref[r] > 0L) layout$C[rc$C_ref[r]] else NA_integer_,
+    if(length(layout$D) && rc$D_ref[r] > 0L) layout$D[rc$D_ref[r]] else NA_integer_)
+  ## The item prior's own curvature, which the pass does not include.
+  prec <- numeric(n)
+  if(isTRUE(as.logical(sdat$dopriors))) for(b in list(c("B", "BSDx"), c("A", "invspASD"),
+      c("C", "logitCSD"), c("D", "logitDSD"))){
+    idx <- layout[[b[1]]]
+    if(length(idx)) prec[idx] <- 1 / rep_len(pmax(as.numeric(sdat[[b[2]]]), 1e-8), length(idx))^2
+  }
+  Hblocks <- list(); blocks <- list()
+  for(j in seq_len(dim(arr)[3])){
+    r <- first[j]
+    if(is.na(r)) next
+    sc <- slot_coord(r)
+    ok <- which(!is.na(sc))
+    ok <- ok[!is.na(pos[sc[ok]])]          # saturated coordinates are left out
+    if(!length(ok)) next
+    Hj <- matrix(arr[, , j], S)[ok, ok, drop = FALSE] - diag(prec[sc[ok]], length(ok))
+    Hblocks[[length(Hblocks) + 1L]] <- Hj
+    blocks[[length(blocks) + 1L]] <- pos[sc[ok]]
+  }
+  shared <- setdiff(seq_len(m), unlist(blocks))
+  G <- keep[shared]
+  ps <- attr(layout, "par_scale"); if(length(ps) != n) ps <- rep(1, n)
+  means <- unlist(layout[intersect(c("B_mean", "A_mean", "C_mean", "D_mean"), names(layout))])
+  prior_grad <- function(p){
+    st <- bigIRT_laplace_unpack_direct_state(p, state, sdat, layout = layout,
+      corr_paramization = context$corr_paramization %||% "normalized_chol")
+    bigIRT_laplace_item_prior(st, sdat, layout = layout)$grad * ps
+  }
+  cols <- matrix(0, n, length(G))
+  for(a in seq_along(G)){
+    k <- G[a]
+    up <- par; up[k] <- up[k] + eps; dn <- par; dn[k] <- dn[k] - eps
+    cols[, a] <- if(k %in% means) (prior_grad(up) - prior_grad(dn)) / (2 * eps) else
+      (run(up, ctx_h)$approx_grad - run(dn, ctx_h)$approx_grad) / (2 * eps)
+  }
+  colsK <- cols[keep, , drop = FALSE]
+  Hs <- colsK[shared, , drop = FALSE]
+  list(Hblocks = Hblocks, Hcross = lapply(blocks, function(ix) colsK[ix, , drop = FALSE]),
+    Hshared = (Hs + t(Hs)) / 2, blocks = blocks, shared = shared,
+    noise = sqrt(sum(((Hs - t(Hs)) / 2)^2)),
+    shared_differenced = sum(!(G %in% means)))
+}
+
+## Item-block and shared-block covariances in natural coordinates when items
+## meet only through the shared block: V_jj = A_j^-1 + W_j S^-1 W_j', with
+## W_j = A_j^-1 B_j and S = C - sum_j B_j' W_j the shared block's Schur
+## complement (A, B, C the information's item blocks, cross blocks and shared
+## block). The same shape bigIRT_certificate_covariance() returns.
+bigIRT_block_covariance <- function(Hblocks, Hcross, Hshared, blocks, shared, keep,
+                                    layout, sdat, names_all){
+  n <- length(names_all)
+  ps <- attr(layout, "par_scale"); if(length(ps) != n) ps <- rep(1, n)
+  Ainv <- lapply(Hblocks, function(H) solve(-(H + t(H)) / 2))
+  Sc <- if(length(shared)) -as.matrix(Hshared) else matrix(0, 0, 0)
+  W <- vector("list", length(blocks))
+  for(j in seq_along(blocks)){
+    if(!length(shared)) next
+    Bj <- -as.matrix(Hcross[[j]])
+    W[[j]] <- Ainv[[j]] %*% Bj
+    Sc <- Sc - crossprod(Bj, W[[j]])
+  }
+  Sinv <- if(length(shared)) solve((Sc + t(Sc)) / 2) else matrix(0, 0, 0)
+  Vb <- lapply(seq_along(blocks), function(j)
+    if(length(shared)) Ainv[[j]] + W[[j]] %*% Sinv %*% t(W[[j]]) else Ainv[[j]])
+  blk_of <- integer(n); at <- integer(n)
+  for(j in seq_along(blocks)){ cj <- keep[blocks[[j]]]; blk_of[cj] <- j; at[cj] <- seq_along(cj) }
+  ni <- as.integer(sdat$Nitems)
+  active <- intersect(c("B", "A", "C", "D"), names(layout))
+  active <- active[vapply(active, function(b) length(layout[[b]]) == ni, logical(1))]
+  items <- NULL
+  if(length(active)){
+    P <- length(active)
+    items <- array(NA_real_, c(P, P, ni), dimnames = list(active, active, NULL))
+    for(j in seq_len(ni)){
+      cj <- vapply(active, function(b) layout[[b]][j], integer(1))
+      ok <- blk_of[cj] > 0L
+      if(!any(ok) || length(unique(blk_of[cj[ok]])) != 1L) next
+      V <- Vb[[blk_of[cj[ok]][1L]]]
+      items[ok, ok, j] <- V[at[cj[ok]], at[cj[ok]], drop = FALSE] * outer(ps[cj[ok]], ps[cj[ok]])
+    }
+  }
+  sh <- keep[shared]
+  list(items = items, shared = if(length(sh)){
+    X <- Sinv * outer(ps[sh], ps[sh]); dimnames(X) <- list(names_all[sh], names_all[sh]); X } else NULL)
+}
+
 ## --- the certificate -------------------------------------------------------------
 
 ## The certificate for one fit, at its final point.
@@ -484,13 +621,15 @@ bigIRT_certify_pullback <- function(evaluate, par, saturated, layout, value,
 ## left it (quadrature rule set and its centre cleared when a refinement ran,
 ## `laplace2` set when second-order Laplace ran). `state`, `sdat`,
 ## `prior_precision` and `jitter` are what the optimiser evaluated with.
-## `budget` is seconds; 0 turns the curvature off (the saturation check still
-## runs), Inf insists.
+## `route` is "fast" or "exact" (see the header); `budget` is seconds for the
+## exact route, 0 turning its curvature off (the saturation check still runs).
 bigIRT_certify <- function(final, par, context, state, sdat, prior_precision,
-                           layout, jitter = 1e-6, budget = 60, tolerance = 1e-3,
+                           layout, jitter = 1e-6, route = c("fast", "exact"),
+                           budget = Inf, tolerance = 1e-3,
                            eps = 1e-4, person_tol = 1e-10,
                            floor = getOption("bigIRT.saturation_floor", 1e-3),
                            dense_max = getOption("bigIRT.certify_dense_max", 2000)){
+  route <- match.arg(route)
   clock <- function() as.numeric(proc.time()[["elapsed"]])
   t_start <- clock()
   n <- length(par)
@@ -518,7 +657,7 @@ bigIRT_certify <- function(final, par, context, state, sdat, prior_precision,
     gap = NA_real_, lambda = NA_real_, ntrusted = NA_integer_, nflat = NA_integer_,
     nnegative = NA_integer_, lambda_min = NA_real_, noise = NA_real_,
     residual_gain = NA_real_, overshoot_gain = NA_real_, saturated = character(0),
-    route = NA_character_, evaluations = 0L, seconds = NA_real_,
+    route = NA_character_, route_asked = route, evaluations = 0L, seconds = NA_real_,
     projected_seconds = NA_real_)
 
   t0 <- clock()
@@ -546,7 +685,7 @@ bigIRT_certify <- function(final, par, context, state, sdat, prior_precision,
   budget <- suppressWarnings(as.numeric(budget)[1L])
   if(is.na(budget) || budget < 0) budget <- 0
   out$budget <- budget
-  if(out$projected_seconds > budget){
+  if(identical(route, "exact") && out$projected_seconds > budget){
     if(isTRUE(overshoot$gain > tolerance)){
       v <- bigIRT_certify_verdict(list(ok = TRUE, gap = 0, nnegative = 0L), NULL,
         tolerance = tolerance, saturated = out$saturated, overshoot = overshoot)
@@ -559,17 +698,28 @@ bigIRT_certify <- function(final, par, context, state, sdat, prior_precision,
     return(finish(out))
   }
 
-  ## The columns. Dense: the whole matrix over the kept coordinates. Blocks:
-  ## each item coordinate keeps its own item's rows and the shared rows, each
-  ## shared coordinate its full column.
-  dense <- m <= dense_max
-  out$route <- if(dense) "dense" else "blockschur"
+  ## The columns. Fast: item blocks from one quadrature pass, the shared
+  ## coordinates' full columns. Dense: the whole matrix over the kept
+  ## coordinates. Blocks: each item coordinate keeps its own item's rows and
+  ## the shared rows, each shared coordinate its full column.
+  fast <- identical(route, "fast")
+  dense <- !fast && m <= dense_max
+  out$route <- if(fast) "fast" else if(dense) "dense" else "blockschur"
   col <- function(k){
     up <- par; up[k] <- up[k] + eps; dn <- par; dn[k] <- dn[k] - eps
     (run(up, ctx_h)$approx_grad - run(dn, ctx_h)$approx_grad) / (2 * eps)
   }
   gk <- g[keep]
-  if(dense){
+  if(fast){
+    fh <- bigIRT_certify_fast_hessian(par = par, keep = keep, context = context,
+      final = final, run = run, ctx_h = ctx_h, state = state, sdat = sdat,
+      layout = layout, eps = eps)
+    blocks <- fh$blocks; shared <- fh$shared
+    Hblocks <- fh$Hblocks; Hcross <- fh$Hcross; Hshared <- fh$Hshared
+    out$noise <- fh$noise
+    gap <- bigIRT_optim_gap_blocks(Hblocks, Hcross, Hshared, blocks, shared,
+      gk, noise = out$noise)
+  } else if(dense){
     H <- matrix(NA_real_, m, m)
     for(i in seq_len(m)) H[, i] <- col(keep[i])[keep]
     out$noise <- sqrt(sum(((H - t(H)) / 2)^2))
@@ -631,10 +781,12 @@ bigIRT_certify <- function(final, par, context, state, sdat, prior_precision,
   ## inverse, for the standard errors (itemInformation(method = "exact")):
   ## kept only when every direction was trusted, since an inverse over the
   ## trusted subspace would hand a flat direction a finite standard error.
-  if(dense && isTRUE(gap$ok) && isTRUE(gap$ntrusted == m)){
-    V <- tryCatch(solve(-(H + t(H)) / 2), error = function(e) NULL)
-    if(!is.null(V)) out$covariance <- bigIRT_certificate_covariance(V, keep,
-      layout, sdat, names_all)
+  if(isTRUE(gap$ok) && isTRUE(gap$ntrusted == m)){
+    out$covariance <- if(dense){
+      V <- tryCatch(solve(-(H + t(H)) / 2), error = function(e) NULL)
+      if(!is.null(V)) bigIRT_certificate_covariance(V, keep, layout, sdat, names_all)
+    } else tryCatch(bigIRT_block_covariance(Hblocks, Hcross, Hshared, blocks, shared,
+      keep, layout, sdat, names_all), error = function(e) NULL)
   }
   finish(out)
 }
@@ -656,7 +808,8 @@ bigIRT_iteminfo_exact <- function(fit, cores = 1L){
     ce <- bigIRT_certify(final = d$eval, par = d$par, context = d$context,
       state = fit$internals$state, sdat = d$sdat,
       prior_precision = fit$internals$priorPrecision, layout = d$layout,
-      budget = Inf, tolerance = fit$laplaceStatus$certificate$tolerance %||% 1e-3)
+      route = fit$laplaceStatus$certificate$route_asked %||% "fast",
+      tolerance = fit$laplaceStatus$certificate$tolerance %||% 1e-3)
     cov <- ce$covariance
     if(is.null(cov$items))
       stop("The exact curvature of this fit cannot be inverted for standard errors (",

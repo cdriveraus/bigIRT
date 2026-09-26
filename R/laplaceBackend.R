@@ -1190,7 +1190,9 @@ bigIRT_laplace_direct_objective <- function(par, state, sdat, prior_precision,
       logitCbeta = curState$logitCbeta, logitDpars = curState$logitDpars, logitDbeta = curState$logitDbeta,
       prior_mean = prior_mean, prior_precision = prior_mats$precision_array,
       free_mask = 1L - sdat$fixedAbilityLogical, rule = agq_rule,
-      want_person = isTRUE(context$agq_want_person), grain_size = context$grain_size)
+      want_person = isTRUE(context$agq_want_person), grain_size = context$grain_size,
+      ## The certificate's item blocks (R/certify.R), when it asks.
+      block_items = if(isTRUE(context$agq_blocks)) row_context$items else integer(0))
     t_p2 <- wall_time_sec()
     direct_fg <- list(value = aq$value, posterior = posterior_q, item_fg = aq,
       timings = list(personKernelSec = t_p1 - t_p0, itemKernelSec = t_p2 - t_p1,
@@ -1935,8 +1937,8 @@ bigIRT_laplace_optimize_direct <- function(state, sdat, prior_precision,
   if(!is.null(certify) && !isTRUE(stochastic))
     fit$certificate <- tryCatch(bigIRT_certify(final = final, par = fit$par,
       context = context, state = state, sdat = sdat, prior_precision = prior_precision,
-      layout = direct_layout, jitter = jitter, budget = certify$budget,
-      tolerance = certify$tolerance),
+      layout = direct_layout, jitter = jitter, route = certify$route %||% "fast",
+      budget = certify$budget %||% Inf, tolerance = certify$tolerance),
       error = function(e) list(status = "unknown", certified = FALSE, converged = NA,
         reason = paste0("the certificate could not be computed: ", conditionMessage(e))))
   if(length(history)){

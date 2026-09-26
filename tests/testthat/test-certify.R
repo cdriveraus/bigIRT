@@ -239,8 +239,10 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
   ## Drive the optimiser directly from a chosen starting state, which is the
   ## only way to put a transform in its flat tail on purpose: fitIRT clamps a
   ## starting correlation at 0.999999.
+  ## The certificate is what these tests are about, so they ask for it: the
+  ## default fit carries none.
   direct_fit <- function(sim, pl, ecorr = FALSE, priors = TRUE, modify = identity,
-                         certify = list(budget = Inf, tolerance = 1e-3), tol = 1e-4){
+                         certify = list(route = "fast", tolerance = 1e-3), tol = 1e-4){
     f <- suppressWarnings(fitIRT(sim$dat, pl = pl, cores = 1, priors = priors,
       ebayes = FALSE, dropPerfectScores = FALSE, normalise = FALSE,
       marginalApprox = "laplace", laplaceOuterIter = 2, verbose = 0,
@@ -273,9 +275,14 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     expect_false(isTRUE(ce$converged))
     expect_equal(ce$saturated, "corr[1]")
     expect_gt(ce$overshoot_gain, 1)
-    ## The same data from an ordinary start is certified.
+    ## The same data from an ordinary start is certified, by either route.
     ok <- direct_fit(s, 2L, ecorr = TRUE)$optim$certificate
     expect_equal(ok$status, "certified")
+    expect_equal(ok$route, "fast")
+    ex <- direct_fit(s, 2L, ecorr = TRUE,
+      certify = list(route = "exact", tolerance = 1e-3))$optim$certificate
+    expect_equal(ex$status, "certified")
+    expect_equal(ex$route, "dense")
   })
 
   test_that("an asymptote on its bound, where the data put it, is a boundary estimate", {
@@ -294,12 +301,16 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     expect_lt(ce$overshoot_gain, 1e-3)
   })
 
+  ## The exact route is what the next tests check against a hand-built
+  ## Hessian, so the fixture asks for it by name; the fast route is compared
+  ## with it further down.
   fit3 <- local({
     set.seed(3)
     s <- simIRT(Nsubs = 800, Nitems = 15, Nscales = 1, AMean = 1.2, ASD = .3,
       BMean = 0, BSD = 1, logitCMean = -1.4, logitCSD = .25)
     list(sim = s, fit = fitIRT(s$dat, pl = 3L, marginalApprox = "laplace", cores = 1L,
-      ebayes = FALSE, keepInternals = TRUE, dropPerfectScores = FALSE))
+      ebayes = FALSE, keepInternals = TRUE, dropPerfectScores = FALSE,
+      laplaceCertify = "exact"))
   })
 
   test_that("the certificate's slopes find a flat transform and pass a live one", {
@@ -371,9 +382,12 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
   })
 
   test_that("a fit stopped early is not certified, and says how far it is", {
+    ## The exact route, by name: on an unrefined fit it is the one that
+    ## measures the fitted (Laplace) objective's own curvature, and this checks
+    ## its wording. The fast route is checked below for the verdict alone.
     f <- suppressWarnings(fitIRT(fit3$sim$dat, pl = 3L, marginalApprox = "laplace",
       cores = 1L, ebayes = FALSE, dropPerfectScores = FALSE, laplaceOuterIter = 3,
-      laplaceRefine = "none"))
+      laplaceRefine = "none", laplaceCertify = "exact"))
     ce <- f$laplaceStatus$certificate
     expect_equal(ce$status, "suboptimal")
     expect_false(f$laplaceStatus$converged)
@@ -381,7 +395,17 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     expect_gt(ce$gap, 1e-3)
     expect_warning(fitIRT(fit3$sim$dat, pl = 3L, marginalApprox = "laplace", cores = 1L,
       ebayes = FALSE, dropPerfectScores = FALSE, laplaceOuterIter = 3,
-      laplaceRefine = "none"), "not certified as converged \\(suboptimal\\)")
+      laplaceRefine = "none", laplaceCertify = "exact"), "not certified as converged \\(suboptimal\\)")
+    ## The fast route catches the same stop. Its item blocks there are the
+    ## quadrature marginal's at the Laplace modes, not the Laplace objective's,
+    ## and three iterations from the start that curvature is indefinite, so it
+    ## says "not a maximum" rather than how far: both are true, and neither
+    ## certifies.
+    ff <- suppressWarnings(fitIRT(fit3$sim$dat, pl = 3L, marginalApprox = "laplace",
+      cores = 1L, ebayes = FALSE, dropPerfectScores = FALSE, laplaceOuterIter = 3,
+      laplaceRefine = "none", laplaceCertify = TRUE))
+    expect_false(ff$laplaceStatus$converged)
+    expect_true(ff$laplaceStatus$certificate$status %in% c("suboptimal", "notmaximum"))
   })
 
   test_that("a certificate over budget is skipped, says so, and leaves the optimiser's verdict", {
@@ -398,5 +422,97 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     off <- fitIRT(fit3$sim$dat, pl = 3L, marginalApprox = "laplace", cores = 1L,
       ebayes = FALSE, dropPerfectScores = FALSE, laplaceCertify = FALSE)
     expect_null(off$laplaceStatus$certificate)
+    expect_error(fitIRT(fit3$sim$dat, pl = 3L, marginalApprox = "laplace", cores = 1L,
+      laplaceCertify = "yes"), "laplaceCertify must be")
+  })
+
+  test_that("by default there is no certificate, and the standard errors are the profile ones", {
+    ## Off unless asked for: `converged` is the optimiser's own verdict and the
+    ## default standard errors are the closed-form ones, as before the
+    ## certificate existed.
+    f <- fitIRT(fit3$sim$dat, pl = 3L, marginalApprox = "laplace", cores = 1L,
+      ebayes = FALSE, dropPerfectScores = FALSE, keepInternals = TRUE)
+    expect_null(f$laplaceStatus$certificate)
+    expect_equal(f$laplaceStatus$reason, "predicted_gain")
+    expect_true(f$laplaceStatus$converged)
+    expect_equal(summary(f)$se_method, "profile")
+    expect_equal(suppressMessages(itemInformation(f, time_budget = 0))$method, "profile")
+  })
+
+  ## The fast route's item blocks come from the quadrature kernel by the Louis
+  ## identity rather than by differencing, so they are checked against
+  ## differencing: with the nodes held fixed the two must agree to the
+  ## difference quotient's own error, on every slot a 3PL and a 4PL free, and
+  ## on items loading on either of two dimensions.
+  louis_vs_fd <- function(sim, pl, ecorr = FALSE, items){
+    f <- suppressWarnings(fitIRT(sim$dat, pl = pl, marginalApprox = "laplace", cores = 1L,
+      keepInternals = TRUE, dropPerfectScores = FALSE, ebayes = FALSE,
+      estimateAbilityCorr = ecorr, laplaceRefine = "agq"))
+    d <- bigIRT:::bigIRT_direct_eval_from_fit(f, keep_covariance = TRUE)
+    ctx <- d$context; ctx$agq_centre <- d$eval$posterior
+    ev <- function(p, cx) bigIRT:::bigIRT_laplace_direct_objective(par = p, state = d$state,
+      sdat = d$sdat, prior_precision = f$internals$priorPrecision,
+      theta_init = d$eval$posterior$theta_mode, keep_covariance = TRUE, context = cx,
+      tol = 1e-10, max_iter = 500L)
+    cb <- ctx; cb$agq_blocks <- TRUE
+    blk <- ev(d$par, cb)$item_fg$item_blocks
+    K <- d$sdat$Nscales; lay <- d$layout; rc <- d$context$row_context
+    prior_sd <- c(B = d$sdat$BSDx, A = d$sdat$invspASD, C = d$sdat$logitCSD, D = d$sdat$logitDSD)
+    worst <- 0; slots_seen <- character(0)
+    for(j in items){
+      r <- match(j, rc$items)
+      sc <- c(B = lay$B[rc$B_ref[r]],
+        setNames(vapply(seq_len(K), function(k) if(rc$A_ref[r, k] > 0) lay$A[rc$A_ref[r, k]]
+          else NA_integer_, 1L), paste0("A", seq_len(K))),
+        C = if(length(lay$C)) lay$C[rc$C_ref[r]] else NA, D = if(length(lay$D)) lay$D[rc$D_ref[r]] else NA)
+      keep <- which(!is.na(sc)); ix <- sc[keep]
+      L <- matrix(blk[, , j], K + 3)[keep, keep, drop = FALSE] -
+        diag(1 / prior_sd[substr(names(ix), 1, 1)]^2, length(ix))
+      H <- matrix(NA_real_, length(ix), length(ix))
+      for(a in seq_along(ix)){
+        up <- d$par; up[ix[a]] <- up[ix[a]] + 1e-4; dn <- d$par; dn[ix[a]] <- dn[ix[a]] - 1e-4
+        H[, a] <- ((ev(up, ctx)$approx_grad - ev(dn, ctx)$approx_grad) / 2e-4)[ix]
+      }
+      worst <- max(worst, max(abs(L - (H + t(H)) / 2)) / max(abs(H)))
+      slots_seen <- union(slots_seen, names(ix))
+    }
+    list(worst = worst, slots = slots_seen)
+  }
+
+  test_that("the kernel's item blocks are the fixed-node Hessian's (3PL and 4PL, K = 1 and 2)", {
+    r3 <- louis_vs_fd(fit3$sim, 3L, items = c(1, 8))
+    expect_lt(r3$worst, 1e-6)
+    expect_setequal(r3$slots, c("B", "A1", "C"))
+    set.seed(41)
+    s4 <- simIRT(Nsubs = 900L, Nitems = 12L, Nscales = 1, AMean = 1.1, ASD = .25, BMean = 0,
+      BSD = 1, logitCMean = -1.6, logitCSD = .2, logitDMean = 0.6, logitDSD = .15)
+    r4 <- louis_vs_fd(s4, 4L, items = c(2, 11))
+    expect_lt(r4$worst, 1e-6)
+    expect_setequal(r4$slots, c("B", "A1", "C", "D"))
+    set.seed(77)
+    s2 <- simIRT(Nsubs = 700, Nitems = 8, Nscales = 2, AMean = 1.2, ASD = .3, BMean = 0,
+      BSD = 1, AbilityCorr = matrix(c(1, .5, .5, 1), 2), logitCMean = -1.4, logitCSD = .25)
+    r2 <- louis_vs_fd(s2, 3L, ecorr = TRUE, items = c(3, 12))
+    expect_lt(r2$worst, 1e-6)
+    expect_setequal(r2$slots, c("B", "A1", "A2", "C"))
+  })
+
+  test_that("the fast certificate agrees with the exact one, for a few evaluations", {
+    f <- fitIRT(fit3$sim$dat, pl = 3L, marginalApprox = "laplace", cores = 1L,
+      ebayes = FALSE, keepInternals = TRUE, dropPerfectScores = FALSE, laplaceCertify = TRUE)
+    fast <- f$laplaceStatus$certificate; ex <- fit3$fit$laplaceStatus$certificate
+    expect_equal(fast$route, "fast")
+    expect_equal(fast$status, ex$status)
+    expect_true(f$laplaceStatus$converged)
+    ## Only the item-item coupling through shared persons is dropped; on the
+    ## coverage study's fits that moved the gap by a median 2 to 20 per cent.
+    expect_lt(abs(log(fast$gap / ex$gap)), log(2))
+    se_f <- sqrt(apply(fast$covariance$items, 3, diag))
+    se_e <- sqrt(apply(ex$covariance$items, 3, diag))
+    expect_lt(max(abs(se_f / se_e - 1)), 0.05)
+    ## The blocks in one pass, the item means from the prior alone: the
+    ## fitted value, its re-centred twin and the pass, and nothing per item.
+    expect_lte(fast$evaluations, 4L)
+    expect_gt(ex$evaluations, 2L * length(f$optim$par))
   })
 }

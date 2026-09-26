@@ -36,6 +36,21 @@
 // and no mode adjoint are needed, and every block -- item parameters, their
 // covariate coefficients, person covariates, the ability mean and the latent
 // covariance -- is a posterior expectation.
+//
+// THE ITEM BLOCKS of the Hessian, on request (`block_items`), by the Louis
+// identity: with the nodes held fixed, for rows r and t of one person,
+//
+//   d2/dpsi_r dpsi_t log p(y_i) = sum_q pi_iq (h_rq [r = t] + s_rq s_tq')
+//                                 - (sum_q pi_iq s_rq)(sum_q pi_iq s_tq)',
+//
+// s_rq and h_rq the score and Hessian of row r's log-likelihood at node q in
+// its item's own parameters. Only r = t is kept: each item's block, with the
+// coupling through its own persons' posteriors exact and the coupling between
+// two items through the persons who answered both dropped. One pass, at the
+// cost of one evaluation, where differencing the gradient costs two
+// evaluations per parameter. A grouped rule contributes group by group, with
+// the group coefficients. Per item, parameter slots are B, the loading on
+// each of the K dimensions, C and D; slots a row does not free are zero.
 
 #include <RcppEigen.h>
 #include <RcppParallel.h>
@@ -159,6 +174,11 @@ struct AgqWorker : public RcppParallel::Worker {
   const std::vector<AgqRule>& rules;   // indexed by the number of free dimensions
   const int K, P;
   const bool want_person;
+  // Item blocks of the Hessian (see the header): item of each row (1-based,
+  // 0 skips the row), and S = K + 3 slots an item.
+  AgqVec<int> block_items;
+  int n_items = 0, S_slots = 0;
+  std::vector<double> blk;
   // outputs owned by R, written per subject (disjoint)
   double* eap;        // N x K
   double* post_cov;   // K x K x N
@@ -186,7 +206,8 @@ struct AgqWorker : public RcppParallel::Worker {
       Bbeta(o.Bbeta), logitCpars(o.logitCpars), logitCbeta(o.logitCbeta), logitDpars(o.logitDpars),
       logitDbeta(o.logitDbeta), prior_mean(o.prior_mean), prior_precision(o.prior_precision),
       free_mask(o.free_mask), rules(o.rules), K(o.K), P(o.P),
-      want_person(o.want_person), eap(o.eap), post_cov(o.post_cov), value_by_subj(o.value_by_subj),
+      want_person(o.want_person), block_items(o.block_items), n_items(o.n_items), S_slots(o.S_slots),
+      eap(o.eap), post_cov(o.post_cov), value_by_subj(o.value_by_subj),
       value(0.0), failure(0) { zero_like(o); }
 
   void zero_like(const AgqWorker& o) {
@@ -196,6 +217,7 @@ struct AgqWorker : public RcppParallel::Worker {
     gCb.assign(o.gCb.size(), 0.0); gDb.assign(o.gDb.size(), 0.0);
     gAbil.assign(o.gAbil.size(), 0.0); gMean.assign(o.gMean.size(), 0.0);
     S.assign(o.S.size(), 0.0);
+    blk.assign(o.blk.size(), 0.0);
   }
 
   inline double beta_term(int obs, const AgqVec<double>& pred, const AgqVec<double>& beta, int brow) const {
@@ -281,6 +303,8 @@ struct AgqWorker : public RcppParallel::Worker {
       std::vector<double> lw(static_cast<std::size_t>(nq));
       std::vector<VectorXd> th(static_cast<std::size_t>(nq), m);
       std::vector<double> buf_eta(static_cast<std::size_t>(nq) * n), buf_c(buf_eta.size()), buf_d(buf_eta.size());
+      const bool want_blocks = n_items > 0;
+      std::vector<double> buf_etav(want_blocks ? buf_eta.size() : 0);
       const bool grouped = rule.G > 1 || !rule.mnode.empty();
       for (long q = 0; q < nq; ++q) {
         // A grouped rule's weights belong to its memberships, not its nodes.
@@ -303,6 +327,7 @@ struct AgqWorker : public RcppParallel::Worker {
             eta += arow(oi, k) * ab;
           }
           const AgqRow rt = agq_row(static_cast<double>(score[o]), eta, crow[oi], drow[oi]);
+          if (want_blocks) buf_etav[base + oi] = eta;
           lp += rt.ll;
           buf_eta[base + oi] = rt.g_eta; buf_c[base + oi] = rt.g_c; buf_d[base + oi] = rt.g_d;
         }
@@ -380,6 +405,9 @@ struct AgqWorker : public RcppParallel::Worker {
         }
       }
       for (int r = 0; r < K; ++r) for (int c = 0; c < K; ++c) S[static_cast<std::size_t>(r + K * c)] += Ett(r, c);
+      if (want_blocks) item_blocks_impl(obs, n, nq, th, off, amul, crow, cmul, drow, dmul,
+                                        buf_etav, pw, grouped, nm, gse, rule,
+                                        mem_node, mem_val, mem_grp);
       if (want_person) {
         for (int k = 0; k < K; ++k) eap[static_cast<std::size_t>(subj) + static_cast<std::size_t>(obs_by_subj.size()) * k] = Eth(k);
         const VectorXd dm = Eth - mu;
@@ -387,6 +415,115 @@ struct AgqWorker : public RcppParallel::Worker {
         for (int r = 0; r < K; ++r) for (int c = 0; c < K; ++c)
           post_cov[static_cast<std::size_t>(r + K * c) + static_cast<std::size_t>(K) * K * subj] = C(r, c);
       }
+    }
+  }
+
+  // Score and Hessian of one row's log-likelihood at one node, in its item's
+  // slots (B, loading on each dimension, C, D). eta is the row's linear
+  // predictor at the node; ab the row's abilities there.
+  inline void row_slots(const int o, const int oi, const double eta, const VectorXd& thq,
+                        const MatrixXd& off, const std::vector<double>& crow,
+                        const std::vector<double>& cmul, const std::vector<double>& drow,
+                        const std::vector<double>& dmul, const MatrixXd& amul,
+                        std::vector<double>& sv, std::vector<double>* hv) const {
+    const int SS = S_slots;
+    const double y = static_cast<double>(score[o]);
+    const double g = agq_inv_logit(eta);
+    const double c = crow[oi], dd = drow[oi], u = dd - c;
+    double p = c + u * g;
+    if (p < 1e-12) p = 1e-12;
+    if (p > 1.0 - 1e-12) p = 1.0 - 1e-12;
+    const double coeff = (y - p) / std::max(p * (1.0 - p), 1e-12);
+    const double lpp = -(y / (p * p) + (1.0 - y) / ((1.0 - p) * (1.0 - p)));
+    const double sp = g * (1.0 - g), spp = sp * (1.0 - 2.0 * g);
+    // p's derivatives in the linear predictor and the two asymptotes.
+    const double pe = u * sp, pc = 1.0 - g, pd = g, pee = u * spp, pec = -sp, ped = sp;
+    const double le = coeff * pe, lc = coeff * pc, ld = coeff * pd;
+    const double lee = lpp * pe * pe + coeff * pee, lec = lpp * pe * pc + coeff * pec;
+    const double led = lpp * pe * pd + coeff * ped;
+    const double lcc = lpp * pc * pc, lcd = lpp * pc * pd, ldd = lpp * pd * pd;
+    // The links' chain-rule factors: eta = sum_k softplus(raw_k) ab_k - b,
+    // c = logistic(x)/2, d = logistic(z)/2 + 1/2. A slot the row does not
+    // free has factor zero, so its score and Hessian rows are zero.
+    const double eb = B_ref[o] > 0 ? -1.0 : 0.0;
+    double ea[64], eaa[64];
+    for (int k = 0; k < K; ++k) {
+      ea[k] = 0.0; eaa[k] = 0.0;
+      if (A_ref(o, k) > 0) {
+        const double ab = fixed_ability(o, k) != 0 ? fixed_ability_value(o, k) : thq(k) + off(oi, k);
+        ea[k] = ab * amul(oi, k); eaa[k] = ab * amul(oi, k) * (1.0 - amul(oi, k));
+      }
+    }
+    const double cx = cmul[oi], cxx = cmul[oi] * (1.0 - 4.0 * c);
+    const double dz = dmul[oi], dzz = dmul[oi] * (3.0 - 4.0 * dd);
+    const int iC = K + 1, iD = K + 2;
+    sv[0] = le * eb;
+    for (int k = 0; k < K; ++k) sv[1 + k] = le * ea[k];
+    sv[iC] = lc * cx; sv[iD] = ld * dz;
+    if (!hv) return;
+    std::vector<double>& h = *hv;
+    auto put = [&](int a, int b, double v) { h[a + SS * b] = v; h[b + SS * a] = v; };
+    put(0, 0, lee * eb * eb);
+    for (int k = 0; k < K; ++k) {
+      put(0, 1 + k, lee * eb * ea[k]);
+      for (int l = k; l < K; ++l)
+        put(1 + k, 1 + l, lee * ea[k] * ea[l] + (k == l ? le * eaa[k] : 0.0));
+      put(1 + k, iC, lec * ea[k] * cx);
+      put(1 + k, iD, led * ea[k] * dz);
+    }
+    put(0, iC, lec * eb * cx); put(iC, iC, lcc * cx * cx + lc * cxx);
+    put(0, iD, led * eb * dz); put(iD, iD, ldd * dz * dz + ld * dzz);
+    put(iC, iD, lcd * cx * dz);
+  }
+
+  // Each row's contribution to its item's block (the Louis identity; see the
+  // header): the node-weighted sum of h + s s', less the outer product of the
+  // weighted score, group by group for a grouped rule.
+  template <class MemNode, class MemVal, class MemGrp>
+  void item_blocks_impl(const BigIRTObsSpan& obs, int n, long nq, const std::vector<VectorXd>& th,
+                        const MatrixXd& off, const MatrixXd& amul, const std::vector<double>& crow,
+                        const std::vector<double>& cmul, const std::vector<double>& drow,
+                        const std::vector<double>& dmul, const std::vector<double>& buf_etav,
+                        const std::vector<double>& pw, bool grouped, long nm,
+                        const std::vector<double>& gse, const AgqRule& rule,
+                        MemNode mem_node, MemVal mem_val, MemGrp mem_grp) {
+    const int SS = S_slots;
+    std::vector<double> sv(SS), hv(static_cast<std::size_t>(SS) * SS), M(hv.size()), m(SS);
+    std::vector<double> mg(grouped ? static_cast<std::size_t>(rule.G) * SS : 0);
+    for (int oi = 0; oi < n; ++oi) {
+      const int o = obs[oi];
+      const int it = block_items[o];
+      if (it <= 0 || it > n_items) continue;
+      std::fill(M.begin(), M.end(), 0.0); std::fill(m.begin(), m.end(), 0.0);
+      for (long q = 0; q < nq; ++q) {
+        if (pw[q] == 0.0) continue;
+        row_slots(o, oi, buf_etav[static_cast<std::size_t>(q) * n + oi], th[q], off, crow, cmul,
+                  drow, dmul, amul, sv, &hv);
+        for (int a = 0; a < SS; ++a) {
+          if (!grouped) m[a] += pw[q] * sv[a];
+          for (int b = 0; b < SS; ++b) M[a + SS * b] += pw[q] * (hv[a + SS * b] + sv[a] * sv[b]);
+        }
+      }
+      if (!grouped) {
+        for (int a = 0; a < SS; ++a) for (int b = 0; b < SS; ++b) M[a + SS * b] -= m[a] * m[b];
+      } else {
+        std::fill(mg.begin(), mg.end(), 0.0);
+        for (long j = 0; j < nm; ++j) {
+          const int g = mem_grp(j);
+          const double wj = std::exp(mem_val(j) - gse[g]);
+          const long q = mem_node(j);
+          row_slots(o, oi, buf_etav[static_cast<std::size_t>(q) * n + oi], th[q], off, crow, cmul,
+                    drow, dmul, amul, sv, nullptr);
+          for (int a = 0; a < SS; ++a) mg[static_cast<std::size_t>(g) * SS + a] += wj * sv[a];
+        }
+        for (int g = 0; g < rule.G; ++g) {
+          const double* mgg = &mg[static_cast<std::size_t>(g) * SS];
+          for (int a = 0; a < SS; ++a) for (int b = 0; b < SS; ++b)
+            M[a + SS * b] -= rule.coef[g] * mgg[a] * mgg[b];
+        }
+      }
+      double* B = &blk[static_cast<std::size_t>(it - 1) * SS * SS];
+      for (std::size_t e = 0; e < M.size(); ++e) B[e] += M[e];
     }
   }
 
@@ -398,10 +535,19 @@ struct AgqWorker : public RcppParallel::Worker {
     add(gA, o.gA); add(gB, o.gB); add(gC, o.gC); add(gD, o.gD);
     add(gAb, o.gAb); add(gBb, o.gBb); add(gCb, o.gCb); add(gDb, o.gDb);
     add(gAbil, o.gAbil); add(gMean, o.gMean); add(S, o.S);
+    add(blk, o.blk);
   }
 };
 
 } // namespace
+
+// The item blocks as an S x S x items array, or NULL when none were asked for.
+static SEXP blocks_out(const AgqWorker& w) {
+  if (w.n_items == 0) return R_NilValue;
+  Rcpp::NumericVector out(w.blk.begin(), w.blk.end());
+  out.attr("dim") = Rcpp::IntegerVector::create(w.S_slots, w.S_slots, w.n_items);
+  return out;
+}
 
 // Arguments follow the Laplace block kernels, plus the centring (mode and
 // posterior precision from the Laplace person step), the one-dimensional
@@ -418,7 +564,7 @@ extern "C" SEXP _bigIRT_agq_fg_cpp_impl(
     SEXP logitCparsSEXP, SEXP logitCbetaSEXP, SEXP logitDparsSEXP, SEXP logitDbetaSEXP,
     SEXP prior_meanSEXP, SEXP prior_precisionSEXP, SEXP free_maskSEXP,
     SEXP nodesSEXP, SEXP log_weightsSEXP, SEXP groupsSEXP, SEXP coefsSEXP,
-    SEXP want_personSEXP, SEXP grain_sizeSEXP) {
+    SEXP want_personSEXP, SEXP grain_sizeSEXP, SEXP block_itemsSEXP) {
   BEGIN_RCPP
   Rcpp::IntegerVector id(idSEXP);
   Rcpp::NumericMatrix theta_mode(theta_modeSEXP);
@@ -491,6 +637,16 @@ extern "C" SEXP _bigIRT_agq_fg_cpp_impl(
   w.logitDpars = cp_d(logitDparsSEXP); w.logitDbeta = cp_d(logitDbetaSEXP);
   w.prior_mean = cp_d(prior_meanSEXP); w.prior_precision = cp_d(prior_precisionSEXP);
   w.free_mask = cp_i(free_maskSEXP);
+  // Item blocks: the item of each row, 1-based; empty asks for none.
+  w.block_items = cp_i(block_itemsSEXP);
+  if (w.block_items.count() > 0) {
+    if (static_cast<int>(w.block_items.count()) != Nobs) Rcpp::stop("AGQ: block_items needs one entry per row.");
+    if (K > 61) Rcpp::stop("AGQ: item blocks support at most 61 dimensions.");
+    int mx = 0;
+    for (std::size_t i = 0; i < w.block_items.count(); ++i) mx = std::max(mx, w.block_items[i]);
+    w.n_items = mx; w.S_slots = K + 3;
+    w.blk.assign(static_cast<std::size_t>(w.S_slots) * w.S_slots * mx, 0.0);
+  }
   // A matrix with zero rows in R still reports its column count; the kernels
   // treat "no predictors" as zero columns.
   if (w.A_pred.nr == 0) w.A_pred.nc = 0;
@@ -522,6 +678,7 @@ extern "C" SEXP _bigIRT_agq_fg_cpp_impl(
     Rcpp::Named("grad_A_beta") = asv(w.gAb), Rcpp::Named("grad_B_beta") = asv(w.gBb),
     Rcpp::Named("grad_C_beta") = asv(w.gCb), Rcpp::Named("grad_D_beta") = asv(w.gDb),
     Rcpp::Named("grad_ability_beta") = gAbil, Rcpp::Named("grad_mean") = asv(w.gMean),
-    Rcpp::Named("S") = S, Rcpp::Named("eap") = eap, Rcpp::Named("post_cov") = post_cov);
+    Rcpp::Named("S") = S, Rcpp::Named("eap") = eap, Rcpp::Named("post_cov") = post_cov,
+    Rcpp::Named("item_blocks") = blocks_out(w));
   END_RCPP
 }
