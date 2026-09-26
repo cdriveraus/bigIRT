@@ -1148,9 +1148,8 @@ print.bigIRT_fit <- function(x, ...){
   status <- x$laplaceStatus
   if(!is.null(status)){
     cat(sprintf("Laplace: %s after %s iteration(s) [%s]\n",
-      if(isTRUE(status$converged)) "strictly converged" else if(isTRUE(status$stable_plateau)) "stable plateau" else "not strictly converged",
+      if(isTRUE(status$converged)) "strictly converged" else "not strictly converged",
       status$outer_iters %||% NA_integer_, status$reason %||% "unknown"))
-    if(isTRUE(status$approximate_gradient)) cat("Note: direct Laplace uses approximate global derivatives.\n")
     if(isTRUE(status$beta_frozen)) cat("Note: person-predictor effects were held fixed.\n")
   }
   if(!is.null(status$certificate)) cat(bigIRT_certificate_line(status$certificate), "\n", sep = "")
@@ -1484,20 +1483,21 @@ bigIRT_validate_fit_inputs <- function(dat, score, id, item, scale, pl, controls
 #'   and at 1e-3 the block-diagonal metric ended 1.1e-3 to 1.3e-3 nats short of
 #'   the optimum in 6 of 18 large fits; at 1e-4, none of 18 ended more than
 #'   2e-4 short, for 3 to 5 per cent more time.
-#' @param laplaceTolScale Character. What the objective-change tolerances in
-#'   \code{laplaceTol} are measured against on the Laplace path.
+#' @param laplaceTolScale Character. What the scaled gradient norm compared
+#'   against \code{laplaceGradTol} is measured against on the Laplace path
+#'   (\code{laplaceTol} itself is the separate, unscaled predicted-gain
+#'   criterion under \code{laplaceOptimizer = "fisher"}).
 #'   \code{\"relative\"} (the default, and the historical behaviour) divides
-#'   the change by the size of the objective. Because the objective grows
-#'   with the number of responses, the same nominal tolerance becomes laxer
-#'   as data grow: on several million responses a relative change of 1e-3 is
-#'   an absolute change in the thousands, and a fit can stop while it is
-#'   still moving. \code{\"per_obs\"} divides by the number of responses
-#'   instead, so the quantity thresholded is the change in mean
-#'   log-likelihood per response and does not depend on data size. Prefer it
-#'   when comparing fits across designs of very different sizes, but note
-#'   that it is far stricter at large N: a tolerance chosen for
-#'   \code{\"relative\"} should not be carried over unchanged. The scale used
-#'   is recorded in \code{laplaceStatus$tolerance_scale}.
+#'   the raw gradient norm by the size of the objective. Because the
+#'   objective grows with the number of responses, the same nominal
+#'   tolerance becomes laxer as data grow: on several million responses a
+#'   relative change of 1e-3 is an absolute change in the thousands, and a
+#'   fit can stop while it is still moving. \code{\"per_obs\"} divides by the
+#'   number of responses instead, so the quantity thresholded is the
+#'   gradient per response and does not depend on data size. Prefer it when
+#'   comparing fits across designs of very different sizes, but note that it
+#'   is far stricter at large N: a tolerance chosen for \code{\"relative\"}
+#'   should not be carried over unchanged.
 #' @param keepInternals Logical. Attach the prepared data (\code{sdat}), the
 #'   final parameter state and the prior precision array to the returned fit.
 #'   Off by default because these carry copies of the response arrays. Useful
@@ -1509,8 +1509,12 @@ bigIRT_validate_fit_inputs <- function(dat, score, id, item, scale, pl, controls
 #'   progress while a single Newton step still recovered 146 units of objective.
 #'   The curvature is the per-item information already used for standard errors,
 #'   so a step costs one closed-form assembly and a short backtracking search.
-#'   Set to 0 to disable. Default is 8. Applies to
-#'   \code{laplaceOptimizer = "mize"} only.
+#'   Applies to \code{laplaceOptimizer = "mize"} only -- the Fisher-shaped
+#'   optimizer has no polish stage, because it already reaches the optimum
+#'   L-BFGS gives up short of. Default is \code{NA}, meaning the optimiser's
+#'   own choice: 8 under \code{"mize"}, none under \code{"fisher"}. Set to 0 to
+#'   disable under \code{"mize"}; an explicit nonzero value under
+#'   \code{"fisher"} is refused rather than silently ignored.
 #' @param laplaceOptimizer Character. Optimiser for the Laplace backend.
 #'   \code{"fisher"} (default) is L-BFGS whose initial inverse Hessian is
 #'   shaped by the Fisher information of the marginal likelihood, including
@@ -1721,7 +1725,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   marginalApprox=c("none","laplace","laplace_fast","laplace_direct"),
   estimateAbilityCorr=FALSE,
   laplaceCorrParam=c("stan_corsqrt","normalized_chol"),
-  keepInternals=FALSE,laplaceOuterIter=500,laplaceTol=1e-4,laplaceTolScale=c("relative","per_obs"),laplaceGradTol=1e-4,laplacePolish=8L,laplacePersonTol=1e-6,laplaceOptimizer=c("fisher","mize"),
+  keepInternals=FALSE,laplaceOuterIter=500,laplaceTol=1e-4,laplaceTolScale=c("relative","per_obs"),laplaceGradTol=1e-4,laplacePolish=NA,laplacePersonTol=1e-6,laplaceOptimizer=c("fisher","mize"),
   laplaceRefine=c("auto","agq","laplace2","none"),agqNodes=NULL,agqPoints=NULL,
   laplaceCertify=60,
   laplaceKeepCovariance=FALSE,laplaceDiagnostics=FALSE,laplacePlot=FALSE,laplacePlotEvery=1L,
@@ -2289,13 +2293,14 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   }
 
   if(identical(marginalApprox, "laplace") && length(which(sdat$Abilityparsindex > 0)) > 0){
-    ## Item predictors are fine here; person predictors are not. The guard used
-    ## to refuse both, but the item beta gradients agree with finite differences
-    ## to about 2e-9, so refusing them only pushed item-covariate models onto the
-    ## slower path for no reason. The ability_beta gradient really is wrong --
-    ## against finite differences its ratio wanders between .04 and 3.1 rather
-    ## than sitting at any constant -- so person predictors stay blocked until
-    ## that derivative is derived properly.
+    ## Item and person predictors are both fine here. A guard here used to
+    ## refuse both: item beta gradients agree with finite differences to about
+    ## 2e-9, so refusing them only pushed item-covariate models onto the
+    ## slower path for no reason, and the ability_beta gradient -- which
+    ## really was wrong, its ratio against finite differences wandering
+    ## between .04 and 3.1 rather than sitting at any constant -- has since
+    ## been fixed (see CLAUDE.md, "Plausible output is not evidence", and
+    ## test-personPreds.R / test-within-person-covariates.R).
     optimdots <- list(...)
     laplaceVerbose <- if("verbose" %in% names(optimdots)) as.integer(optimdots$verbose) else 0L
     collectDirectDiag <- isTRUE(laplaceDiagnostics) || isTRUE(laplacePlot)
@@ -2484,11 +2489,11 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
       eb_prev_delta <- delta
       ## Settling early must not skip the final pass. Every empirical-Bayes
       ## round runs at a deliberately coarse tolerance -- `ebayesCoarse` times
-      ## the requested one, a hundredfold by default -- because its only job is
+      ## the requested one, a thousandfold by default -- because its only job is
       ## to give the hyperparameter step something to work from. The pass that
       ## follows the last update is the one whose estimates are returned, and it
       ## runs at the requested tolerance with the Newton polish. Breaking out
-      ## here returned a fit optimised a hundred times too loosely and never
+      ## here returned a fit optimised a thousand times too loosely and never
       ## polished, which left it just the wrong side of the gradient tolerance.
       ## Retiring the budget instead makes the next iteration that final pass.
       if(max(rel_vec[setdiff(names(rel_vec), eb_frozen)], 0) < 1e-3 ||
@@ -2585,16 +2590,19 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
       }
     }
     fit$laplaceStatus <- list(
+      ## The certificate's verdict when it reached one (R/certify.R), the
+      ## optimiser's own labels otherwise.
       converged = if(is.na(cert_converged)) strict_direct else cert_converged,
       reason = if(!is.na(cert_converged)) certificate$status else
         if(gain_converged) "predicted_gain" else
-        if(isTRUE(strict_direct)) "approx_gradient" else "max_iter",
+        if(isTRUE(strict_direct)) "approx_gradient" else
+        if(direct_terminate %in% c("linesearch_failed", "not_descent")) "linesearch_failed" else
+        "max_iter",
       certificate = certificate,
       outer_iters = if(!is.null(directFit$optim$iter)) directFit$optim$iter else max(2L, as.integer(laplaceOuterIter)),
       beta_frozen = bigIRT_laplace_beta_frozen(sdat, directFit$optim$layout),
       initialized_from = "prior_anchored",
       direct_objective = TRUE,
-      approximate_gradient = TRUE,
       gradient_type = if(!is.null(directFit$optim$refine)) "agq_fisher_identity" else
         "mode_adjusted_laplace_item_gradient",
       estimated_corr = estimateAbilityCorr,
@@ -2619,6 +2627,10 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
       clipped_partial = as.integer(directFit$optim$clip_final[["partial"]] %||% NA_integer_),
       clipped_full = as.integer(directFit$optim$clip_final[["full"]] %||% NA_integer_),
       agq_rule = if(!is.null(directFit$optim$refine)) directFit$optim$refine$rule else NULL,
+      ## Persons where the second-order correction itself (not the mode
+      ## solve) was skipped, e.g. for a numerically unusable local expansion.
+      ## NA when laplace2 did not run at all (no refinement, or agq instead).
+      laplace2_skipped = directFit$eval$laplace2_skipped,
       laplace_logLik = if(!is.null(directFit$optim$refine)) directFit$optim$refine$laplace_value else directFit$eval$value,
       refine = directFit$optim$refine,
       item_grad_denominator = directGradDenom,
@@ -2827,8 +2839,8 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
         ## latent one. With normalise = TRUE the estimated correlation was
         ## therefore unreachable from the returned object, which is how a
         ## Mindsteps fit came to report .320 for both.
-        if(!is.null(fit$laplaceStatus$ability_corr))
-          fit$abilityPrior$corr_latent <- as.matrix(fit$laplaceStatus$ability_corr)
+        if(!is.null(fit$abilityPrior$corr))
+          fit$abilityPrior$corr_latent <- as.matrix(fit$abilityPrior$corr)
         fit$abilityPrior$corr <- stats::cor(fit$pars$Ability, use = "pairwise.complete.obs")
         fit$abilityPrior$precision <- solve(
           diag(fit$abilityPrior$sd, ncol(fit$pars$Ability)) %*%
@@ -2951,7 +2963,6 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   if(!is.null(fit$laplaceStatus)){
     status <- fit$laplaceStatus
     status$strict_convergence <- isTRUE(status$converged)
-    status$stable_plateau <- identical(status$reason, "stability_patience")
     ## Two backends reported hitting the cap differently: the outer loop said
     ## "max_outer_iter", the direct optimiser says "max_iter". Both mean the
     ## fit stopped because it ran out of iterations, and both must warn.
@@ -2961,19 +2972,10 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
       sum(!fit$personPosterior$converged) else NA_integer_
     status$numerical_failure <- !is.finite(fit$optim$logLik) ||
       (!is.null(status$last_item_grad_norm) && !is.finite(status$last_item_grad_norm))
-    ## A tolerated number of unresolved modes must not relabel a genuine stable
-    ## plateau as a failure: the fit stopped because it settled, and the
-    ## unresolved count is reported separately.  Only an intolerable share, or
-    ## an absent tolerance, overrides the recorded reason.
-    status$person_modes_tolerated <- isTRUE(is.finite(status$person_converged_fraction)) &&
-      isTRUE(is.finite(status$person_fail_fraction_allowed)) &&
-      isTRUE(status$person_converged_fraction >= 1 - status$person_fail_fraction_allowed)
-    if(!isTRUE(status$converged) && isTRUE(status$person_mode_failures > 0L) &&
-       !isTRUE(status$person_modes_tolerated))
+    if(!isTRUE(status$converged) && isTRUE(status$person_mode_failures > 0L))
       status$reason <- "person_mode_failures"
     if(isTRUE(status$numerical_failure)) status$reason <- "numerical_failure"
     status$covariance_retained <- !is.null(fit$personPosterior$covariance)
-    status$approximate_gradient <- isTRUE(status$approximate_gradient)
     status$frozen_effects <- isTRUE(status$beta_frozen)
     fit$laplaceStatus <- status
     ## A tolerance stop short of the gradient target used to pass in silence:
@@ -2981,11 +2983,11 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     ## failure, so no branch below claimed it. That is the loudest case there
     ## is -- the optimiser gave up while the gradient was still large.
     status$stalled <- !isTRUE(status$converged) && !isTRUE(status$iteration_limit) &&
-      !isTRUE(status$stable_plateau) && !isTRUE(status$numerical_failure) &&
-      !isTRUE(status$person_mode_failures > 0L) &&
+      !isTRUE(status$numerical_failure) && !isTRUE(status$person_mode_failures > 0L) &&
+      ## A certificate that reached a verdict has already warned in its own
+      ## terms, in nats rather than a gradient.
       is.na(bigIRT_certificate_converged(status$certificate$status))
-    intolerable_modes <- isTRUE(status$person_mode_failures > 0L) &&
-      !isTRUE(status$person_modes_tolerated)
+    intolerable_modes <- isTRUE(status$person_mode_failures > 0L)
     if(isTRUE(status$iteration_limit) || intolerable_modes ||
        isTRUE(status$numerical_failure) || isTRUE(status$stalled)){
       warning(sprintf("%s stopped with %s%s.", fit$backend,
@@ -2998,14 +3000,6 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
           else "")
         else "person-mode failures",
         if(isTRUE(status$person_mode_failures > 0L)) sprintf(" (%d unresolved)", status$person_mode_failures) else ""), call. = FALSE)
-    } else if(isTRUE(status$stable_plateau)){
-      message(sprintf("%s stopped on a stable plateau; this is a qualified, not strict-convergence result.%s",
-        fit$backend,
-        if(isTRUE(status$person_mode_failures > 0L))
-          sprintf(" %d of %d person modes (%.2f%%) remained unresolved, within the tolerated share.",
-            status$person_mode_failures,
-            length(fit$personPosterior$converged),
-            100 * (1 - status$person_converged_fraction)) else ""))
     }
   }
   class(fit) <- c("bigIRT_fit", "list")

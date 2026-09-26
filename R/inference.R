@@ -800,8 +800,11 @@ looIRT <- function(fit, draws = 500L, persons = NULL, seed = NULL, cores = 1L){
   keep_person <- if(is.null(persons)) seq_len(sdat$Nsubs) else
     sort(sample.int(sdat$Nsubs, min(as.integer(persons), sdat$Nsubs)))
   sel <- ids %in% keep_person
-  tr <- sdat$trainingRows
-  if(!is.null(tr)){ inbag <- rep(FALSE, sdat$Nobs); inbag[tr] <- TRUE; sel <- sel & inbag }
+  ## `sdat` (fit$prepared) carries the training flag as `trainingLogical`; it
+  ## has no `trainingRows` field at all, so reading that name here used to be
+  ## a silent no-op and every held-out response was scored as if it had been
+  ## part of the training likelihood.
+  sel <- sel & (as.integer(sdat$trainingLogical) == 1L)
   rows <- which(sel)
   S <- as.integer(draws)
   if(S * length(rows) > 4e8)
@@ -826,10 +829,24 @@ looIRT <- function(fit, draws = 500L, persons = NULL, seed = NULL, cores = 1L){
   b <- as.numeric(re$b)[rows]; cc <- as.numeric(re$c)[rows]; dd <- as.numeric(re$d)[rows]
   y <- as.numeric(sdat$score)[rows]; pid <- ids[rows]
 
+  ## `theta` draws are around the BASE ability (personPosterior$mode omits the
+  ## person-covariate term, like thetaBase everywhere else in this file); the
+  ## offset x_row'beta has to be added per row, using that row's own covariate
+  ## value, the same way bigIRT_row_ability() builds the reported
+  ## fit$pars$Ability. personPreds are stored per response, not per person, so
+  ## a within-person covariate is not necessarily constant across a person's
+  ## own rows.
+  ability_offset <- matrix(0, length(rows), K)
+  if(isTRUE(sdat$NpersonPreds > 0) && length(fit$pars$Abilitybeta)){
+    person_pred <- as.matrix(sdat$personPreds)[rows, , drop = FALSE]
+    ability_offset <- person_pred %*% t(as.matrix(fit$pars$Abilitybeta))
+  }
+
   ll <- matrix(NA_real_, S, length(rows))
   for(s in seq_len(S)){
     th <- theta[s, pid, , drop = TRUE]
     if(is.null(dim(th))) th <- matrix(th, ncol = K)
+    th <- th + ability_offset
     eta <- rowSums(lo * th) - b
     g <- inv_logit(eta)
     p <- pmin(pmax(cc + (dd - cc) * g, 1e-12), 1 - 1e-12)

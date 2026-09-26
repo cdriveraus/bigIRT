@@ -58,7 +58,7 @@ fitIRT(
   laplaceTol = 1e-04,
   laplaceTolScale = c("relative", "per_obs"),
   laplaceGradTol = 1e-04,
-  laplacePolish = 8L,
+  laplacePolish = NA,
   laplacePersonTol = 1e-06,
   laplaceOptimizer = c("fisher", "mize"),
   laplaceRefine = c("auto", "agq", "laplace2", "none"),
@@ -316,20 +316,21 @@ and at 1e-3 the block-diagonal metric ended 1.1e-3 to 1.3e-3 nats short of
 the optimum in 6 of 18 large fits; at 1e-4, none of 18 ended more than
 2e-4 short, for 3 to 5 per cent more time.}
 
-\item{laplaceTolScale}{Character. What the objective-change tolerances in
-\code{laplaceTol} are measured against on the Laplace path.
+\item{laplaceTolScale}{Character. What the scaled gradient norm compared
+against \code{laplaceGradTol} is measured against on the Laplace path
+(\code{laplaceTol} itself is the separate, unscaled predicted-gain
+criterion under \code{laplaceOptimizer = "fisher"}).
 \code{\"relative\"} (the default, and the historical behaviour) divides
-the change by the size of the objective. Because the objective grows
-with the number of responses, the same nominal tolerance becomes laxer
-as data grow: on several million responses a relative change of 1e-3 is
-an absolute change in the thousands, and a fit can stop while it is
-still moving. \code{\"per_obs\"} divides by the number of responses
-instead, so the quantity thresholded is the change in mean
-log-likelihood per response and does not depend on data size. Prefer it
-when comparing fits across designs of very different sizes, but note
-that it is far stricter at large N: a tolerance chosen for
-\code{\"relative\"} should not be carried over unchanged. The scale used
-is recorded in \code{laplaceStatus$tolerance_scale}.}
+the raw gradient norm by the size of the objective. Because the
+objective grows with the number of responses, the same nominal
+tolerance becomes laxer as data grow: on several million responses a
+relative change of 1e-3 is an absolute change in the thousands, and a
+fit can stop while it is still moving. \code{\"per_obs\"} divides by the
+number of responses instead, so the quantity thresholded is the
+gradient per response and does not depend on data size. Prefer it when
+comparing fits across designs of very different sizes, but note that it
+is far stricter at large N: a tolerance chosen for \code{\"relative\"}
+should not be carried over unchanged.}
 
 \item{laplaceGradTol}{Numeric. Tolerance for the item-block gradient,
 measured relative to the objective rather than as a raw norm: the reported
@@ -347,8 +348,12 @@ early on large problems: at eight million responses it reported no further
 progress while a single Newton step still recovered 146 units of objective.
 The curvature is the per-item information already used for standard errors,
 so a step costs one closed-form assembly and a short backtracking search.
-Set to 0 to disable. Default is 8. Applies to
-\code{laplaceOptimizer = "mize"} only.}
+Applies to \code{laplaceOptimizer = "mize"} only -- the Fisher-shaped
+optimizer has no polish stage, because it already reaches the optimum
+L-BFGS gives up short of. Default is \code{NA}, meaning the optimiser's
+own choice: 8 under \code{"mize"}, none under \code{"fisher"}. Set to 0 to
+disable under \code{"mize"}; an explicit nonzero value under
+\code{"fisher"} is refused rather than silently ignored.}
 
 \item{laplacePersonTol}{Numeric. Newton tolerance for person-mode updates in
 \code{"laplace"}: the gradient norm at which each person's mode solve

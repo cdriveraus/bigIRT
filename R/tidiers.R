@@ -69,11 +69,20 @@ tidyIRT <- function(x, conf.int = FALSE, conf.level = 0.95,
   if(!is.null(info)){
     ## itemInformation works on the free parameters, which are not the
     ## parameters reported here: discrimination is estimated as the softplus
-    ## pre-image of A, and the asymptotes as logits of C and D. Putting those
-    ## standard errors beside A, C or D unchanged would be a units error, and a
-    ## quiet one, so carry them across by the delta method:
-    ##   A = softplus(z),   dA/dz = logistic(z)      = A' where A' is sigmoid
-    ##   C = logistic(z),   dC/dz = C (1 - C)
+    ## pre-image of A, and the asymptotes as logits scaled to their half of
+    ## the unit interval (cfunc/dfunc, R/fitIRT.R): C = logistic(z)/2 is the
+    ## guessing asymptote, bounded to [0, .5], and D = logistic(z)/2 + .5 is
+    ## the slipping one, bounded to [.5, 1]. Putting those standard errors
+    ## beside A, C or D unchanged would be a units error, and a quiet one, so
+    ## carry them across by the delta method:
+    ##   A = softplus(z),  dA/dz = logistic(z) = A' where A' is sigmoid
+    ##   C = logistic(z)/2,       dC/dz = C (1 - 2C)
+    ##   D = logistic(z)/2 + .5,  dD/dz = (2D - 1)(1 - D)
+    ## bigIRT_dc_dx()/bigIRT_dd_dx() (R/inference.R) derive and use the same
+    ## two factors for the item-information block itself; using them here
+    ## keeps the two from drifting apart the way they once did -- the plain
+    ## logistic factors C(1-C) and D(1-D) overstate the C and D standard
+    ## errors here by (1-C)/(1-2C) and D/(2D-1) respectively.
     ## Difficulty is estimated directly and needs no transform.
     for(b in intersect(blocks, info$active)){
       sel <- out$term == b
@@ -83,7 +92,8 @@ tidyIRT <- function(x, conf.int = FALSE, conf.level = 0.95,
         B = rep(1, length(est_b)),
         ## softplus'(z) = logistic(z) = 1 - exp(-A)
         A = 1 - exp(-pmax(est_b, 0)),
-        C = , D = est_b * (1 - est_b),
+        C = bigIRT_dc_dx(est_b),
+        D = bigIRT_dd_dx(est_b),
         rep(1, length(est_b)))
       out$std.error[sel] <- se_b * abs(jac)
     }

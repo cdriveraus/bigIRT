@@ -207,7 +207,11 @@ test_that("laplace returns posterior outputs and finite MIRT parameters", {
   expect_true(all(c("mode", "precision", "precision_chol", "logdet_precision") %in% names(fit$personPosterior)))
   expect_true(is.list(fit$laplaceStatus))
   expect_s3_class(fit, "bigIRT_fit")
-  expect_true(all(c("strict_convergence", "stable_plateau", "iteration_limit",
+  ## stable_plateau is not in this list: it could only ever be TRUE when
+  ## status$reason == "stability_patience", which no code path sets, so it
+  ## was always FALSE and has been removed (R/fitIRT.R) rather than kept as a
+  ## field that can never be informative.
+  expect_true(all(c("strict_convergence", "iteration_limit",
     "person_mode_failures", "numerical_failure", "frozen_effects",
     "covariance_retained") %in% names(fit$laplaceStatus)))
   expect_match(paste(capture.output(print(fit)), collapse = "\n"), "Laplace")
@@ -293,7 +297,11 @@ test_that("laplace returns posterior outputs and avoids legacy JML", {
   expect_true(all(is.finite(fit$pars$A)))
   expect_identical(fit$laplaceStatus$initialized_from, "prior_anchored")
   expect_true(isTRUE(fit$laplaceStatus$direct_objective))
-  expect_true(isTRUE(fit$laplaceStatus$approximate_gradient))
+  ## approximate_gradient is gone, not FALSE: the direct-Laplace item gradient
+  ## is exact now (CLAUDE.md, "The Laplace curvature, and the gradient test
+  ## that proved nothing"), so there is no longer a fact for the field to
+  ## report, and print.bigIRT_fit no longer claims otherwise.
+  expect_null(fit$laplaceStatus$approximate_gradient)
 })
 
 test_that("laplace final person parameters use the resolved posterior modes", {
