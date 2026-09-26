@@ -1475,20 +1475,21 @@ bigIRT_validate_fit_inputs <- function(dat, score, id, item, scale, pl, controls
 #'   and at 1e-3 the block-diagonal metric ended 1.1e-3 to 1.3e-3 nats short of
 #'   the optimum in 6 of 18 large fits; at 1e-4, none of 18 ended more than
 #'   2e-4 short, for 3 to 5 per cent more time.
-#' @param laplaceTolScale Character. What the objective-change tolerances in
-#'   \code{laplaceTol} are measured against on the Laplace path.
+#' @param laplaceTolScale Character. What the scaled gradient norm compared
+#'   against \code{laplaceGradTol} is measured against on the Laplace path
+#'   (\code{laplaceTol} itself is the separate, unscaled predicted-gain
+#'   criterion under \code{laplaceOptimizer = "fisher"}).
 #'   \code{\"relative\"} (the default, and the historical behaviour) divides
-#'   the change by the size of the objective. Because the objective grows
-#'   with the number of responses, the same nominal tolerance becomes laxer
-#'   as data grow: on several million responses a relative change of 1e-3 is
-#'   an absolute change in the thousands, and a fit can stop while it is
-#'   still moving. \code{\"per_obs\"} divides by the number of responses
-#'   instead, so the quantity thresholded is the change in mean
-#'   log-likelihood per response and does not depend on data size. Prefer it
-#'   when comparing fits across designs of very different sizes, but note
-#'   that it is far stricter at large N: a tolerance chosen for
-#'   \code{\"relative\"} should not be carried over unchanged. The scale used
-#'   is recorded in \code{laplaceStatus$tolerance_scale}.
+#'   the raw gradient norm by the size of the objective. Because the
+#'   objective grows with the number of responses, the same nominal
+#'   tolerance becomes laxer as data grow: on several million responses a
+#'   relative change of 1e-3 is an absolute change in the thousands, and a
+#'   fit can stop while it is still moving. \code{\"per_obs\"} divides by the
+#'   number of responses instead, so the quantity thresholded is the
+#'   gradient per response and does not depend on data size. Prefer it when
+#'   comparing fits across designs of very different sizes, but note that it
+#'   is far stricter at large N: a tolerance chosen for \code{\"relative\"}
+#'   should not be carried over unchanged.
 #' @param keepInternals Logical. Attach the prepared data (\code{sdat}), the
 #'   final parameter state and the prior precision array to the returned fit.
 #'   Off by default because these carry copies of the response arrays. Useful
@@ -2264,13 +2265,14 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   }
 
   if(identical(marginalApprox, "laplace") && length(which(sdat$Abilityparsindex > 0)) > 0){
-    ## Item predictors are fine here; person predictors are not. The guard used
-    ## to refuse both, but the item beta gradients agree with finite differences
-    ## to about 2e-9, so refusing them only pushed item-covariate models onto the
-    ## slower path for no reason. The ability_beta gradient really is wrong --
-    ## against finite differences its ratio wanders between .04 and 3.1 rather
-    ## than sitting at any constant -- so person predictors stay blocked until
-    ## that derivative is derived properly.
+    ## Item and person predictors are both fine here. A guard here used to
+    ## refuse both: item beta gradients agree with finite differences to about
+    ## 2e-9, so refusing them only pushed item-covariate models onto the
+    ## slower path for no reason, and the ability_beta gradient -- which
+    ## really was wrong, its ratio against finite differences wandering
+    ## between .04 and 3.1 rather than sitting at any constant -- has since
+    ## been fixed (see CLAUDE.md, "Plausible output is not evidence", and
+    ## test-personPreds.R / test-within-person-covariates.R).
     optimdots <- list(...)
     laplaceVerbose <- if("verbose" %in% names(optimdots)) as.integer(optimdots$verbose) else 0L
     collectDirectDiag <- isTRUE(laplaceDiagnostics) || isTRUE(laplacePlot)
@@ -2454,11 +2456,11 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
       eb_prev_delta <- delta
       ## Settling early must not skip the final pass. Every empirical-Bayes
       ## round runs at a deliberately coarse tolerance -- `ebayesCoarse` times
-      ## the requested one, a hundredfold by default -- because its only job is
+      ## the requested one, a thousandfold by default -- because its only job is
       ## to give the hyperparameter step something to work from. The pass that
       ## follows the last update is the one whose estimates are returned, and it
       ## runs at the requested tolerance with the Newton polish. Breaking out
-      ## here returned a fit optimised a hundred times too loosely and never
+      ## here returned a fit optimised a thousand times too loosely and never
       ## polished, which left it just the wrong side of the gradient tolerance.
       ## Retiring the budget instead makes the next iteration that final pass.
       if(max(rel_vec[setdiff(names(rel_vec), eb_frozen)], 0) < 1e-3 ||
