@@ -297,7 +297,11 @@ test_that("laplace returns posterior outputs and avoids legacy JML", {
   expect_true(all(is.finite(fit$pars$A)))
   expect_identical(fit$laplaceStatus$initialized_from, "prior_anchored")
   expect_true(isTRUE(fit$laplaceStatus$direct_objective))
-  expect_true(isTRUE(fit$laplaceStatus$approximate_gradient))
+  ## approximate_gradient is gone, not FALSE: the direct-Laplace item gradient
+  ## is exact now (CLAUDE.md, "The Laplace curvature, and the gradient test
+  ## that proved nothing"), so there is no longer a fact for the field to
+  ## report, and print.bigIRT_fit no longer claims otherwise.
+  expect_null(fit$laplaceStatus$approximate_gradient)
 })
 
 test_that("laplace final person parameters use the resolved posterior modes", {

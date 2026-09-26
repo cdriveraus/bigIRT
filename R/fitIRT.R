@@ -1150,7 +1150,6 @@ print.bigIRT_fit <- function(x, ...){
     cat(sprintf("Laplace: %s after %s iteration(s) [%s]\n",
       if(isTRUE(status$converged)) "strictly converged" else "not strictly converged",
       status$outer_iters %||% NA_integer_, status$reason %||% "unknown"))
-    if(isTRUE(status$approximate_gradient)) cat("Note: direct Laplace uses approximate global derivatives.\n")
     if(isTRUE(status$beta_frozen)) cat("Note: person-predictor effects were held fixed.\n")
   }
   invisible(x)
@@ -2560,7 +2559,6 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
       beta_frozen = bigIRT_laplace_beta_frozen(sdat, directFit$optim$layout),
       initialized_from = "prior_anchored",
       direct_objective = TRUE,
-      approximate_gradient = TRUE,
       gradient_type = if(!is.null(directFit$optim$refine)) "agq_fisher_identity" else
         "mode_adjusted_laplace_item_gradient",
       estimated_corr = estimateAbilityCorr,
@@ -2924,7 +2922,6 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
       status$reason <- "person_mode_failures"
     if(isTRUE(status$numerical_failure)) status$reason <- "numerical_failure"
     status$covariance_retained <- !is.null(fit$personPosterior$covariance)
-    status$approximate_gradient <- isTRUE(status$approximate_gradient)
     status$frozen_effects <- isTRUE(status$beta_frozen)
     fit$laplaceStatus <- status
     ## A tolerance stop short of the gradient target used to pass in silence:
