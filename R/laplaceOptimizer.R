@@ -246,6 +246,45 @@ bigIRT_block_inverse <- function(A){
   I
 }
 
+## Coordinates whose curvature is numerically nil next to the rest: a diagonal
+## not above `rel` of the largest (non-positive ones included). An unregularised
+## loading on the flat tail of its softplus is one -- at a raw value of -124 its
+## slope is 1e-54 and its curvature 1e-108. Left in the metric, its inverse
+## moved that coordinate by its coupling to every other gradient over that
+## curvature: a step of 9e53, which no line search can shorten to sense (30
+## shortenings reach 1e-30), so the fit took no step at all (unregularised 3D
+## 2PL, M_misspecified_N450_r007, Laplace and quadrature alike). The same rule
+## is applied to the item blocks in src/fisher_blocks.cpp.
+bigIRT_metric_flat <- function(dg, rel = 1e-12){
+  dg <- as.numeric(dg)
+  top <- suppressWarnings(max(dg[is.finite(dg)]))
+  if(!is.finite(top) || !(top > 0)) return(which(!(dg > 0)))
+  which(!(dg > rel * top))
+}
+
+## The metric with the tiny-but-positive ones decoupled -- row and column
+## zeroed -- and given the median of the other curvatures. Its step is then its
+## own gradient over an ordinary curvature, which for a flat coordinate is next
+## to nothing: it stays where it is, and the certificate says whether it should
+## not. With `nonpos`, a non-positive diagonal (no data, no prior) gets the
+## median as the block metrics always gave it, couplings kept; the dense
+## metrics never did that, and do not now. Either way a metric without tiny
+## diagonals is exactly as it was.
+bigIRT_metric_decouple <- function(M, rel = 1e-12, nonpos = TRUE){
+  dg <- as.numeric(if(inherits(M, "Matrix")) Matrix::diag(M) else diag(M))
+  flat <- bigIRT_metric_flat(dg, rel)
+  tiny <- flat[dg[flat] > 0]
+  if(!nonpos) flat <- tiny
+  if(!length(flat)) return(M)
+  ok <- dg[setdiff(seq_along(dg), bigIRT_metric_flat(dg, rel))]
+  med <- max(if(length(ok)) stats::median(ok) else 0, 1e-8)
+  if(length(tiny)){ M[tiny, ] <- 0; M[, tiny] <- 0 }
+  if(inherits(M, "Matrix"))
+    M <- M + Matrix::sparseMatrix(i = flat, j = flat, x = rep(med, length(flat)), dims = dim(M))
+  else diag(M)[flat] <- med
+  M
+}
+
 ## Factor a symmetric metric, with a small ridge if rounding or a
 ## finite-difference column has broken positive definiteness. CHOLMOD warns as
 ## well as failing; the failure is handled here, so the warning is not the
@@ -365,7 +404,7 @@ bigIRT_laplace_fisher_solver <- function(ev, x, g, sdat, context, layout, gfun, 
     }
     H <- Matrix::Matrix(H, sparse = TRUE)
   }
-  bigIRT_laplace_factor_metric(H)
+  bigIRT_laplace_factor_metric(bigIRT_metric_decouple(H, nonpos = FALSE))
 }
 
 ## Block-diagonal metric, for fits too large for the dense one.
@@ -432,12 +471,9 @@ bigIRT_laplace_blockdiag_solver <- function(ev, x, g, sdat, context, layout, gfu
   }
   Bd <- Matrix::sparseMatrix(i = ti, j = tj, x = tx, dims = c(n, n))
   ## A parameter no data and no prior reach (possible only in odd
-  ## specifications) still needs a positive diagonal to factor.
-  dg <- Matrix::diag(Bd)
-  fixd <- which(!(dg > 0))
-  if(length(fixd)) Bd <- Bd + Matrix::sparseMatrix(i = fixd, j = fixd,
-    x = rep(max(stats::median(dg[dg > 0]), 1e-8), length(fixd)), dims = c(n, n))
-  bigIRT_laplace_factor_metric(Bd)
+  ## specifications) still needs a positive diagonal to factor, and one on a
+  ## flat transform must not be moved by its coupling (bigIRT_metric_flat).
+  bigIRT_laplace_factor_metric(bigIRT_metric_decouple(Bd))
 }
 
 ## The prior curvature, cached for the optimiser run: it depends on the
@@ -521,7 +557,7 @@ bigIRT_laplace_fisher_solver_cpp <- function(ev, x, g, sdat, context, layout, gf
       Fm[, j] <- col; Fm[j, ] <- col
     }
   }
-  Fm <- (Fm + t(Fm)) / 2
+  Fm <- bigIRT_metric_decouple((Fm + t(Fm)) / 2, nonpos = FALSE)
   ch <- NULL; ridge <- 0
   for(attempt in 1:6){
     ch <- tryCatch(chol(if(ridge > 0) Fm + diag(ridge, n) else Fm), error = function(e) NULL)
@@ -557,10 +593,7 @@ bigIRT_laplace_blockdiag_solver_cpp <- function(ev, x, g, sdat, context, layout,
       k <- match(j, G)
       FG[, k] <- col; FG[k, ] <- col
     }
-    FG <- (FG + t(FG)) / 2
-    dg <- diag(FG)
-    bad <- which(!(dg > 0))
-    if(length(bad)) diag(FG)[bad] <- max(stats::median(dg[dg > 0]), 1e-8)
+    FG <- bigIRT_metric_decouple((FG + t(FG)) / 2)
     ch <- NULL; ridge <- 0
     for(attempt in 1:6){
       ch <- tryCatch(chol(if(ridge > 0) FG + diag(ridge, nrow(FG)) else FG), error = function(e) NULL)

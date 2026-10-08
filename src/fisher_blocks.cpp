@@ -468,10 +468,20 @@ static SEXP fb_impl(const bool dense,
     if (static_cast<int>(v.size()) <= bpos[p]) v.resize(static_cast<std::size_t>(bpos[p]) + 1, -1);
     v[static_cast<std::size_t>(bpos[p])] = p;
   }
+  // A diagonal not above 1e-12 of the largest is numerically flat -- a loading
+  // on the flat tail of its softplus, curvature 1e-108 -- and is decoupled and
+  // given the median below, as bigIRT_metric_decouple does in R: left in, its
+  // inverse moved that coordinate by 1e53 and no line search could recover.
+  double top = 0;
+  for (std::size_t b = 0; b < bdim.size(); ++b) for (int i = 0; i < bdim[b]; ++i) {
+    const double x = w.blocks[static_cast<std::size_t>(bofs[b] + i + bdim[b] * i)] + prior_diag[bpar[b][i]];
+    if (x > top) top = x;
+  }
+  const double flat = 1e-12 * top;
   std::vector<double> dg;
   for (std::size_t b = 0; b < bdim.size(); ++b) for (int i = 0; i < bdim[b]; ++i) {
     const double x = w.blocks[static_cast<std::size_t>(bofs[b] + i + bdim[b] * i)] + prior_diag[bpar[b][i]];
-    if (x > 0) dg.push_back(x);
+    if (x > flat) dg.push_back(x);
   }
   double med = 1e-8;
   if (!dg.empty()) { std::nth_element(dg.begin(), dg.begin() + dg.size() / 2, dg.end()); med = std::max(dg[dg.size() / 2], 1e-8); }
@@ -485,6 +495,8 @@ static SEXP fb_impl(const bool dense,
     for (int j = 0; j < dim; ++j) for (int i = 0; i < dim; ++i)
       M(i, j) = w.blocks[static_cast<std::size_t>(bofs[b] + i + dim * j)];
     for (int i = 0; i < dim; ++i) { M(i, i) += prior_diag[bpar[b][i]]; if (!(M(i, i) > 0)) M(i, i) = med; }
+    for (int i = 0; i < dim; ++i) if (M(i, i) > 0 && !(M(i, i) > flat)) {
+      M.row(i).setZero(); M.col(i).setZero(); M(i, i) = med; }
     M = 0.5 * (M + M.transpose());
     Eigen::LLT<MatrixXd> llt(M);
     double ridge = 1e-8 * M.diagonal().cwiseAbs().maxCoeff();

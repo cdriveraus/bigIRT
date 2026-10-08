@@ -74,9 +74,10 @@ test_that("a 1-D refinement ends no lower than it started, and where its approxi
     dropPerfectScores = FALSE, normalise = FALSE, laplaceRefine = "agq",
     cores = 1, verbose = 0, plot = FALSE))
   st <- fit$laplaceStatus; rf <- st$refine
-  ## The case still does what it is here for: a stretch on held nodes lost on
-  ## the re-centred objective, and the fit went on with moving nodes.
-  expect_true(isTRUE(rf$held_nodes_lost > 0))
+  ## Two of its loadings sit on the flat end of their softplus, which also
+  ## threw the optimiser's metric (see the test on that below); with that
+  ## fixed, no stretch on held nodes loses here, and the 3-D case below is
+  ## the one that still exercises the judge.
   ## Before: 15.8 nats lower than the start, item 22 at a discrimination of
   ## 3335 -- where quadrature put the objective 19.7 nats below the exact
   ## marginal, and the exact marginal was 1.17 below its maximum.
@@ -146,6 +147,40 @@ test_that("the refinement does not park a run-off item on the screen", {
 })
 
 }
+
+test_that("a loading on the flat tail of its softplus is not thrown by the metric", {
+  ## Unregularised fit M_misspecified_N450_r007 ended its Laplace stage with
+  ## one raw loading at -124: slope 1e-54, curvature 1e-108. Every metric
+  ## moved that coordinate by its coupling to the other gradients over that
+  ## curvature, a step of 9e53, so no step length along the direction gained
+  ## and neither Laplace nor the quadrature refinement took a step. Put there
+  ## by hand on the 1-D fixture, each metric must now leave it essentially
+  ## where it is and still point uphill.
+  d <- readRDS(test_path("fixtures", "agq-runoff-1d.rds")); d$Scale <- 1L
+  fit <- suppressWarnings(fitIRT(d, pl = 2, priors = FALSE, estMeans = character(0),
+    dropPerfectScores = FALSE, normalise = FALSE, laplaceRefine = "none",
+    laplaceCertify = FALSE, keepInternals = TRUE, cores = 1, verbose = 0, plot = FALSE))
+  ev <- bigIRT:::bigIRT_direct_eval_from_fit(fit)
+  lay <- ev$layout; par <- ev$par
+  k <- lay$A[5]
+  par[k] <- -124
+  run <- function(p) bigIRT:::bigIRT_laplace_direct_objective(par = p, state = ev$state,
+    sdat = ev$sdat, prior_precision = fit$internals$priorPrecision,
+    theta_init = fit$internals$thetaBase, jitter = 1e-6, keep_covariance = TRUE,
+    context = ev$context)
+  r0 <- run(par)
+  e <- list(f = -r0$value, g = -r0$approx_grad, ev = r0, x = par)
+  gfun <- function(p) -run(p)$approx_grad
+  for(impl in c("cpp", "R")) for(type in c("dense", "blockdiag")){
+    withr::local_options(bigIRT.dense_impl = impl, bigIRT.blockdiag_impl = impl)
+    minv <- bigIRT:::bigIRT_laplace_metric_solver(e, ev$sdat, ev$context, lay, gfun, type = type)
+    step <- -minv(e$g)
+    expect_true(all(is.finite(step)), label = paste(impl, type))
+    expect_lt(abs(step[k]), 1, label = paste(impl, type, "step on the flat loading"))
+    gain <- max(vapply(10^(0:-4), function(a) run(par + a * step)$value - r0$value, numeric(1)))
+    expect_gt(gain, 0, label = paste(impl, type, "best gain along the step"))
+  }
+})
 
 test_that("a refresh can end the L-BFGS search", {
   ## A quadratic the search would take many iterations over; the refresh

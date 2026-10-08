@@ -45,6 +45,17 @@
   and four end up to 0.005 nats higher, each at one more evaluation. Tests:
   `test-agq-runoff.R`, against the exact marginal on frozen data, which fails
   on the old code.
+* An unregularised loading driven onto the flat tail of its softplus (a raw
+  value of -124 in one case: slope 1e-54, curvature 1e-108) made the
+  optimiser's metric move it by its coupling to every other gradient over
+  that curvature, a step of 1e53 that no line search could shorten to sense,
+  so the fit took no step at all -- Laplace and the quadrature refinement
+  alike -- and stopped wherever it was. Each metric (dense and
+  block-diagonal, R and C++) now decouples a coordinate whose curvature is
+  below 1e-12 of the largest and gives it an ordinary one, so it stays where
+  it is and the certificate judges it. Metrics without such a coordinate,
+  which includes every fit with item priors, are exactly as before. Test:
+  `test-agq-runoff.R`, which fails on the old code for all four metrics.
 * `dropPerfectScores` (on by default) decided whom to drop from all rows,
   held-out ones included, so held-out responses changed which persons and
   items were fitted. It now decides from the `trainingRows` only.
