@@ -5,3 +5,8 @@ src/*.o
 src/*.dll
 src/*.so
 src/*.rds
+
+# Test-run and check artefacts
+tests/testthat/Rplots.pdf
+*.Rcheck/
+00LOCK-*/
