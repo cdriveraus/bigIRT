@@ -103,6 +103,18 @@
   iterations where the old one did get there. Fits whose item means are
   fixed have no border and are unchanged. Test: `test-laplace-optimizer.R`,
   two of whose checks fail on the old code.
+* Empirical Bayes with a prior centre held fixed (`estMeans` leaving it out)
+  measured the items' spread about their own mean, then applied that SD about
+  the fixed centre. With the loading centre placed away from the items (raw
+  2.5, a = 2.6, against items generated at a = 1) it fitted an SD of about
+  .45 and dragged the loadings to a mean of 1.94 to 2.15; it now measures the
+  spread about the centre in force, fits 1.86 to 2.03, and the loadings
+  average 1.03 to 1.13 (three seeds). With estimated centres, the default,
+  nothing changes. Test: `test-ebayes-centre.R`, which fails on the old code.
+* A fit whose items run off with item priors in force no longer advises
+  `priors = TRUE`; it says the priors in force did not prevent it (joint MAP
+  with empirical Bayes can do this, through an estimated centre or a floored
+  SD).
 * With abilities fixed (`personDat`), the optimiser's metric
   (`src/fisher_blocks.cpp`) formed its Schur term over every person's
   columns, including the all-zero ones of the fixed persons. It now skips

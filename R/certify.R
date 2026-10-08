@@ -693,9 +693,13 @@ bigIRT_runaway_pull <- function(par, r, f, sdat, layout){
 
 ## The `diverged` verdict, wrapped around `rest` -- the verdict on everything
 ## else -- when anything ran off.
+## `priors`: whether item priors were in force. Without them the remedy is to
+## turn them on; with them it is not, and saying so sent the reader to a
+## setting already in place (joint MAP with empirical Bayes, whose estimated
+## centre or floored SD let loadings run off with priors = TRUE).
 bigIRT_runaway_verdict <- function(rest, runaway, pulled, tolerance, nscales,
                                    item_labels = NULL, scale_labels = NULL,
-                                   slope = bigIRT_runaway_slope()){
+                                   slope = bigIRT_runaway_slope(), priors = FALSE){
   if(is.null(runaway) || !nrow(runaway)) return(rest)
   r <- bigIRT_runaway_named(runaway, nscales, item_labels, scale_labels)
   items <- unique(r$item)
@@ -723,7 +727,9 @@ bigIRT_runaway_verdict <- function(rest, runaway, pulled, tolerance, nscales,
   reason <- paste0(bigIRT_name_list(desc), if(several) " have" else " has",
     " run off, beyond ", format(slope), " logits per ability SD: ", why, ". ",
     if(several) "Their" else "Its", " values are arbitrary points on a ray to infinity, ",
-    "which item priors (priors = TRUE) would bound. The rest: ", rest$status,
+    if(isTRUE(priors)) "which the item priors in force did not prevent (an estimated prior centre or an empirical-Bayes SD can let them go)" else
+      "which item priors (priors = TRUE) would bound",
+    ". The rest: ", rest$status,
     if(!is.null(rest$reason) && !is.na(rest$reason)) paste0(" -- ", rest$reason))
   list(status = "diverged", certified = FALSE, reason = reason)
 }
@@ -972,6 +978,7 @@ bigIRT_certify <- function(final, par, context, state, sdat, prior_precision,
       pullback_gain = pulled$gain[match(runaway$item, pulled$item)])
   }
   wrap <- function(v) bigIRT_runaway_verdict(v, runaway, pulled, tolerance = tolerance,
+    priors = isTRUE(as.logical(sdat$dopriors)),
     nscales = sdat$Nscales, item_labels = item_labels, scale_labels = scale_labels,
     slope = slope)
   keep <- setdiff(seq_len(n), c(sat, runaway$coordinate))
