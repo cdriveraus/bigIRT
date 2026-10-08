@@ -85,69 +85,6 @@ bigIRT_signed_loading_matrix <- function(sdat){
     ncol = as.integer(sdat$Nscales), byrow = TRUE)
 }
 
-## Evaluate against prepared data. Only the item parameters cross the boundary.
-bigIRT_laplace_item_eval <- function(prepared, invspApars, invspAbeta, Bpars, Bbeta,
-  logitCpars, logitCbeta, logitDpars, logitDbeta, grain_size = 64L,
-  adjoint_scale = getOption("bigIRT.adjoint_scale", 1),
-  logdet_scale = getOption("bigIRT.logdet_scale", 1)){
-  .Call(`_bigIRT_laplace_item_eval_cpp_impl`, prepared,
-    as.numeric(invspApars), as.matrix(invspAbeta),
-    as.numeric(Bpars), as.matrix(Bbeta),
-    as.numeric(logitCpars), as.matrix(logitCbeta),
-    as.numeric(logitDpars), as.matrix(logitDbeta),
-    as.numeric(adjoint_scale), as.numeric(logdet_scale), as.integer(grain_size))
-}
-
-bigIRT_laplace_item_block_objective_cpp_impl <- function(id, score, row_ability,
-  A_ref, A_fixed_value, A_beta_row, A_pred, A_signed,
-  B_ref, B_fixed_value, B_beta_row, B_pred,
-  C_ref, C_fixed_value, C_beta_row, C_pred,
-  D_ref, D_fixed_value, D_beta_row, D_pred,
-  invspApars, invspAbeta, Bpars, Bbeta, logitCpars, logitCbeta, logitDpars, logitDbeta,
-  prior_precision, jitter, max_attempts, grain_size = 64L,
-  adjoint_scale = getOption("bigIRT.adjoint_scale", 1),
-  logdet_scale = getOption("bigIRT.logdet_scale", 1),
-  want_row_effective = FALSE){
-  .Call(
-    `_bigIRT_laplace_item_block_objective_cpp_impl`,
-    as.integer(id),
-    as.integer(score),
-    as.matrix(row_ability),
-    bigirt_int_matrix(A_ref, nrow(row_ability), ncol(row_ability)),
-    as.matrix(A_fixed_value),
-    bigirt_int_matrix(A_beta_row, nrow(row_ability), ncol(row_ability)),
-    as.matrix(A_pred),
-    as.integer(A_signed),
-    as.integer(B_ref),
-    as.numeric(B_fixed_value),
-    as.integer(B_beta_row),
-    as.matrix(B_pred),
-    as.integer(C_ref),
-    as.numeric(C_fixed_value),
-    as.integer(C_beta_row),
-    as.matrix(C_pred),
-    as.integer(D_ref),
-    as.numeric(D_fixed_value),
-    as.integer(D_beta_row),
-    as.matrix(D_pred),
-    as.numeric(invspApars),
-    as.matrix(invspAbeta),
-    as.numeric(Bpars),
-    as.matrix(Bbeta),
-    as.numeric(logitCpars),
-    as.matrix(logitCbeta),
-    as.numeric(logitDpars),
-    as.matrix(logitDbeta),
-    prior_precision,
-    as.numeric(jitter),
-    as.integer(max_attempts),
-    as.numeric(adjoint_scale),
-    as.numeric(logdet_scale),
-    as.integer(grain_size),
-    as.logical(want_row_effective)[1]
-  )
-}
-
 bigIRT_laplace_direct_block_fg_cpp_impl <- function(id, score, theta_init,
   person_pred, fixed_ability, fixed_ability_value,
   A_ref, A_fixed_value, A_beta_row, A_pred, A_signed,
@@ -1135,12 +1072,20 @@ bigIRT_laplace_person_step_block_cpp_impl <- function(id, score, theta_init,
   )
 }
 
-## Evaluate the direct Laplace objective by solving all person modes inside the
-## objective call. This is the experimental single-stage backend used by
-## `marginalApprox = "laplace_direct"`.
+## Evaluate the fitted objective at `par`, solving every person mode inside the
+## call. This is the Laplace objective, or its quadrature (`context$agq`) or
+## second-order (`context$laplace2`) refinement; with `context$map` set it is
+## the joint-MAP objective instead (R/mapBackend.R), which returns the same
+## structure, so the optimiser, metric, certificate and information code work
+## on either without knowing which.
 bigIRT_laplace_direct_objective <- function(par, state, sdat, prior_precision,
   theta_init = state$AbilityBase, jitter = 1e-6, max_attempts = 8L,
   max_iter = 50L, tol = 1e-6, keep_covariance = FALSE, context = NULL){
+  if(isTRUE(context$map))
+    return(bigIRT_map_objective(par = par, state = state, sdat = sdat,
+      prior_precision = prior_precision, theta_init = theta_init, jitter = jitter,
+      max_attempts = max_attempts, max_iter = max_iter, tol = tol,
+      keep_covariance = keep_covariance, context = context))
   wall_time_sec <- function() as.numeric(proc.time()[["elapsed"]])
   t_total0 <- wall_time_sec()
   estimateAbilityCorr <- isTRUE(context$estimateAbilityCorr)
@@ -1577,25 +1522,30 @@ bigIRT_laplace_newton_step <- function(ev, sdat, context, layout){
   step
 }
 
-## Optimize the direct Laplace objective with person modes solved inside each
-## objective evaluation. The current implementation uses the exact direct
-## objective value together with the frozen-mode Laplace gradient as a proxy
-## gradient for efficient experimentation.
+## Optimise the fitted objective over the item-side parameters, the person
+## modes solved inside each evaluation. `objective` is "laplace" (the marginal,
+## refined afterwards when `refine` is given) or "map" (the joint mode,
+## R/mapBackend.R, which has no marginal to refine).
 bigIRT_laplace_optimize_direct <- function(state, sdat, prior_precision,
   niter = 50L, tol = 1e-4, jitter = 1e-6, person_tol = 1e-6,
   keep_covariance = FALSE, cores = 1L, estimateAbilityCorr = FALSE,
   corr_paramization = c("normalized_chol", "stan_corsqrt"),
   collect_history = FALSE, plot_callback = NULL, plot_every = 1L,
-  verbose = 0L, trace_fn = NULL, stochastic = FALSE, polish_steps = NA_integer_,
+  verbose = 0L, trace_fn = NULL, polish_steps = NA_integer_,
   polish_tol = 1e-8, optimizer = c("fisher", "mize"), refine = NULL,
-  certify = NULL){
+  certify = NULL, objective = c("laplace", "map")){
   corr_paramization <- match.arg(corr_paramization)
   optimizer <- match.arg(optimizer)
+  objective <- match.arg(objective)
+  ## The joint-MAP objective has no correlation coordinate (see the note at
+  ## the end of R/mapBackend.R) and no marginal to refine.
+  if(identical(objective, "map")){ estimateAbilityCorr <- FALSE; refine <- NULL }
   direct_layout <- bigIRT_laplace_direct_layout(sdat, estimateAbilityCorr = estimateAbilityCorr)
   item_layout <- direct_layout[setdiff(names(direct_layout), c("corr", "ability_mean", "ability_beta"))]
   context <- bigIRT_laplace_item_context(sdat, layout = item_layout)
   context$grain_size <- bigIRT_laplace_subject_grain(sdat$Nsubs, cores)
   context$direct_layout <- direct_layout
+  context$map <- identical(objective, "map")
   ## Data, not parameters: taken once rather than subset on every evaluation.
   context$score_rows <- as.integer(sdat$score[context$train_rows])
   context$cache <- new.env(parent = emptyenv())
@@ -1757,7 +1707,7 @@ bigIRT_laplace_optimize_direct <- function(state, sdat, prior_precision,
   ## `context` is read when called, so the solver follows the objective when
   ## the quadrature refinement below switches it.
   solver <- function(e) bigIRT_laplace_metric_solver(e, sdat, context, direct_layout, gfun)
-  if(identical(optimizer, "fisher") && !isTRUE(stochastic)){
+  if(identical(optimizer, "fisher")){
     minv <- solver(fg_f(init))
     ## Finite-difference columns move the cache and the warm start; put both
     ## back at the point the optimiser is about to use.
@@ -1771,25 +1721,7 @@ bigIRT_laplace_optimize_direct <- function(state, sdat, prior_precision,
       if(as.integer(verbose) >= 1L) message("Laplace: Fisher metric unavailable; using the mize optimiser.")
     }
   }
-  if(isTRUE(stochastic)){
-    target <- function(par){
-      res <- get_eval(par)
-      out <- res$value
-      attributes(out)$gradient <- res$approx_grad
-      out
-    }
-    fit <- sgd(
-      init = init,
-      maxiter = niter,
-      fitfunc = target,
-      itertol = tol
-    )
-    fit$iter <- length(fit$itervalues)
-    fit$terminate <- list(
-      what = if(length(fit$itervalues) < as.integer(niter)) "sgd_converged" else "sgd_max_iter",
-      val = if(length(fit$itervalues)) tail(fit$itervalues, 1L) else NA_real_
-    )
-  } else if(identical(optimizer, "fisher") && !is.null(minv)){
+  if(identical(optimizer, "fisher") && !is.null(minv)){
     ## L-BFGS shaped by the person-coupled Fisher information; see
     ## R/laplaceOptimizer.R. `tol` is the predicted gain, in nats, below which
     ## it stops.
@@ -1890,7 +1822,7 @@ bigIRT_laplace_optimize_direct <- function(state, sdat, prior_precision,
   ## a fit at an optimum the exact marginal does not have (src/agq_backend.cpp);
   ## starting where it ended makes the refinement a short run rather than a
   ## second fit. The convergence verdict is then the refinement's.
-  if(!is.null(refine) && !isTRUE(stochastic)){
+  if(!is.null(refine)){
     lap_value <- get_eval(fit$par)$value
     lap_par <- fit$par
     lap_evals <- eval_count
@@ -2177,7 +2109,7 @@ bigIRT_laplace_optimize_direct <- function(state, sdat, prior_precision,
   ## NULL on the empirical-Bayes rounds, whose estimates are thrown away. After
   ## the fitted point's clip count is taken and outside `get_eval`, so neither
   ## that count nor the optimiser's warm start sees its evaluations.
-  if(!is.null(certify) && !isTRUE(stochastic))
+  if(!is.null(certify))
     fit$certificate <- tryCatch(bigIRT_certify(final = final, par = fit$par,
       context = context, state = state, sdat = sdat, prior_precision = prior_precision,
       layout = direct_layout, jitter = jitter, route = certify$route %||% "fast",
@@ -2642,7 +2574,8 @@ bigIRT_laplace_constrained_pars <- function(state, sdat, posterior = NULL){
     C = matrix(materialized$C, ncol = 1),
     D = matrix(materialized$D, ncol = 1),
     Ability = materialized$Ability,
-    Abilitypars = as.numeric(state$AbilityBase[sdat$Abilityparsindex > 0]),
+    ## The free base abilities, persons within dimension (column major).
+    Abilitypars = as.numeric(state$AbilityBase[sdat$fixedAbilityLogical == 0L]),
     AbilityMeanpar = if(sdat$fixedAbilityMean == 0L) as.numeric(state$AbilityMean) else numeric(),
     Abilitybeta = state$Abilitybeta,
     Bpars = as.numeric(state$Bpars),
@@ -2681,9 +2614,10 @@ bigIRT_laplace_constrained_pars <- function(state, sdat, posterior = NULL){
   out
 }
 
-## Empirical Bayes hyperparameter update for the Laplace backend.
+## Empirical Bayes hyperparameter update, for either estimator.
 ##
-## This replaces, rather than ports, the JML version, whose logic has three
+## This replaced, rather than ported, the rule the Stan joint-MAP path used
+## (withdrawn in 0.2.0), whose logic had three
 ## problems. It set each prior SD to sd(estimates) * ebayesmultiplier, but the
 ## spread of estimates is the spread of the truth plus estimation noise, so that
 ## overstates the dispersion; the default multiplier of 2 then inflates the

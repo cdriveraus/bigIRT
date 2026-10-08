@@ -15,7 +15,7 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
       logitCMean = if(pl >= 3) -1.4 else -20, logitCSD = if(pl >= 3) .2 else 0,
       logitDMean = if(pl >= 4) 2.5 else 20, logitDSD = if(pl >= 4) .2 else 0)
     fitIRT(s$dat, score = "score", id = "id", item = "Item", scale = "Scale", pl = pl,
-      marginalApprox = "laplace", cores = 1L, verbose = 0L, plot = FALSE, priors = TRUE,
+      marginalApprox = "laplace", cores = 1L, verbose = 0L, priors = TRUE,
       ebayes = FALSE, normalise = FALSE, dropPerfectScores = FALSE,
       keepInternals = TRUE, laplaceKeepCovariance = TRUE)
   }

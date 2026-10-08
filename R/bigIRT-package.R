@@ -5,8 +5,9 @@
 #' sparse response data in long format. The main entry point is [fitIRT()],
 #' which estimates 1PL-4PL models by marginal maximum likelihood with a Laplace
 #' approximation to the integral over person abilities
-#' (`marginalApprox = "laplace"`; the `"none"` default is the older penalised
-#' joint MAP estimator, retained for backwards compatibility). It supports
+#' (`marginalApprox = "laplace"`, the default), or by the joint posterior mode
+#' over item parameters and abilities together (`marginalApprox = "map"`). The
+#' two take the same arguments and return the same kind of object. Both support
 #' multidimensional and confirmatory loading structures with an estimated latent
 #' correlation, covariate effects on ability and on each item parameter, and
 #' empirical-Bayes prior adaptation.
@@ -23,8 +24,9 @@
 #' @aliases bigIRT
 #' @useDynLib bigIRT, .registration = TRUE
 #' @import methods
-#' @import Rcpp data.table mize parallel
-#' @importFrom rstan sampling
+#' @import data.table mize
+#' @importFrom Rcpp evalCpp
+#' @importFrom RcppParallel RcppParallelLibs
 #' @importFrom stats median quantile var rnorm qnorm
 #' @importFrom stats nobs logLik vcov
 #' @importFrom stats AIC BIC cor cov2cor dnorm rbinom runif sd setNames
@@ -33,8 +35,6 @@
 #' @importFrom graphics par hist arrows points axis mtext legend
 #' @keywords internal
 #'
-#' @references
-#' Stan Development Team (NA). RStan: the R interface to Stan. R package version 2.26.1. https://mc-stan.org
 #' @examples
 #' # Generate simple 2PL data and fit a model.
 #' require(data.table)

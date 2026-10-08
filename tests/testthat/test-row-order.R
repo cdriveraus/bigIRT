@@ -18,7 +18,7 @@ test_that("per-response predictions are invariant to input row order", {
 
   fit_it <- function(d) suppressMessages(fitIRT(d, pl = 2, cores = 1, priors = TRUE,
     ebayes = FALSE, marginalApprox = "laplace_fast", dropPerfectScores = FALSE,
-    normalise = FALSE, estimateAbilityCorr = FALSE, verbose = 0, plot = FALSE))
+    normalise = FALSE, estimateAbilityCorr = FALSE, verbose = 0))
 
   f0 <- fit_it(dat)
   f1 <- fit_it(dat[perm])
@@ -59,7 +59,7 @@ test_that("training rows and predictors are applied to the intended responses", 
   fit_it <- function(d, tr) suppressMessages(fitIRT(d, pl = 4, cores = 1, priors = TRUE,
     ebayes = FALSE, trainingRows = tr, BitemPreds = "item_x", personPreds = "person_x",
     marginalApprox = "laplace_fast", dropPerfectScores = FALSE, normalise = FALSE,
-    estimateAbilityCorr = FALSE, verbose = 0, plot = FALSE))
+    estimateAbilityCorr = FALSE, verbose = 0))
 
   f0 <- fit_it(dat, train)
   ## The same physical responses, addressed in the permuted numbering.

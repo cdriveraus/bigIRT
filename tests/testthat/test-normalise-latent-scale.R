@@ -28,7 +28,7 @@ if(identical(Sys.getenv("NOT_CRAN"), "true")){
   sim <- simIRT(Nsubs = 2000, Nitems = 40, Nscales = 1, NitemsAnswered = 10,
     AMean = 1, ASD = .2, BMean = 0, BSD = 1)
   fit_args <- list(dat = sim$dat, pl = 2, cores = 1, marginalApprox = "laplace", ebayes = FALSE,
-    verbose = 0, plot = FALSE, dropPerfectScores = FALSE)
+    verbose = 0, dropPerfectScores = FALSE)
   f <- suppressWarnings(do.call(fitIRT, fit_args))
 
   test_that("a fit's latent scale comes from its posterior, not its point estimates", {
@@ -62,5 +62,49 @@ if(identical(Sys.getenv("NOT_CRAN"), "true")){
     e <- extractMIRTpars(m, score_method = "MAP")
     expect_equal(unname(e$latent_sd), 1)
     expect_lt(stats::sd(e$Ability[, 1]), .9)
+  })
+}
+
+## normalise = TRUE is a reparameterisation: nothing a fit predicts or
+## reports about measurement may change, and every part of the fit must move
+## with the abilities. Until October 2026 it moved the abilities and the item
+## parameters only. In one dimension the person posterior stayed on the old
+## metric, so reliability() changed (.859 to .868 in one check); in any
+## dimension the covariate coefficients stayed too, so the abilities stopped
+## being base + xbar' beta; the row-level parameters looIRT() reads were not
+## moved; and logLik() read the ability prior's normalising constant from the
+## rewritten abilityPrior, so it moved as well.
+if(identical(Sys.getenv("NOT_CRAN"), "true")){
+  test_that("normalise = TRUE changes nothing a fit predicts or reports about measurement", {
+    for(K in 1:2){
+      set.seed(70 + K)
+      s <- simIRT(Nsubs = 600, Nitems = 15 * K, Nscales = K, NitemsAnswered = 15 * K,
+        AMean = 1.5, ASD = .3, BMean = .5, BSD = 1, logitCMean = -20, logitCSD = 0)
+      d <- data.table::as.data.table(s$dat)
+      d[, x := stats::rnorm(1), by = id]
+      d[, score := as.integer(stats::runif(.N) <
+        stats::plogis(stats::qlogis(pmin(pmax(p, 1e-6), 1 - 1e-6)) + .8 * x))]
+      args <- list(dat = d, pl = 2, cores = 1, personPreds = "x", laplaceKeepCovariance = TRUE,
+        dropPerfectScores = FALSE, laplaceRefine = "none", laplaceCertify = FALSE)
+      f0 <- suppressWarnings(do.call(fitIRT, c(args, list(normalise = FALSE))))
+      f1 <- suppressWarnings(do.call(fitIRT, c(args, list(normalise = TRUE, normaliseMean = .3))))
+      lab <- paste0("K = ", K)
+      ## Asserted first, so the rest cannot pass by nothing having moved.
+      expect_gt(max(abs(f1$pars$Ability - f0$pars$Ability)), .1, label = lab)
+      expect_equal(reliability(f1)$empirical, reliability(f0)$empirical, tolerance = 1e-8, label = lab)
+      expect_equal(as.numeric(logLik(f1)), as.numeric(logLik(f0)), tolerance = 1e-10, label = lab)
+      ## Abilities are still base + xbar' beta, on the new metric.
+      recon <- f1$personPosterior$mode + f1$pars$personPredsMean %*% t(f1$pars$Abilitybeta)
+      expect_equal(unname(as.matrix(f1$pars$Ability)), unname(recon), tolerance = 1e-10, label = lab)
+      ## Every row's linear predictor is unchanged, from the moved rows.
+      eta1 <- rowSums(as.matrix(f1$pars$row_loadings) * as.matrix(f1$pars$row_ability)) - f1$pars$b_row
+      expect_equal(eta1, f0$pars$eta_row, tolerance = 1e-8, label = lab)
+      expect_true(all(paste0(colnames(f1$pars$Ability), "_SD") %in% names(f1$personPars)), label = lab)
+      if(K == 1L)
+        expect_equal(f1$covariateEffects$AbilityStd, f0$covariateEffects$AbilityStd, tolerance = 1e-8)
+      if(requireNamespace("loo", quietly = TRUE))
+        expect_equal(suppressWarnings(looIRT(f1, draws = 40L, seed = 9))$estimates,
+          suppressWarnings(looIRT(f0, draws = 40L, seed = 9))$estimates, tolerance = 1e-8, label = lab)
+    }
   })
 }

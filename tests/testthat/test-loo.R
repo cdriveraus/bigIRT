@@ -17,24 +17,24 @@ if(identical(Sys.getenv("NOT_CRAN"), "true")& .Machine$sizeof.pointer != 4){
 
     trainingSet <- (1:nrow(dat$dat))[sample(-1:-(nrow(dat$dat)),50)]
 
-    fit <- fitIRT(dat$dat,cores=1,pl=1,plot=F,verbose=0,priors=T,marginalApprox="none",ebayes=TRUE)
-    fit2 <- fitIRT(dat$dat,cores=1,pl=1,plot=F,verbose=0,priors=T,trainingRows = trainingSet,marginalApprox="none",ebayes=TRUE)
+    fit <- fitIRT(dat$dat,cores=1,pl=1,verbose=0,priors=T,marginalApprox="none",ebayes=TRUE)
+    fit2 <- fitIRT(dat$dat,cores=1,pl=1,verbose=0,priors=T,trainingRows = trainingSet,marginalApprox="none",ebayes=TRUE)
 
     # plot(fit$pars$p, fit2$pars$p)
 
     testthat::expect_equivalent(
-      exp((sum(log(fit2$pars$p[-trainingSet]))-fit2$optim$f)/fit$prepared$Nobs),
-      exp(-fit$optim$f/fit$prepared$Nobs),
+      exp((sum(log(fit2$pars$p[-trainingSet]))-(-fit2$optim$logLik))/fit$prepared$Nobs),
+      exp(fit$optim$logLik/fit$prepared$Nobs),
       tol=1e-4)
 
 
     #parallel check
-    fit <- fitIRT(dat$dat,cores=2,pl=1,plot=F,verbose=0,priors=T,marginalApprox="none",ebayes=TRUE)
-    fit2 <- fitIRT(dat$dat,cores=2,pl=1,plot=F,verbose=0,priors=T,trainingRows = trainingSet,marginalApprox="none",ebayes=TRUE)
+    fit <- fitIRT(dat$dat,cores=2,pl=1,verbose=0,priors=T,marginalApprox="none",ebayes=TRUE)
+    fit2 <- fitIRT(dat$dat,cores=2,pl=1,verbose=0,priors=T,trainingRows = trainingSet,marginalApprox="none",ebayes=TRUE)
 
     testthat::expect_equivalent(
-      exp((sum(log(fit2$pars$p[-trainingSet]))-fit2$optim$f)/fit$prepared$Nobs),
-      exp(-fit$optim$f/fit$prepared$Nobs),
+      exp((sum(log(fit2$pars$p[-trainingSet]))-(-fit2$optim$logLik))/fit$prepared$Nobs),
+      exp(fit$optim$logLik/fit$prepared$Nobs),
       tol=1e-4)
 
 
@@ -73,15 +73,15 @@ if(FALSE){#CV comparison
   trainingSets3[[i]] <- unlist(lapply(trainingSets3[[i]],function(idi) (1:nrow(dat$dat))[dat$dat$id %in% idi]))
 
 
-  fit1 <- fitIRT(dat$dat,cores=1,pl=1,plot=F,verbose=0,priors=T,personPreds = 'intelligence',
+  fit1 <- fitIRT(dat$dat,cores=1,pl=1,verbose=0,priors=T,personPreds = 'intelligence',
     trainingRows = trainingSets1[[i]],itemDat = dat$dat[!duplicated(Item),])
-  fit2 <- fitIRT(dat$dat,cores=1,pl=1,plot=F,verbose=0,priors=T,personPreds = 'intelligence',
+  fit2 <- fitIRT(dat$dat,cores=1,pl=1,verbose=0,priors=T,personPreds = 'intelligence',
     trainingRows = trainingSets2[[i]],itemDat = dat$dat[!duplicated(Item),])
-  fit3 <- fitIRT(dat$dat,cores=1,pl=1,plot=F,verbose=0,priors=T,personPreds = 'intelligence',
+  fit3 <- fitIRT(dat$dat,cores=1,pl=1,verbose=0,priors=T,personPreds = 'intelligence',
     trainingRows = trainingSets3[[i]],itemDat = dat$dat[!duplicated(Item),])
-  fit4 <- fitIRT(dat$dat,cores=1,pl=1,plot=F,verbose=0,priors=T,
+  fit4 <- fitIRT(dat$dat,cores=1,pl=1,verbose=0,priors=T,
     trainingRows = trainingSets1[[i]],itemDat = dat$dat[!duplicated(Item),])
-  fit5 <- fitIRT(dat$dat,cores=1,pl=1,plot=F,verbose=0,priors=T,
+  fit5 <- fitIRT(dat$dat,cores=1,pl=1,verbose=0,priors=T,
     trainingRows = trainingSets3[[i]],itemDat = dat$dat[!duplicated(Item),])
 
   out[['random']][[i]] <- fit1

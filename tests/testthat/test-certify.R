@@ -452,10 +452,19 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
   ## differencing: with the nodes held fixed the two must agree to the
   ## difference quotient's own error, on every slot a 3PL and a 4PL free, and
   ## on items loading on either of two dimensions.
-  louis_vs_fd <- function(sim, pl, ecorr = FALSE, items){
-    f <- suppressWarnings(fitIRT(sim$dat, pl = pl, marginalApprox = "laplace", cores = 1L,
-      keepInternals = TRUE, dropPerfectScores = FALSE, ebayes = FALSE,
-      estimateAbilityCorr = ecorr, laplaceRefine = "agq"))
+  ## Item covariates: `v` varies within an item, `w` is one value per item.
+  with_covariates <- function(dat){
+    dd <- data.table::copy(dat)
+    dd$v <- stats::rnorm(nrow(dd), 0, .5)
+    it <- unique(dd$Item)
+    dd$w <- stats::rnorm(length(it), 0, .5)[match(dd$Item, it)]
+    dd
+  }
+  louis_vs_fd <- function(sim, pl, ecorr = FALSE, items, args = list()){
+    dat <- if(is.data.frame(sim)) sim else sim$dat
+    f <- suppressWarnings(do.call(fitIRT, c(list(dat, pl = pl, marginalApprox = "laplace",
+      cores = 1L, keepInternals = TRUE, dropPerfectScores = FALSE, ebayes = FALSE,
+      estimateAbilityCorr = ecorr, laplaceRefine = "agq"), args)))
     d <- bigIRT:::bigIRT_direct_eval_from_fit(f, keep_covariance = TRUE)
     ctx <- d$context; ctx$agq_centre <- d$eval$posterior
     ev <- function(p, cx) bigIRT:::bigIRT_laplace_direct_objective(par = p, state = d$state,
@@ -465,17 +474,25 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     cb <- ctx; cb$agq_blocks <- TRUE
     blk <- ev(d$par, cb)$item_fg$item_blocks
     K <- d$sdat$Nscales; lay <- d$layout; rc <- d$context$row_context
-    prior_sd <- c(B = d$sdat$BSDx, A = d$sdat$invspASD, C = d$sdat$logitCSD, D = d$sdat$logitDSD)
+    ps <- attr(lay, "par_scale")
+    prec <- numeric(length(d$par))
+    for(b in list(c("B", "BSDx"), c("A", "invspASD"), c("C", "logitCSD"), c("D", "logitDSD")))
+      if(length(lay[[b[1]]])) prec[lay[[b[1]]]] <- 1 / as.numeric(d$sdat[[b[2]]])^2
+    for(b in c("A_beta", "B_beta", "C_beta", "D_beta"))
+      if(length(lay[[b]])) prec[lay[[b]]] <- 1 / as.numeric(d$sdat$betaScale)^2
     worst <- 0; slots_seen <- character(0)
     for(j in items){
       r <- match(j, rc$items)
+      bc <- bigIRT:::bigIRT_item_beta_coords(d$sdat, lay, j)
       sc <- c(B = lay$B[rc$B_ref[r]],
         setNames(vapply(seq_len(K), function(k) if(rc$A_ref[r, k] > 0) lay$A[rc$A_ref[r, k]]
           else NA_integer_, 1L), paste0("A", seq_len(K))),
-        C = if(length(lay$C)) lay$C[rc$C_ref[r]] else NA, D = if(length(lay$D)) lay$D[rc$D_ref[r]] else NA)
+        C = if(length(lay$C)) lay$C[rc$C_ref[r]] else NA, D = if(length(lay$D)) lay$D[rc$D_ref[r]] else NA,
+        setNames(bc, rep("beta", length(bc))))
+      expect_equal(length(sc), dim(blk)[1])
       keep <- which(!is.na(sc)); ix <- sc[keep]
-      L <- matrix(blk[, , j], K + 3)[keep, keep, drop = FALSE] -
-        diag(1 / prior_sd[substr(names(ix), 1, 1)]^2, length(ix))
+      L <- (matrix(blk[, , j], dim(blk)[1])[keep, keep, drop = FALSE] - diag(prec[ix], length(ix))) *
+        outer(ps[ix], ps[ix])
       H <- matrix(NA_real_, length(ix), length(ix))
       for(a in seq_along(ix)){
         up <- d$par; up[ix[a]] <- up[ix[a]] + 1e-4; dn <- d$par; dn[ix[a]] <- dn[ix[a]] - 1e-4
@@ -505,6 +522,20 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     expect_setequal(r2$slots, c("B", "A1", "A2", "C"))
   })
 
+  test_that("an item's own covariate coefficients are in its block, exactly", {
+    ## itemSpecificBetas: the coefficients are item coordinates, and the
+    ## kernel carries each row's block into them by that row's covariate
+    ## values. `v` varies within an item, so a block formed from the item's
+    ## summed slot block would be wrong for it; `w` does not.
+    set.seed(5)
+    s <- simIRT(Nsubs = 600L, Nitems = 10L, Nscales = 1, AMean = 1.1, ASD = .25, BMean = 0,
+      BSD = 1, logitCMean = -1.6, logitCSD = .2)
+    r <- louis_vs_fd(with_covariates(s$dat), 3L, items = c(2, 9), args = list(AitemPreds = "v",
+      BitemPreds = c("v", "w"), CitemPreds = "w", itemSpecificBetas = TRUE, betaScale = 2))
+    expect_lt(r$worst, 1e-6)
+    expect_setequal(r$slots, c("B", "A1", "C", "beta"))
+  })
+
   test_that("the fast certificate agrees with the exact one, for a few evaluations", {
     f <- fitIRT(fit3$sim$dat, pl = 3L, marginalApprox = "laplace", cores = 1L,
       ebayes = FALSE, keepInternals = TRUE, dropPerfectScores = FALSE, laplaceCertify = TRUE)
@@ -524,6 +555,29 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     expect_gt(ex$evaluations, 2L * length(f$optim$par))
   })
 
+  test_that("item-specific covariate coefficients cost the fast route nothing", {
+    ## They used to be differenced as shared parameters, two evaluations each:
+    ## 2 x 45 here, and on a 500-item fit with three covariates on A and B more
+    ## than ten minutes for a fit of a few seconds. They are in the item blocks
+    ## now (src/bigirt_item_blocks.h). Both estimators, both routes.
+    set.seed(9)
+    s <- simIRT(Nsubs = 400L, Nitems = 15L, Nscales = 1, AMean = 1.1, ASD = .25, BMean = 0,
+      BSD = 1, logitCMean = -20, logitCSD = 0)
+    args <- list(with_covariates(s$dat), pl = 2L, cores = 1L, ebayes = FALSE,
+      dropPerfectScores = FALSE, AitemPreds = "w", BitemPreds = c("v", "w"),
+      itemSpecificBetas = TRUE, betaScale = 2)
+    for(est in c("laplace", "map")){
+      f <- do.call(fitIRT, c(args, marginalApprox = est))
+      fast <- f$laplaceStatus$certificate
+      expect_equal(fast$route, "fast", label = est)
+      expect_lte(fast$evaluations, 4L, label = est)
+      ex <- do.call(fitIRT, c(args, marginalApprox = est,
+        laplaceCertify = "exact"))$laplaceStatus$certificate
+      expect_equal(fast$status, ex$status, label = est)
+      expect_lt(abs(log(fast$gap / ex$gap)), log(2), label = est)
+    }
+  })
+
   test_that("a fast-route rejection on negative curvature is re-tested by the exact route", {
     ## Unregularised 2PL, 150 persons answering 10 of 20 items: fits the fast
     ## route calls "notmaximum" on a negative eigenvalue the exact curvature
@@ -536,7 +590,7 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
       train <- sort(d[, .(row = sample(row, floor(.N / 2))), by = id]$row)
       suppressWarnings(fitIRT(sim$dat, pl = 2L, cores = 1L, priors = FALSE, ebayes = FALSE,
         trainingRows = train, marginalApprox = "laplace", dropPerfectScores = FALSE,
-        normalise = FALSE, verbose = 0, plot = FALSE, ...))
+        normalise = FALSE, verbose = 0, ...))
     }
     ## These are the unregularised Laplace 2PL's runaways: one has a
     ## discrimination of 373 on 75 training responses. With the run-off

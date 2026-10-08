@@ -71,8 +71,7 @@ test_that("difficulty recovery is on a sane scale once the units agree", {
               AMean = 1, ASD = .3, BMean = 0, BSD = 1,
               logitCMean = -20, logitCSD = 0, logitDMean = 20, logitDSD = 0)
   f <- fitIRT(s$dat, score = "score", id = "id", item = "Item", scale = "Scale",
-              pl = 2L, marginalApprox = "laplace", cores = 1L, verbose = 0L,
-              plot = FALSE, priors = TRUE, ebayes = FALSE, normalise = FALSE,
+              pl = 2L, marginalApprox = "laplace", cores = 1L, verbose = 0L, priors = TRUE, ebayes = FALSE, normalise = FALSE,
               dropPerfectScores = FALSE)
   z <- compareIRTmodels(list(truth = s, estimated = f), score_method = "MAP",
                         curveSampleN = 50L)
@@ -100,8 +99,7 @@ test_that("simIRT returns truth tables in fitIRT's shape and convention", {
   expect_identical(nrow(s$personPars), 250L)
 
   f <- fitIRT(s$dat, score = "score", id = "id", item = "Item", scale = "Scale",
-              pl = 2L, marginalApprox = "laplace", cores = 1L, verbose = 0L,
-              plot = FALSE, priors = TRUE, ebayes = FALSE, normalise = FALSE,
+              pl = 2L, marginalApprox = "laplace", cores = 1L, verbose = 0L, priors = TRUE, ebayes = FALSE, normalise = FALSE,
               dropPerfectScores = FALSE)
   m <- merge(s$itemPars, f$itemPars, by = "Item", suffixes = c(".true", ".fit"))
   expect_identical(nrow(m), 12L)
@@ -148,8 +146,7 @@ test_that("the fit's prepared data is not called dat", {
   s <- simIRT(Nsubs = 150, Nitems = 10, Nscales = 1, NitemsAnswered = 6L,
               logitCMean = -20, logitCSD = 0)
   f <- fitIRT(s$dat, score = "score", id = "id", item = "Item", scale = "Scale",
-              pl = 2L, marginalApprox = "laplace", cores = 1L, verbose = 0L,
-              plot = FALSE, priors = TRUE, ebayes = FALSE, normalise = FALSE,
+              pl = 2L, marginalApprox = "laplace", cores = 1L, verbose = 0L, priors = TRUE, ebayes = FALSE, normalise = FALSE,
               dropPerfectScores = FALSE)
   expect_null(f$dat)
   expect_false(is.null(f$prepared))

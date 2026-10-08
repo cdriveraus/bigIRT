@@ -59,7 +59,7 @@ test_that("the exact marginal agrees with the quadrature objective at a tame poi
   d <- readRDS(test_path("fixtures", "agq-runoff-1d.rds")); d$Scale <- 1L
   fit <- suppressWarnings(fitIRT(d, pl = 2, priors = TRUE, estMeans = character(0),
     dropPerfectScores = FALSE, normalise = FALSE, laplaceRefine = "agq",
-    cores = 1, verbose = 0, plot = FALSE))
+    cores = 1, verbose = 0))
   expect_lt(max(fit$itemPars$A), 5)
   ## The fitted objective includes the item prior; take it out.
   ll <- fit$optim$logLik - fit$laplaceStatus$item_prior_value
@@ -72,7 +72,7 @@ test_that("a 1-D refinement ends no lower than it started, and where its approxi
   d <- readRDS(test_path("fixtures", "agq-runoff-1d.rds")); d$Scale <- 1L
   fit <- suppressWarnings(fitIRT(d, pl = 2, priors = FALSE, estMeans = character(0),
     dropPerfectScores = FALSE, normalise = FALSE, laplaceRefine = "agq",
-    cores = 1, verbose = 0, plot = FALSE))
+    cores = 1, verbose = 0))
   st <- fit$laplaceStatus; rf <- st$refine
   ## Two of its loadings sit on the flat end of their softplus, which also
   ## threw the optimiser's metric (see the test on that below); with that
@@ -99,7 +99,7 @@ test_that("the reported 3-D case is pulled off its ridge, and ends no lower than
   fit <- suppressWarnings(fitIRT(d, pl = 2, priors = FALSE, estMeans = character(0),
     loadings = fx$loadings, dropPerfectScores = FALSE, normalise = FALSE,
     estimateAbilityCorr = FALSE, itemSpecificBetas = FALSE, laplaceRefine = "agq",
-    cores = 1, verbose = 0, plot = FALSE))
+    cores = 1, verbose = 0))
   st <- fit$laplaceStatus; rf <- st$refine
   dim_of <- setNames(apply(is.na(fx$loadings), 1, which), rownames(fx$loadings))
   ## Before: item 12 from 58 to 6197, the objective 46 nats below its start,
@@ -134,7 +134,7 @@ test_that("the refinement does not park a run-off item on the screen", {
   fit <- suppressWarnings(fitIRT(fx$dat, pl = 2, priors = FALSE, estMeans = character(0),
     loadings = fx$loadings, dropPerfectScores = FALSE, normalise = FALSE,
     estimateAbilityCorr = FALSE, itemSpecificBetas = FALSE, laplaceRefine = "agq",
-    cores = 1, verbose = 0, plot = FALSE))
+    cores = 1, verbose = 0))
   st <- fit$laplaceStatus
   slope <- bigIRT:::bigIRT_runaway_slope()
   ## The ability prior SD is 1 here, so steepness is |A|.
@@ -159,7 +159,7 @@ test_that("a loading on the flat tail of its softplus is not thrown by the metri
   d <- readRDS(test_path("fixtures", "agq-runoff-1d.rds")); d$Scale <- 1L
   fit <- suppressWarnings(fitIRT(d, pl = 2, priors = FALSE, estMeans = character(0),
     dropPerfectScores = FALSE, normalise = FALSE, laplaceRefine = "none",
-    laplaceCertify = FALSE, keepInternals = TRUE, cores = 1, verbose = 0, plot = FALSE))
+    laplaceCertify = FALSE, keepInternals = TRUE, cores = 1, verbose = 0))
   ev <- bigIRT:::bigIRT_direct_eval_from_fit(fit)
   lay <- ev$layout; par <- ev$par
   k <- lay$A[5]

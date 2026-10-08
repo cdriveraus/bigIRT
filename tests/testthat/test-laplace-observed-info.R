@@ -93,8 +93,7 @@ person_sds <- function(f) {
 
 fit_pl <- function(d, pl) {
   fitIRT(d, score = "score", id = "id", item = "Item", scale = "Scale",
-         pl = pl, marginalApprox = "laplace", cores = 1L, verbose = 0L,
-         plot = FALSE, priors = TRUE, ebayes = FALSE, normalise = FALSE,
+         pl = pl, marginalApprox = "laplace", cores = 1L, verbose = 0L, priors = TRUE, ebayes = FALSE, normalise = FALSE,
          dropPerfectScores = FALSE, laplaceKeepCovariance = TRUE)
 }
 

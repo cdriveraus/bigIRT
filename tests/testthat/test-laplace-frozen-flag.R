@@ -22,7 +22,7 @@ test_that("a fit that moves Abilitybeta off its start does not report frozen eff
 
   fit <- fitIRT(d, pl = 2, cores = 1, marginalApprox = "laplace",
     personPreds = "ses", dropPerfectScores = FALSE, normalise = FALSE,
-    keepInternals = TRUE, verbose = 0, plot = FALSE)
+    keepInternals = TRUE, verbose = 0)
 
   ## The premise of the test, asserted rather than assumed: the Laplace path
   ## starts every ability coefficient at exactly zero, so a coefficient that

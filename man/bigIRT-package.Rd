@@ -10,8 +10,9 @@ Tools for fitting binary item response theory (IRT) models for large and
 sparse response data in long format. The main entry point is \code{\link[=fitIRT]{fitIRT()}},
 which estimates 1PL-4PL models by marginal maximum likelihood with a Laplace
 approximation to the integral over person abilities
-(\code{marginalApprox = "laplace"}; the \code{"none"} default is the older penalised
-joint MAP estimator, retained for backwards compatibility). It supports
+(\code{marginalApprox = "laplace"}, the default), or by the joint posterior mode
+over item parameters and abilities together (\code{marginalApprox = "map"}). The
+two take the same arguments and return the same kind of object. Both support
 multidimensional and confirmatory loading structures with an estimated latent
 correlation, covariate effects on ability and on each item parameter, and
 empirical-Bayes prior adaptation.
@@ -37,9 +38,6 @@ fit <- fitIRT(dat$dat,cores=1,pl=2,dropPerfectScores=FALSE,
 
 head(fit$itemPars)
 head(fit$personPars)
-}
-\references{
-Stan Development Team (NA). RStan: the R interface to Stan. R package version 2.26.1. https://mc-stan.org
 }
 \seealso{
 Useful links:

@@ -1,6 +1,6 @@
 Package: bigIRT
 Title: Item Response Theory for Large Sparse Data
-Version: 0.1.9
+Version: 0.2.0
 Authors@R:
     person(given = "Charles",
            family = "Driver",
@@ -9,9 +9,10 @@ Authors@R:
            comment = c(ORCID = "0000-0002-4174-2970"))
 Description: Fits binary item response theory (IRT) models for large and sparse
     data in long format, by marginal maximum likelihood with a Laplace
-    approximation to the integral over person abilities. Supports 1PL to 4PL
-    models, multidimensional and confirmatory loading structures with an
-    estimated latent correlation, covariate effects on ability and on each item
+    approximation to the integral over person abilities, or by the joint
+    posterior mode over items and persons. Supports 1PL to 4PL models,
+    multidimensional and confirmatory loading structures with an estimated
+    latent correlation, covariate effects on ability and on each item
     parameter, empirical-Bayes prior adaptation, and post-estimation tools for
     information, reliability, item fit, held-out prediction and simulation.
 License: MIT + file LICENSE
@@ -24,18 +25,12 @@ Imports:
     Matrix,
     methods,
     mize,
-    parallel,
     Rcpp (>= 0.12.0),
-    RcppParallel (>= 5.0.1),
-    rstan (>= 2.21.0),
-    rstantools (>= 2.3.0)
+    RcppParallel (>= 5.0.1)
 LinkingTo: 
-    BH (>= 1.66.0),
     Rcpp (>= 0.12.0),
     RcppEigen (>= 0.3.3.3.0),
-    RcppParallel (>= 5.0.1),
-    rstan (>= 2.21.1),
-    StanHeaders (>= 2.18.0)
+    RcppParallel (>= 5.0.1)
 Suggests:
     broom,
     ggplot2,
@@ -45,7 +40,6 @@ Suggests:
     knitr,
     rmarkdown
 VignetteBuilder: knitr
-Biarch: true
 SystemRequirements: GNU make
 URL: https://github.com/cdriveraus/bigIRT
 BugReports: https://github.com/cdriveraus/bigIRT/issues

@@ -11,7 +11,7 @@ if(identical(Sys.getenv("NOT_CRAN"), "true")){
   auto_fit <- function(K, refine = "auto", seed = 3100 + K) {
     set.seed(seed)
     s <- simIRT(Nsubs = 200, Nitems = 6 * K, Nscales = K, NitemsAnswered = rep(4L, K), BSD = 1)
-    suppressWarnings(fitIRT(s$dat, pl = 2, cores = 1, verbose = 0, plot = FALSE,
+    suppressWarnings(fitIRT(s$dat, pl = 2, cores = 1, verbose = 0,
       dropPerfectScores = FALSE, laplaceRefine = refine))
   }
 

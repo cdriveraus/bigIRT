@@ -52,8 +52,7 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") && .Machine$sizeof.pointer != 4){
       trainingRows = training_rows,
       dropPerfectScores = FALSE,
       normalise = FALSE,
-      verbose = 0,
-      plot = FALSE
+      verbose = 0
     )
 
     fit_b <- fitIRT(
@@ -66,8 +65,7 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") && .Machine$sizeof.pointer != 4){
       trainingRows = training_rows,
       dropPerfectScores = FALSE,
       normalise = FALSE,
-      verbose = 0,
-      plot = FALSE
+      verbose = 0
     )
 
     expect_length(fit_a$pars$pcorrect, nrow(sim$dat))

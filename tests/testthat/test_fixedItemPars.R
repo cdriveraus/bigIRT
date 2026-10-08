@@ -29,7 +29,7 @@ if(identical(Sys.getenv("NOT_CRAN"), "true")& .Machine$sizeof.pointer != 4){
 
     itemPreds = c('V1','V2','V3')
 
-    fit <- fitIRT(dat$dat,cores=cores,pl=2,plot=F,verbose=0,priors=T,
+    fit <- fitIRT(dat$dat,cores=cores,pl=2,verbose=0,priors=T,
       BitemPreds = itemPreds,AitemPreds = itemPreds,
       personDat = persondat,
       itemDat = itemdat,
@@ -37,7 +37,7 @@ if(identical(Sys.getenv("NOT_CRAN"), "true")& .Machine$sizeof.pointer != 4){
       normalise = F,ebayes = T,ebayesmultiplier = 2,itemSpecificBetas = FALSE)
 
 
-    fitis <- fitIRT(dat$dat,cores=cores,pl=2,plot=F,verbose=0,priors=TRUE,
+    fitis <- fitIRT(dat$dat,cores=cores,pl=2,verbose=0,priors=TRUE,
       BitemPreds = itemPreds,AitemPreds = itemPreds,
       personDat = persondat,
       itemDat = itemdat,
@@ -77,11 +77,15 @@ if(identical(Sys.getenv("NOT_CRAN"), "true")& .Machine$sizeof.pointer != 4){
     #and between data
     testthat::expect_equivalent(corrs[4:6,1],corrs[4:6,3],tol=.03)
 
-    #check correlation between A and item preds
+    #check correlation between A and item preds, against the data for each fit.
+    ## Not shared against item-specific: under empirical Bayes those are two
+    ## models with different hyperparameters, and agreed only under the old
+    ## moment rule. Measured (truth .14 .40 -.38): shared .09 .44 -.45,
+    ## item-specific .08 .36 -.37; without empirical Bayes both match the old
+    ## Stan fits to two decimals.
     corrs=round(cor(cbind(fit$pars$A,fitis$pars$A,dat$A, dat$dat[!duplicated(Item),itemPreds,with=FALSE])),2)
-    testthat::expect_equivalent(corrs[4:6,1],corrs[4:6,2],tol=.05)
-    #and between data
     testthat::expect_equivalent(corrs[4:6,1],corrs[4:6,3],tol=.1)
+    testthat::expect_equivalent(corrs[4:6,2],corrs[4:6,3],tol=.1)
 
     #check regression weights between true and estimated
 

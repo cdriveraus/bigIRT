@@ -21,7 +21,7 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
       AMean = 1, ASD = .3, BMean = 0, BSD = 1, AbilityMean = 0, AbilitySD = 1,
       logitCMean = -20, logitCSD = 0, logitDMean = 20, logitDSD = 0)
     fitIRT(s$dat, score = "score", id = "id", item = "Item", scale = "Scale",
-      pl = 2L, marginalApprox = "laplace", cores = 1L, verbose = 0L, plot = FALSE,
+      pl = 2L, marginalApprox = "laplace", cores = 1L, verbose = 0L,
       priors = TRUE, ebayes = FALSE, normalise = FALSE, keepInternals = TRUE,
       laplaceKeepCovariance = TRUE)
   }
@@ -125,7 +125,7 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     n <- nrow(s$dat)
     set.seed(12); tr <- sort(sample.int(n, floor(0.8 * n)))
     f <- fitIRT(s$dat, score = "score", id = "id", item = "Item", scale = "Scale",
-      pl = 2L, marginalApprox = "laplace", cores = 1L, verbose = 0L, plot = FALSE,
+      pl = 2L, marginalApprox = "laplace", cores = 1L, verbose = 0L,
       priors = TRUE, ebayes = FALSE, normalise = FALSE, trainingRows = tr,
       dropPerfectScores = FALSE, keepInternals = TRUE, laplaceKeepCovariance = TRUE)
     m <- heldoutMetrics(f)
@@ -162,7 +162,7 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     names(x) <- as.character(ids)
     d[, xcov := x[as.character(id)]]
     f <- fitIRT(d, score = "score", id = "id", item = "Item", scale = "Scale",
-      pl = 2L, marginalApprox = "laplace", cores = 1L, verbose = 0L, plot = FALSE,
+      pl = 2L, marginalApprox = "laplace", cores = 1L, verbose = 0L,
       priors = TRUE, ebayes = FALSE, normalise = FALSE, dropPerfectScores = FALSE,
       personPreds = "xcov", keepInternals = TRUE, laplaceKeepCovariance = TRUE)
     Vm <- bigIRT:::bigIRT_covariate_vcov(f, marginal = TRUE)
@@ -192,7 +192,7 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
       AMean = 1, ASD = .3, BMean = 0, BSD = 1, AbilityMean = 0, AbilitySD = 1,
       logitCMean = -20, logitCSD = 0, logitDMean = 20, logitDSD = 0)
     f <- fitIRT(s$dat, score = "score", id = "id", item = "Item", scale = "Scale",
-      pl = 2L, marginalApprox = "laplace", cores = 1L, verbose = 0L, plot = FALSE,
+      pl = 2L, marginalApprox = "laplace", cores = 1L, verbose = 0L,
       priors = TRUE, ebayes = FALSE, normalise = FALSE, dropPerfectScores = FALSE,
       laplaceTolScale = "per_obs", keepInternals = TRUE, laplaceKeepCovariance = TRUE)
     st <- f$laplaceStatus
@@ -239,7 +239,7 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     names(x) <- as.character(ids)
     d[, xcov := x[as.character(id)]]
     f <- fitIRT(d, score = "score", id = "id", item = "Item", scale = "Scale",
-      pl = 4L, marginalApprox = "laplace", cores = 1L, verbose = 0L, plot = FALSE,
+      pl = 4L, marginalApprox = "laplace", cores = 1L, verbose = 0L,
       priors = TRUE, ebayes = FALSE, normalise = FALSE, dropPerfectScores = FALSE,
       personPreds = "xcov", keepInternals = TRUE, laplaceKeepCovariance = TRUE)
     dd <- bigIRT:::bigIRT_direct_eval_from_fit(f, keep_covariance = TRUE)
@@ -273,7 +273,7 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     names(x) <- as.character(ids)
     d[, xcov := x[as.character(id)]]
     f <- fitIRT(d, score = "score", id = "id", item = "Item", scale = "Scale",
-      pl = 4L, marginalApprox = "laplace", cores = 1L, verbose = 0L, plot = FALSE,
+      pl = 4L, marginalApprox = "laplace", cores = 1L, verbose = 0L,
       priors = TRUE, ebayes = FALSE, normalise = FALSE, dropPerfectScores = FALSE,
       personPreds = "xcov", estimateAbilityCorr = TRUE, keepInternals = TRUE,
       laplaceKeepCovariance = TRUE,
@@ -331,7 +331,7 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     eta <- s$A[d$Item, 1] * th - (s$B[d$Item, 1] + beta_true * d$zpred)
     d[, score := stats::rbinom(.N, 1, 1 / (1 + exp(-eta)))]
     f <- fitIRT(d, score = "score", id = "id", item = "Item", scale = "Scale",
-      pl = 2L, marginalApprox = "laplace", cores = 1L, verbose = 0L, plot = FALSE,
+      pl = 2L, marginalApprox = "laplace", cores = 1L, verbose = 0L,
       priors = TRUE, ebayes = FALSE, normalise = FALSE, dropPerfectScores = FALSE,
       BitemPreds = "zpred", itemSpecificBetas = TRUE, keepInternals = TRUE,
       laplaceKeepCovariance = TRUE)
@@ -360,7 +360,7 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     names(z) <- as.character(itm)
     d[, ipred := z[as.character(Item)]]
     f <- fitIRT(d, score = "score", id = "id", item = "Item", scale = "Scale",
-      pl = 2L, marginalApprox = "laplace", cores = 1L, verbose = 0L, plot = FALSE,
+      pl = 2L, marginalApprox = "laplace", cores = 1L, verbose = 0L,
       priors = TRUE, ebayes = FALSE, normalise = FALSE, dropPerfectScores = FALSE,
       BitemPreds = "ipred", itemSpecificBetas = FALSE, laplaceTolScale = "per_obs",
       ## No polish: it drives the item blocks to nearly zero, after which the
@@ -406,8 +406,7 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
       AMean = 1, ASD = .3, BMean = 0, BSD = 0.4, AbilityMean = 0, AbilitySD = 1,
       logitCMean = -20, logitCSD = 0, logitDMean = 20, logitDSD = 0)
     eb_fit <- function(optimizer) fitIRT(s$dat, score = "score", id = "id", item = "Item",
-      scale = "Scale", pl = 2L, marginalApprox = "laplace", cores = 1L, verbose = 0L,
-      plot = FALSE, priors = TRUE, ebayes = TRUE, normalise = FALSE,
+      scale = "Scale", pl = 2L, marginalApprox = "laplace", cores = 1L, verbose = 0L, priors = TRUE, ebayes = TRUE, normalise = FALSE,
       dropPerfectScores = FALSE, keepInternals = TRUE, laplaceKeepCovariance = TRUE,
       laplaceOptimizer = optimizer)
     st <- eb_fit("mize")$laplaceStatus
@@ -457,7 +456,7 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
         logitCMean = -20, logitCSD = 0, logitDMean = 20, logitDSD = 0)
       f <- fitIRT(s$dat, score = "score", id = "id", item = "Item",
         scale = "Scale", pl = 2L, marginalApprox = "laplace", cores = 1L,
-        verbose = 0L, plot = FALSE, priors = TRUE, ebayes = FALSE,
+        verbose = 0L, priors = TRUE, ebayes = FALSE,
         normalise = FALSE, dropPerfectScores = FALSE, estimateAbilityCorr = TRUE)
       est <- as.matrix(f$abilityPrior$corr)[1, 2]
       emp <- stats::cor(s$Ability[, 1], s$Ability[, 2])

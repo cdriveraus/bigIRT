@@ -18,8 +18,7 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     ## Two iterations only, to get the prepared data; the fit itself is unused.
     f <- suppressWarnings(do.call(fitIRT, c(list(dat = sim$dat, pl = pl, cores = 1,
       priors = TRUE, ebayes = FALSE, dropPerfectScores = FALSE, normalise = FALSE,
-      marginalApprox = "laplace", laplaceOuterIter = 2, verbose = 0,
-      plot = FALSE, keepInternals = TRUE), fit_args)))
+      marginalApprox = "laplace", laplaceOuterIter = 2, verbose = 0, keepInternals = TRUE), fit_args)))
     sdat <- f$internals$sdat
     st <- bigIRT:::bigIRT_laplace_initial_state(sdat, eps = 1e-6,
       corr_paramization = "normalized_chol")
@@ -237,8 +236,7 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
   test_that("auto refines a four-dimensional 3PL by the pairwise rule, reproducibly", {
     sim <- pair_sim(5107, Np = 250)
     f <- suppressWarnings(fitIRT(sim$dat, pl = 3, cores = 1, estimateAbilityCorr = TRUE,
-      ebayes = FALSE, marginalApprox = "laplace", keepInternals = TRUE, verbose = 0,
-      plot = FALSE, dropPerfectScores = FALSE, agqNodes = 3L))
+      ebayes = FALSE, marginalApprox = "laplace", keepInternals = TRUE, verbose = 0, dropPerfectScores = FALSE, agqNodes = 3L))
     st <- f$laplaceStatus
     expect_identical(st$marginal, "agq")
     expect_true(isTRUE(st$agq_rule$pairs))

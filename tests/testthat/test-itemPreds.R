@@ -31,7 +31,7 @@ cores=2
     persondat <- dat$dat[!duplicated(id),]
     setnames(persondat,'Ability','1')
 
-    fit <- fitIRT(dat$dat,cores=cores,pl=2,plot=F,verbose=10,priors=T,
+    fit <- fitIRT(dat$dat,cores=cores,pl=2,verbose=10,priors=T,
       BitemPreds = c('V1','V2','V3'),
       AitemPreds = c('V1','V2','V3'),
       # personPreds = c('V1','V2','V3'),
@@ -92,7 +92,7 @@ cores=2
     persondat <- dat$dat[!duplicated(id),]
     setnames(persondat,'Ability','1')
 
-    fit <- fitIRT(dat$dat,cores=cores,pl=2,plot=F,verbose=1,priors=T,
+    fit <- fitIRT(dat$dat,cores=cores,pl=2,verbose=1,priors=T,
       AitemPreds = c('V1','V2','V3'),
       BitemPreds = c('V1','V2','V3'),
       personDat = persondat,
@@ -148,7 +148,7 @@ cores=2
     persondat <- dat$dat[!duplicated(id),]
     setnames(persondat,'Ability','1')
 
-    fit <- fitIRT(dat$dat,cores=cores,pl=3,plot=F,verbose=1,priors=T,
+    fit <- fitIRT(dat$dat,cores=cores,pl=3,verbose=1,priors=T,
       CitemPreds = c('V1','V2','V3'),
       BitemPreds = c('V1','V2','V3'),
       personDat = persondat,

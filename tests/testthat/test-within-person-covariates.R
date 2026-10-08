@@ -34,8 +34,7 @@ sim_within <- function(seed = 11, N = 800, J = 150, per = 40, occ = 4L,
 fit_within <- function(d, preds, ...){
   bigIRT::fitIRT(dat = d, score = "score", id = "id", item = "code",
     scale = "Scale", pl = 2L, personPreds = preds, marginalApprox = "laplace",
-    priors = TRUE, normalise = FALSE, dropPerfectScores = FALSE, verbose = 0L,
-    plot = FALSE, cores = 2L, laplaceTol = 1e-5, laplaceTolScale = "per_obs", ...)
+    priors = TRUE, normalise = FALSE, dropPerfectScores = FALSE, verbose = 0L, cores = 2L, laplaceTol = 1e-5, laplaceTolScale = "per_obs", ...)
 }
 
 test_that("a within-person ability covariate is recovered, not just a between one", {

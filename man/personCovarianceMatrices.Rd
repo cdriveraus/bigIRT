@@ -64,8 +64,8 @@ dimension.}
 \description{
 Builds a posterior precision matrix for each person by combining a prior
 precision matrix with row-wise Fisher information contributions. The intended
-input is the row-level moderated parameter state already produced inside the
-Stan likelihood:
+input is the row-level moderated parameter state a fit reports
+(\code{fit$rowEffective}):
 \itemize{
 \item a current person mean matrix \code{theta_mean}
 \item row-level effective difficulties \code{b}

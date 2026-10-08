@@ -1,0 +1,4 @@
+CXX_STD = CXX17
+PKG_CPPFLAGS = -DRCPP_PARALLEL_USE_TBB=1 -DEIGEN_NO_DEBUG
+PKG_CXXFLAGS = $(shell "${R_HOME}/bin/Rscript" -e "RcppParallel::CxxFlags()")
+PKG_LIBS = $(shell "${R_HOME}/bin/Rscript" -e "RcppParallel::RcppParallelLibs()")
