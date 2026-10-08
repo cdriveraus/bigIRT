@@ -1951,7 +1951,11 @@ bigIRT_laplace_optimize_direct <- function(state, sdat, prior_precision,
     ## at 52. So the refinement starts, and when it ends starts again, from
     ## the run-off items pulled back wherever that gains on its own objective.
     ## With `to` NULL each item goes to the best of the certificate's probe
-    ## points, in order of gain, one at a time while the value rises; with
+    ## points short of the screen itself (half, a quarter and an eighth of
+    ## it: an item put exactly on the screen is no longer screened, so a
+    ## refinement that could not move it would leave it there unnamed, as two
+    ## of 80 unregularised 3D fits did), in order of gain, one at a time while
+    ## the value rises; with
     ## `to` a fraction of the screen, every run-off item goes there, gain or
     ## not (the retries below). NULL when nothing has run off and no
     ## evaluation was made; otherwise the re-centred evaluation at the point
@@ -1962,7 +1966,8 @@ bigIRT_laplace_optimize_direct <- function(state, sdat, prior_precision,
       x <- e$x; moved <- integer(0)
       if(is.null(to)){
         value_at <- function(p) tryCatch(-recentre(p)$f, error = function(err) -Inf)
-        pb <- bigIRT_runaway_pullback(value_at, e$x, ra, sdat, direct_layout, -e$f)
+        pb <- bigIRT_runaway_pullback(value_at, e$x, ra, sdat, direct_layout, -e$f,
+          fractions = c(1/2, 1/4, 1/8))
         ord <- order(-pb$gain)
         ord <- ord[is.finite(pb$gain[ord]) & pb$gain[ord] > tol]
         v <- -e$f

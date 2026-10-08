@@ -122,6 +122,29 @@ test_that("the reported 3-D case is pulled off its ridge, and ends no lower than
   expect_gt(ex, -1044.30 - 3)
 })
 
+test_that("the refinement does not park a run-off item on the screen", {
+  ## Task M_misspecified_N450_r007 (agq-runoff-3d-screen.rds): the Laplace
+  ## stage ends with items 20 and 21 run off, and from there the refinement
+  ## cannot take a step. Its pull-back used to aim at the screen itself among
+  ## other points, and put item 20 at exactly 20 logits per SD -- where the
+  ## screen, which looks for steeper than that, no longer saw it -- so the
+  ## fit was reported not a maximum with nothing named.
+  fx <- readRDS(test_path("fixtures", "agq-runoff-3d-screen.rds"))
+  fit <- suppressWarnings(fitIRT(fx$dat, pl = 2, priors = FALSE, estMeans = character(0),
+    loadings = fx$loadings, dropPerfectScores = FALSE, normalise = FALSE,
+    estimateAbilityCorr = FALSE, itemSpecificBetas = FALSE, laplaceRefine = "agq",
+    cores = 1, verbose = 0, plot = FALSE))
+  st <- fit$laplaceStatus
+  slope <- bigIRT:::bigIRT_runaway_slope()
+  ## The ability prior SD is 1 here, so steepness is |A|.
+  A <- abs(as.matrix(fit$itemPars[, paste0("A_", 1:3)]))
+  expect_false(any(abs(A - slope) < 1e-6))
+  ## Every item steeper than the screen is named, and only those.
+  steep <- as.character(fit$itemPars$Item[apply(A, 1, max) > slope])
+  expect_setequal(as.character(unique(st$diverged$item)), steep)
+  expect_gte(st$refine$agq_end - st$refine$agq_start, -1e-3)
+})
+
 }
 
 test_that("a refresh can end the L-BFGS search", {
