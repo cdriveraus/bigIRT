@@ -11,7 +11,9 @@ normaliseIRT(
   normbase = "Ability",
   normaliseScale = 1,
   normaliseMean = 0,
-  robust = TRUE
+  robust = TRUE,
+  AbilitySD = NULL,
+  AbilityMean = NULL
 )
 }
 \arguments{
@@ -28,8 +30,20 @@ normaliseIRT(
 \item{normaliseMean}{The mean to normalise to. The default is 0 for the
 supported \code{normbase} values ('Ability' or 'B').}
 
-\item{robust}{if TRUE, outliers (greater than 1.5x the interquartile range from the interquartile region of 25-75\%)
-are dropped before computing the mean and sd for normalisation.}
+\item{robust}{If TRUE, the location and scale come from the median and the
+interquartile range, the latter converted to a standard deviation
+(divided by 1.349, its value for a normal distribution). Until October
+2026 the interquartile range itself was set to \code{normaliseScale},
+which left a normal latent variable with standard deviation .74.}
+
+\item{AbilitySD, AbilityMean}{Optional latent standard deviation and mean of
+the solution, used in place of the spread and centre of \code{Ability}
+when \code{normbase = 'Ability'}. Supply them when \code{Ability} holds
+point estimates (MAP, EAP): those are shrunk toward the prior mean, so
+their spread understates the latent scale by roughly the square root of
+the reliability, and normalising by it flattens the discriminations by
+the same factor. For a \code{fitIRT} fit, \code{extractMIRTpars()} returns
+them as \code{latent_sd} and \code{latent_mean}.}
 }
 \value{
 A list containing the normalised A, B, and Ability parameters.

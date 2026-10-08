@@ -45,7 +45,10 @@ measures frozen-mode curvature instead.}
 \item{time_budget}{Numeric. Seconds \code{"auto"} may spend before falling back.}
 }
 \value{
-An object of class \code{bigIRT_iteminfo}:
+An object of class \code{bigIRT_iteminfo}. P counts the parameter
+types free on at least one item; a parameter an item has fixed (an
+anchor through \code{itemDat}) is \code{NA} in every per-item entry below, and the
+item's block covers only the parameters it has free.
 \describe{
 \item{information}{P x P x Nitems array of likelihood information; for
 \code{"exact"}, the inverse of each item's covariance block, prior included.}
@@ -55,6 +58,13 @@ where \code{information} already carries it.}
 of the full inverse.}
 \item{se}{Nitems x P matrix of standard errors.}
 \item{edf}{Effective parameters per item and block.}
+\item{free}{Nitems x P logical matrix, \code{TRUE} where the item has that
+parameter free.}
+\item{se_loadings}{For \code{"exact"} on a fit with signed loadings
+(\code{signedLoadings} in \code{\link[=fitIRT]{fitIRT()}}) only: the standard error of every free
+loading's parameter, Nitems x Nscales, \code{NA} where the loading is fixed.
+With cross-loadings free there is more than one loading per item, which
+the per-item blocks do not describe.}
 }
 }
 \description{

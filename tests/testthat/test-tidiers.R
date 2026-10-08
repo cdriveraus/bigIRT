@@ -153,4 +153,26 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     expect_true(file.exists(out))
     expect_gt(file.size(out), 10000)
   })
+
+  ## Every test above fits with keepInternals = TRUE, so none of them saw what a
+  ## default fit gets. The certificate keeps the exact covariance on a default
+  ## fit, and itemInformation() reads it without the prepared internals; tidyIRT
+  ## used to refuse to ask, warn that the fit carried no prepared data, and
+  ## return a column of NA standard errors.
+  test_that("a default fit (no keepInternals) still gets standard errors", {
+    set.seed(4)
+    s <- simIRT(Nsubs = 600L, Nitems = 20L, Nscales = 1, NitemsAnswered = 15L,
+      AMean = 1, ASD = .3, BMean = 0, BSD = 1,
+      logitCMean = -1.4, logitCSD = .2, logitDMean = 20, logitDSD = 0)
+    args <- list(s$dat, pl = 3L, marginalApprox = "laplace", cores = 1L, verbose = 0L,
+      plot = FALSE, ebayes = FALSE, dropPerfectScores = FALSE)
+    f0 <- do.call(fitIRT, args)
+    f1 <- do.call(fitIRT, c(args, keepInternals = TRUE))
+    expect_null(f0$internals)
+    expect_false(is.null(f0$laplaceStatus$certificate$covariance$items))
+    t0 <- expect_no_warning(tidyIRT(f0, conf.int = TRUE))
+    t1 <- tidyIRT(f1, conf.int = TRUE)
+    expect_true(all(is.finite(t0$std.error)))
+    expect_equal(t0$std.error, t1$std.error, tolerance = 1e-8)
+  })
 }

@@ -37,6 +37,10 @@ standard error and interval.
 One row per item parameter, with a standard error and Wald interval when
 asked. Standard errors are carried onto the reported parameter scale by the
 delta method, since discrimination is estimated as a softplus pre-image and
-the asymptotes as logits. Registered against \code{broom::tidy()} when broom is
-installed.
+the asymptotes as logits; a signed loading (\code{signedLoadings} in \code{\link[=fitIRT]{fitIRT()}})
+is estimated as itself and needs none. On a fit with signed loadings every
+free cross-loading also gets a row, term \verb{A_<scale>}, whose standard error
+comes from the exact covariance (\code{method = "exact"}). A parameter fixed
+through \code{itemDat} is not estimated, so its standard error and interval are
+\code{NA}. Registered against \code{broom::tidy()} when broom is installed.
 }

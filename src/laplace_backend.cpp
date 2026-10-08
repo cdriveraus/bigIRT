@@ -57,16 +57,33 @@ extern "C" SEXP _bigIRT_laplace_person_step_block_cpp_impl(
     SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP,
     SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP,
     SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP,
-    SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
+    SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP,
+    SEXP);
 extern "C" SEXP _bigIRT_laplace_item_block_objective_cpp_impl(
     SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP,
     SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP,
     SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP,
-    SEXP, SEXP, SEXP, SEXP);
+    SEXP, SEXP, SEXP, SEXP, SEXP);
 
 inline double bigirt_softplus_scalar(const double x) {
   if (x > 0.0) return x + std::log1p(std::exp(-x));
   return std::log1p(std::exp(x));
+}
+
+// THE LOADING LINK. A free loading is softplus(raw), which keeps it positive,
+// and that positivity is what fixes the sign of each latent dimension. A
+// loading marked signed (fitIRT's signedLoadings, for cross-loadings) takes
+// the identity instead: loading = raw, d loading / d raw = 1, second
+// derivative 0. Which is which arrives as `A_signed`, one integer per free
+// loading in the order of invspApars, 1 for the identity link -- an array of
+// its own rather than a code folded into A_ref or A_fixed_value, so no
+// existing meaning changes. Every kernel that forms a loading or its
+// derivative (here, agq_backend.cpp, laplace2_backend.cpp, fisher_blocks.cpp,
+// and their R mirrors) reads it.
+inline void bigirt_check_signed(const Rcpp::IntegerVector& A_signed, const R_xlen_t nA) {
+  if (A_signed.size() != nA)
+    Rcpp::stop("A_signed must hold one entry per free loading (%d), not %d.",
+      static_cast<int>(nA), static_cast<int>(A_signed.size()));
 }
 
 inline double bigirt_stable_inv_logit(const double x) {
@@ -1246,6 +1263,8 @@ struct BigIRTLaplaceItemBlockWorker : public RcppParallel::Worker {
   BigIRTOwnedMatrix<double> A_fixed_value;
   BigIRTOwnedMatrix<int> A_beta_row;
   BigIRTOwnedMatrix<double> A_pred;
+  // 1 where a free loading takes the identity link (see the note at the top).
+  BigIRTOwnedVector<int> A_signed;
   BigIRTOwnedVector<int> B_ref;
   BigIRTOwnedVector<double> B_fixed_value;
   BigIRTOwnedVector<int> B_beta_row;
@@ -1326,6 +1345,7 @@ struct BigIRTLaplaceItemBlockWorker : public RcppParallel::Worker {
       Rcpp::NumericMatrix A_fixed_value,
       Rcpp::IntegerMatrix A_beta_row,
       Rcpp::NumericMatrix A_pred,
+      Rcpp::IntegerVector A_signed,
       Rcpp::IntegerVector B_ref,
       Rcpp::NumericVector B_fixed_value,
       Rcpp::IntegerVector B_beta_row,
@@ -1352,6 +1372,7 @@ struct BigIRTLaplaceItemBlockWorker : public RcppParallel::Worker {
       const int max_attempts)
     : obs_by_subj(obs_by_subj), score(score), row_ability(row_ability),
       A_ref(A_ref), A_fixed_value(A_fixed_value), A_beta_row(A_beta_row), A_pred(A_pred),
+      A_signed(A_signed),
       B_ref(B_ref), B_fixed_value(B_fixed_value), B_beta_row(B_beta_row), B_pred(B_pred),
       C_ref(C_ref), C_fixed_value(C_fixed_value), C_beta_row(C_beta_row), C_pred(C_pred),
       D_ref(D_ref), D_fixed_value(D_fixed_value), D_beta_row(D_beta_row), D_pred(D_pred),
@@ -1374,6 +1395,7 @@ struct BigIRTLaplaceItemBlockWorker : public RcppParallel::Worker {
   BigIRTLaplaceItemBlockWorker(const BigIRTLaplaceItemBlockWorker& other, RcppParallel::Split)
     : obs_by_subj(other.obs_by_subj), score(other.score), row_ability(other.row_ability),
       A_ref(other.A_ref), A_fixed_value(other.A_fixed_value), A_beta_row(other.A_beta_row), A_pred(other.A_pred),
+      A_signed(other.A_signed),
       B_ref(other.B_ref), B_fixed_value(other.B_fixed_value), B_beta_row(other.B_beta_row), B_pred(other.B_pred),
       C_ref(other.C_ref), C_fixed_value(other.C_fixed_value), C_beta_row(other.C_beta_row), C_pred(other.C_pred),
       D_ref(other.D_ref), D_fixed_value(other.D_fixed_value), D_beta_row(other.D_beta_row), D_pred(other.D_pred),
@@ -1471,9 +1493,15 @@ struct BigIRTLaplaceItemBlockWorker : public RcppParallel::Worker {
           if (A_ref(obs, k) > 0) {
             const int a_beta_idx = nA_beta_row == 1 ? 1 : A_ref(obs, k);
             const double raw_a = invspApars[A_ref(obs, k) - 1] + add_beta_term(obs, A_pred, invspAbeta, a_beta_idx);
-            const double sig_a = bigirt_stable_inv_logit(raw_a);
-            a_val = softplus(raw_a);
-            row_a_mult[oi](k) = sig_a;
+            if (A_signed[A_ref(obs, k) - 1] != 0) {
+              // Identity link: the loading is the raw value, slope one.
+              a_val = raw_a;
+              row_a_mult[oi](k) = 1.0;
+            } else {
+              const double sig_a = bigirt_stable_inv_logit(raw_a);
+              a_val = softplus(raw_a);
+              row_a_mult[oi](k) = sig_a;
+            }
           }
           row_a[oi](k) = a_val;
           eta_obs += a_val * row_ability(obs, k);
@@ -1641,6 +1669,7 @@ struct BigIRTItemPrepared {
   Rcpp::NumericMatrix row_ability;
   Rcpp::IntegerMatrix A_ref, A_beta_row;
   Rcpp::NumericMatrix A_fixed_value, A_pred;
+  Rcpp::IntegerVector A_signed;
   Rcpp::IntegerVector B_ref, B_beta_row, C_ref, C_beta_row, D_ref, D_beta_row;
   Rcpp::NumericVector B_fixed_value, C_fixed_value, D_fixed_value;
   Rcpp::NumericMatrix B_pred, C_pred, D_pred;
@@ -1668,9 +1697,11 @@ extern "C" SEXP _bigIRT_laplace_item_eval_cpp_impl(
   Rcpp::NumericMatrix logitCbeta(logitCbetaSEXP);
   Rcpp::NumericVector logitDpars(logitDparsSEXP);
   Rcpp::NumericMatrix logitDbeta(logitDbetaSEXP);
+  bigirt_check_signed(d.A_signed, invspApars.size());
 
   BigIRTLaplaceItemBlockWorker worker(
     d.obs_by_subj, d.score, d.row_ability, d.A_ref, d.A_fixed_value, d.A_beta_row, d.A_pred,
+    d.A_signed,
     d.B_ref, d.B_fixed_value, d.B_beta_row, d.B_pred,
     d.C_ref, d.C_fixed_value, d.C_beta_row, d.C_pred,
     d.D_ref, d.D_fixed_value, d.D_beta_row, d.D_pred,
@@ -1708,6 +1739,7 @@ extern "C" SEXP _bigIRT_laplace_item_block_objective_cpp_impl(
     SEXP A_fixed_valueSEXP,
     SEXP A_beta_rowSEXP,
     SEXP A_predSEXP,
+    SEXP A_signedSEXP,
     SEXP B_refSEXP,
     SEXP B_fixed_valueSEXP,
     SEXP B_beta_rowSEXP,
@@ -1744,6 +1776,7 @@ extern "C" SEXP _bigIRT_laplace_item_block_objective_cpp_impl(
   Rcpp::NumericMatrix A_fixed_value(A_fixed_valueSEXP);
   Rcpp::IntegerMatrix A_beta_row(A_beta_rowSEXP);
   Rcpp::NumericMatrix A_pred(A_predSEXP);
+  Rcpp::IntegerVector A_signed(A_signedSEXP);
   Rcpp::IntegerVector B_ref(B_refSEXP);
   Rcpp::NumericVector B_fixed_value(B_fixed_valueSEXP);
   Rcpp::IntegerVector B_beta_row(B_beta_rowSEXP);
@@ -1780,12 +1813,13 @@ extern "C" SEXP _bigIRT_laplace_item_block_objective_cpp_impl(
   if (B_ref.size() != Nobs || C_ref.size() != Nobs || D_ref.size() != Nobs) {
     Rcpp::stop("B/C/D reference vectors must have length Nobs.");
   }
+  bigirt_check_signed(A_signed, invspApars.size());
 
   BigIRTObsIndex obs_by_subj;
   if (!obs_by_subj.build(id, Nobs, Nsubs)) Rcpp::stop("id must be coded from 1 to Nsubs.");
 
   BigIRTLaplaceItemBlockWorker worker(
-    obs_by_subj, score, row_ability, A_ref, A_fixed_value, A_beta_row, A_pred,
+    obs_by_subj, score, row_ability, A_ref, A_fixed_value, A_beta_row, A_pred, A_signed,
     B_ref, B_fixed_value, B_beta_row, B_pred,
     C_ref, C_fixed_value, C_beta_row, C_pred,
     D_ref, D_fixed_value, D_beta_row, D_pred,
@@ -1877,6 +1911,7 @@ extern "C" SEXP _bigIRT_laplace_person_step_block_cpp_impl(
     SEXP A_fixed_valueSEXP,
     SEXP A_beta_rowSEXP,
     SEXP A_predSEXP,
+    SEXP A_signedSEXP,
     SEXP B_refSEXP,
     SEXP B_fixed_valueSEXP,
     SEXP B_beta_rowSEXP,
@@ -1919,6 +1954,7 @@ extern "C" SEXP _bigIRT_laplace_person_step_block_cpp_impl(
   Rcpp::NumericMatrix A_fixed_value(A_fixed_valueSEXP);
   Rcpp::IntegerMatrix A_beta_row(A_beta_rowSEXP);
   Rcpp::NumericMatrix A_pred(A_predSEXP);
+  Rcpp::IntegerVector A_signed(A_signedSEXP);
   Rcpp::IntegerVector B_ref(B_refSEXP);
   Rcpp::NumericVector B_fixed_value(B_fixed_valueSEXP);
   Rcpp::IntegerVector B_beta_row(B_beta_rowSEXP);
@@ -1959,6 +1995,7 @@ extern "C" SEXP _bigIRT_laplace_person_step_block_cpp_impl(
       A_beta_row.nrow() != Nobs || A_beta_row.ncol() != K || prior_mean.nrow() != Nsubs || prior_mean.ncol() != K) {
     Rcpp::stop("Unexpected dimensions in Laplace person-step block inputs.");
   }
+  bigirt_check_signed(A_signed, invspApars.size());
 
   BigIRTObsIndex obs_by_subj;
   if (!obs_by_subj.build(id, Nobs, Nsubs)) Rcpp::stop("id must be coded from 1 to Nsubs.");
@@ -1990,6 +2027,7 @@ extern "C" SEXP _bigIRT_laplace_person_step_block_cpp_impl(
     BigIRTOwnedMatrix<double> A_fixed_value;
     BigIRTOwnedMatrix<int> A_beta_row;
     BigIRTOwnedMatrix<double> A_pred;
+    BigIRTOwnedVector<int> A_signed;
     BigIRTOwnedVector<int> B_ref;
     BigIRTOwnedVector<double> B_fixed_value;
     BigIRTOwnedVector<int> B_beta_row;
@@ -2041,6 +2079,7 @@ extern "C" SEXP _bigIRT_laplace_person_step_block_cpp_impl(
       Rcpp::NumericMatrix A_fixed_value,
       Rcpp::IntegerMatrix A_beta_row,
       Rcpp::NumericMatrix A_pred,
+      Rcpp::IntegerVector A_signed,
       Rcpp::IntegerVector B_ref,
       Rcpp::NumericVector B_fixed_value,
       Rcpp::IntegerVector B_beta_row,
@@ -2083,6 +2122,7 @@ extern "C" SEXP _bigIRT_laplace_person_step_block_cpp_impl(
       : obs_by_subj(obs_by_subj), score(score), theta_init(theta_init), person_pred(person_pred),
         fixed_ability(fixed_ability), fixed_ability_value(fixed_ability_value),
         A_ref(A_ref), A_fixed_value(A_fixed_value), A_beta_row(A_beta_row), A_pred(A_pred),
+        A_signed(A_signed),
         B_ref(B_ref), B_fixed_value(B_fixed_value), B_beta_row(B_beta_row), B_pred(B_pred),
         C_ref(C_ref), C_fixed_value(C_fixed_value), C_beta_row(C_beta_row), C_pred(C_pred),
         D_ref(D_ref), D_fixed_value(D_fixed_value), D_beta_row(D_beta_row), D_pred(D_pred),
@@ -2154,7 +2194,8 @@ extern "C" SEXP _bigIRT_laplace_person_step_block_cpp_impl(
               // segfaulted whenever item covariates were present.
               const int a_beta_idx = (invspAbeta.nrow() == 1) ? 1 : A_ref(obs, k);
               const double raw_a = invspApars[A_ref(obs, k) - 1] + add_beta_term(obs, A_pred, invspAbeta, a_beta_idx);
-              a_val = softplus(raw_a);
+              // Identity link for a signed loading (see the note at the top).
+              a_val = A_signed[A_ref(obs, k) - 1] != 0 ? raw_a : softplus(raw_a);
             }
             loadings[oi](k) = a_val;
           }
@@ -2424,7 +2465,7 @@ extern "C" SEXP _bigIRT_laplace_person_step_block_cpp_impl(
 
   BigIRTLaplacePersonBlockWorker worker(
     obs_by_subj, score, theta_init, person_pred, fixed_ability, fixed_ability_value,
-    A_ref, A_fixed_value, A_beta_row, A_pred,
+    A_ref, A_fixed_value, A_beta_row, A_pred, A_signed,
     B_ref, B_fixed_value, B_beta_row, B_pred,
     C_ref, C_fixed_value, C_beta_row, C_pred,
     D_ref, D_fixed_value, D_beta_row, D_pred,
@@ -2491,6 +2532,7 @@ extern "C" SEXP _bigIRT_laplace_direct_block_fg_cpp_impl(
     SEXP A_fixed_valueSEXP,
     SEXP A_beta_rowSEXP,
     SEXP A_predSEXP,
+    SEXP A_signedSEXP,
     SEXP B_refSEXP,
     SEXP B_fixed_valueSEXP,
     SEXP B_beta_rowSEXP,
@@ -2528,7 +2570,7 @@ extern "C" SEXP _bigIRT_laplace_direct_block_fg_cpp_impl(
   Rcpp::List posterior = Rcpp::as<Rcpp::List>(_bigIRT_laplace_person_step_block_cpp_impl(
     idSEXP, scoreSEXP, theta_initSEXP, person_predSEXP,
     fixed_abilitySEXP, fixed_ability_valueSEXP,
-    A_refSEXP, A_fixed_valueSEXP, A_beta_rowSEXP, A_predSEXP,
+    A_refSEXP, A_fixed_valueSEXP, A_beta_rowSEXP, A_predSEXP, A_signedSEXP,
     B_refSEXP, B_fixed_valueSEXP, B_beta_rowSEXP, B_predSEXP,
     C_refSEXP, C_fixed_valueSEXP, C_beta_rowSEXP, C_predSEXP,
     D_refSEXP, D_fixed_valueSEXP, D_beta_rowSEXP, D_predSEXP,
@@ -2564,7 +2606,7 @@ extern "C" SEXP _bigIRT_laplace_direct_block_fg_cpp_impl(
   Rcpp::NumericVector logdet_scale_holder = Rcpp::NumericVector::create(1.0);
   Rcpp::List item_fg = Rcpp::as<Rcpp::List>(_bigIRT_laplace_item_block_objective_cpp_impl(
     idSEXP, scoreSEXP, row_ability,
-    A_refSEXP, A_fixed_valueSEXP, A_beta_rowSEXP, A_predSEXP,
+    A_refSEXP, A_fixed_valueSEXP, A_beta_rowSEXP, A_predSEXP, A_signedSEXP,
     B_refSEXP, B_fixed_valueSEXP, B_beta_rowSEXP, B_predSEXP,
     C_refSEXP, C_fixed_valueSEXP, C_beta_rowSEXP, C_predSEXP,
     D_refSEXP, D_fixed_valueSEXP, D_beta_rowSEXP, D_predSEXP,

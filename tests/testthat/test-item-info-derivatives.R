@@ -40,7 +40,7 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     aSa <- lo^2 * d$eval$posterior$covariance[1, 1, ids]
     w <- pmax(1 / r - (s^2 * aSa) / r^2, 0)
     slot <- c(B = "Bpars", A = "invspApars", C = "logitCpars", D = "logitDpars")
-    items <- as.integer(d$context$B_ref)
+    items <- as.integer(d$context$items)
     worst <- 0
     for(j in seq_len(bl$ni)){
       rows <- which(items == j)

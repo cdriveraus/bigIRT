@@ -59,6 +59,32 @@ bigirt_int_matrix <- function(x, nr, nc){
   matrix(as.integer(x), nrow = nr, ncol = nc)
 }
 
+## Which free loadings take the identity link (fitIRT's signedLoadings), as
+## one integer per free loading in the order of invspApars: 1 for the identity,
+## 0 for softplus. Every kernel that forms a loading or its derivative is handed
+## this vector explicitly; see the note on the link at the top of
+## src/laplace_backend.cpp. `sdat$signedA`, one entry per item-by-scale cell in
+## the order of fixedAlog, exists only on fits that asked for signed loadings,
+## so standata from any other fit -- including every fit made before the
+## option existed -- reads as all softplus.
+bigIRT_laplace_signed_A <- function(sdat){
+  nfree <- max(0L, as.integer(sdat$NitemScales) - as.integer(sdat$NfixedA))
+  s <- sdat$signedA
+  if(is.null(s)) return(integer(nfree))
+  out <- as.integer(s[as.integer(sdat$fixedAlog) == 0L])
+  if(length(out) != nfree) stop("sdat$signedA does not match the free loadings.", call. = FALSE)
+  out
+}
+
+## The same as an Nitems x Nscales logical matrix, or NULL when nothing is
+## signed. Row-major like a_matrix_to_vector(), which is how signedA was built.
+bigIRT_signed_loading_matrix <- function(sdat){
+  s <- sdat$signedA
+  if(is.null(s) || !any(as.integer(s) == 1L)) return(NULL)
+  matrix(as.integer(s) == 1L, nrow = as.integer(sdat$Nitems),
+    ncol = as.integer(sdat$Nscales), byrow = TRUE)
+}
+
 ## Evaluate against prepared data. Only the item parameters cross the boundary.
 bigIRT_laplace_item_eval <- function(prepared, invspApars, invspAbeta, Bpars, Bbeta,
   logitCpars, logitCbeta, logitDpars, logitDbeta, grain_size = 64L,
@@ -73,7 +99,7 @@ bigIRT_laplace_item_eval <- function(prepared, invspApars, invspAbeta, Bpars, Bb
 }
 
 bigIRT_laplace_item_block_objective_cpp_impl <- function(id, score, row_ability,
-  A_ref, A_fixed_value, A_beta_row, A_pred,
+  A_ref, A_fixed_value, A_beta_row, A_pred, A_signed,
   B_ref, B_fixed_value, B_beta_row, B_pred,
   C_ref, C_fixed_value, C_beta_row, C_pred,
   D_ref, D_fixed_value, D_beta_row, D_pred,
@@ -91,6 +117,7 @@ bigIRT_laplace_item_block_objective_cpp_impl <- function(id, score, row_ability,
     as.matrix(A_fixed_value),
     bigirt_int_matrix(A_beta_row, nrow(row_ability), ncol(row_ability)),
     as.matrix(A_pred),
+    as.integer(A_signed),
     as.integer(B_ref),
     as.numeric(B_fixed_value),
     as.integer(B_beta_row),
@@ -123,7 +150,7 @@ bigIRT_laplace_item_block_objective_cpp_impl <- function(id, score, row_ability,
 
 bigIRT_laplace_direct_block_fg_cpp_impl <- function(id, score, theta_init,
   person_pred, fixed_ability, fixed_ability_value,
-  A_ref, A_fixed_value, A_beta_row, A_pred,
+  A_ref, A_fixed_value, A_beta_row, A_pred, A_signed,
   B_ref, B_fixed_value, B_beta_row, B_pred,
   C_ref, C_fixed_value, C_beta_row, C_pred,
   D_ref, D_fixed_value, D_beta_row, D_pred,
@@ -143,6 +170,7 @@ bigIRT_laplace_direct_block_fg_cpp_impl <- function(id, score, theta_init,
     as.matrix(A_fixed_value),
     bigirt_int_matrix(A_beta_row, nrow(person_pred), ncol(theta_init)),
     as.matrix(A_pred),
+    as.integer(A_signed),
     as.integer(B_ref),
     as.numeric(B_fixed_value),
     as.integer(B_beta_row),
@@ -412,6 +440,8 @@ bigIRT_laplace_row_context <- function(sdat, rows = bigIRT_laplace_training_rows
     fixed_A_value = fixed_A_value,
     A_ref = A_ref,
     A_beta_row = A_beta_row,
+    ## Per free loading, indexed by A_ref: 1 for the identity link.
+    A_signed = bigIRT_laplace_signed_A(sdat),
     B_ref = B_ref,
     B_fixed = sdat$fixedB[items] == 1L,
     B_fixed_value = sdat$Bdata[items],
@@ -495,6 +525,7 @@ bigIRT_laplace_row_effective <- function(state, sdat, thetaBase = state$AbilityB
 
   loadings <- matrix(0, nrow = nrows, ncol = K)
   a_linear <- if(include_raw) matrix(NA_real_, nrow = nrows, ncol = K) else NULL
+  signedA <- context$A_signed %||% bigIRT_laplace_signed_A(sdat)
   for(si in seq_len(K)){
     ref <- context$A_ref[, si]
     fixed <- context$fixed_A[, si]
@@ -509,6 +540,12 @@ bigIRT_laplace_row_effective <- function(state, sdat, thetaBase = state$AbilityB
     }
     loadings[, si] <- context$fixed_A_value[, si]
     if(any(!fixed)) loadings[!fixed, si] <- afunc(raw[!fixed])
+    ## A signed loading (signedLoadings) is its raw value, not its softplus.
+    if(any(signedA == 1L)){
+      sg <- ref > 0L
+      sg[sg] <- signedA[ref[sg]] == 1L
+      if(any(sg)) loadings[sg, si] <- raw[sg]
+    }
     if(include_raw) a_linear[, si] <- raw
   }
 
@@ -633,6 +670,7 @@ bigIRT_laplace_item_context <- function(sdat, layout = bigIRT_laplace_item_layou
     A_ref = row_context$A_ref,
     A_beta_row = row_context$A_beta_row,
     A_pred = row_context$A_pred,
+    A_signed = row_context$A_signed,
     B_ref = row_context$B_ref,
     B_beta_row = row_context$B_beta_row,
     B_pred = row_context$B_pred,
@@ -908,7 +946,17 @@ bigIRT_laplace_item_prior <- function(state, sdat, layout = bigIRT_laplace_item_
   grad <- numeric(n_par)
   value <- 0
 
-  if(length(state$invspApars)){
+  signedA <- bigIRT_laplace_signed_A(sdat) == 1L
+  if(length(state$invspApars) && any(signedA)){
+    ## A signed loading (signedLoadings) is centred at zero with the same SD,
+    ## never at the estimated mean: invspAMean is the mean of the softplus
+    ## pre-images of the positive loadings, a different scale and a different
+    ## population, and only those pull on it.
+    muA <- ifelse(signedA, 0, state$invspAMean)
+    value <- value + sum(dnorm(state$invspApars, mean = muA, sd = sdat$invspASD, log = TRUE))
+    if(length(layout$A)) grad[layout$A] <- grad[layout$A] - (state$invspApars - muA) / (sdat$invspASD^2)
+    if(length(layout$A_mean)) grad[layout$A_mean] <- sum(((state$invspApars - state$invspAMean) / (sdat$invspASD^2))[!signedA])
+  } else if(length(state$invspApars)){
     value <- value + sum(dnorm(state$invspApars, mean = state$invspAMean, sd = sdat$invspASD, log = TRUE))
     if(length(layout$A)) grad[layout$A] <- grad[layout$A] - (state$invspApars - state$invspAMean) / (sdat$invspASD^2)
     if(length(layout$A_mean)) grad[layout$A_mean] <- sum((state$invspApars - state$invspAMean) / (sdat$invspASD^2))
@@ -1034,7 +1082,7 @@ bigIRT_laplace_ability_mean_contribution <- function(state, sdat, posterior, pri
 
 bigIRT_laplace_person_step_block_cpp_impl <- function(id, score, theta_init,
   person_pred, fixed_ability, fixed_ability_value,
-  A_ref, A_fixed_value, A_beta_row, A_pred,
+  A_ref, A_fixed_value, A_beta_row, A_pred, A_signed,
   B_ref, B_fixed_value, B_beta_row, B_pred,
   C_ref, C_fixed_value, C_beta_row, C_pred,
   D_ref, D_fixed_value, D_beta_row, D_pred,
@@ -1053,6 +1101,7 @@ bigIRT_laplace_person_step_block_cpp_impl <- function(id, score, theta_init,
     as.matrix(A_fixed_value),
     bigirt_int_matrix(A_beta_row, nrow(person_pred), ncol(theta_init)),
     as.matrix(A_pred),
+    as.integer(A_signed),
     as.integer(B_ref),
     as.numeric(B_fixed_value),
     as.integer(B_beta_row),
@@ -1110,6 +1159,8 @@ bigIRT_laplace_direct_objective <- function(par, state, sdat, prior_precision,
     corr_paramization = context$corr_paramization
   )
   row_context <- context$row_context
+  ## Which free loadings take the identity link; every kernel below is told.
+  A_signed <- row_context$A_signed %||% bigIRT_laplace_signed_A(sdat)
 
   # Some C++ kernels have brittle handling for 0-column Eigen matrices.
   # When there are no person predictors, replace 0-column predictor inputs
@@ -1157,7 +1208,7 @@ bigIRT_laplace_direct_objective <- function(par, state, sdat, prior_precision,
       theta_init = theta_init, person_pred = person_pred,
       fixed_ability = row_context$fixed_ability_int %||% row_context$fixed_ability, fixed_ability_value = row_context$fixed_ability_value,
       A_ref = row_context$A_ref, A_fixed_value = row_context$fixed_A_value,
-      A_beta_row = row_context$A_beta_row, A_pred = row_context$A_pred,
+      A_beta_row = row_context$A_beta_row, A_pred = row_context$A_pred, A_signed = A_signed,
       B_ref = row_context$B_ref, B_fixed_value = row_context$B_fixed_value,
       B_beta_row = row_context$B_beta_row, B_pred = row_context$B_pred,
       C_ref = row_context$C_ref, C_fixed_value = row_context$C_fixed_value,
@@ -1178,7 +1229,7 @@ bigIRT_laplace_direct_objective <- function(par, state, sdat, prior_precision,
       person_pred = person_pred, fixed_ability = row_context$fixed_ability_int %||% row_context$fixed_ability,
       fixed_ability_value = row_context$fixed_ability_value,
       A_ref = row_context$A_ref, A_fixed_value = row_context$fixed_A_value,
-      A_beta_row = row_context$A_beta_row, A_pred = row_context$A_pred,
+      A_beta_row = row_context$A_beta_row, A_pred = row_context$A_pred, A_signed = A_signed,
       B_ref = row_context$B_ref, B_fixed_value = row_context$B_fixed_value,
       B_beta_row = row_context$B_beta_row, B_pred = row_context$B_pred,
       C_ref = row_context$C_ref, C_fixed_value = row_context$C_fixed_value,
@@ -1208,6 +1259,7 @@ bigIRT_laplace_direct_objective <- function(par, state, sdat, prior_precision,
     A_fixed_value = row_context$fixed_A_value,
     A_beta_row = row_context$A_beta_row,
     A_pred = row_context$A_pred,
+    A_signed = A_signed,
     B_ref = row_context$B_ref,
     B_fixed_value = row_context$B_fixed_value,
     B_beta_row = row_context$B_beta_row,
@@ -1394,6 +1446,7 @@ bigIRT_laplace_direct_objective <- function(par, state, sdat, prior_precision,
       theta_mode = posterior$theta_mode, person_pred = person_pred,
       fixed_ability = row_context$fixed_ability_int %||% row_context$fixed_ability, fixed_ability_value = row_context$fixed_ability_value,
       A_ref = row_context$A_ref, A_fixed_value = row_context$fixed_A_value, A_pred = row_context$A_pred,
+      A_signed = A_signed,
       B_ref = row_context$B_ref, B_fixed_value = row_context$B_fixed_value, B_pred = row_context$B_pred,
       C_ref = row_context$C_ref, C_fixed_value = row_context$C_fixed_value, C_pred = row_context$C_pred,
       D_ref = row_context$D_ref, D_fixed_value = row_context$D_fixed_value, D_pred = row_context$D_pred,
@@ -1470,10 +1523,16 @@ bigIRT_laplace_newton_step <- function(ev, sdat, context, layout){
   P <- bl$P; ni <- bl$ni
   ps <- attr(layout, "par_scale")
   step <- numeric(length(ev$approx_grad))
+  ## Each item steps over the parameters it has free, through its free
+  ## position (bigIRT_item_free_pos): index j is item j only while no item
+  ## has the parameter fixed, and with one difficulty anchored the free ones
+  ## used to take no step at all.
   for(j in seq_len(ni)){
-    idx <- vapply(bl$active, function(b) layout[[b]][j], integer(1))
+    f <- !is.na(bl$free_pos[, j])
+    if(!any(f)) next
+    idx <- bigIRT_item_coords(bl$free_pos, layout, j)[f]
     if(anyNA(idx) || any(idx < 1L)) next
-    H <- matrix(bl$info[, , j], P, P) + diag(bl$prior_precision[, j], P)
+    H <- matrix(bl$info[, , j], P, P)[f, f, drop = FALSE] + diag(bl$prior_precision[f, j], sum(f))
     ## The gradient arrives in the optimiser scale, and the curvature is in the
     ## natural one, so bring the curvature across before solving.
     if(length(ps) == length(step)){
@@ -1496,7 +1555,10 @@ bigIRT_laplace_newton_step <- function(ev, sdat, context, layout){
     A_mean = c(sd = "invspASD", musd = "AMeanSD"),
     C_mean = c(sd = "logitCSD", musd = "logitCMeanSD"),
     D_mean = c(sd = "logitDSD", musd = "logitDMeanSD"))
-  n_free <- c(B_mean = length(ev$state$Bpars), A_mean = length(ev$state$invspApars),
+  ## Signed loadings are centred at zero, not at the A mean, so only the
+  ## softplus ones count towards its curvature.
+  n_free <- c(B_mean = length(ev$state$Bpars),
+              A_mean = length(ev$state$invspApars) - sum(bigIRT_laplace_signed_A(sdat) == 1L),
               C_mean = length(ev$state$logitCpars), D_mean = length(ev$state$logitDpars))
   for(nm in names(mean_blocks)){
     idx <- layout[[nm]]
@@ -1938,9 +2000,14 @@ bigIRT_laplace_optimize_direct <- function(state, sdat, prior_precision,
     fit$certificate <- tryCatch(bigIRT_certify(final = final, par = fit$par,
       context = context, state = state, sdat = sdat, prior_precision = prior_precision,
       layout = direct_layout, jitter = jitter, route = certify$route %||% "fast",
-      budget = certify$budget %||% Inf, tolerance = certify$tolerance),
+      budget = certify$budget %||% Inf, tolerance = certify$tolerance,
+      item_labels = certify$item_labels, scale_labels = certify$scale_labels),
       error = function(e) list(status = "unknown", certified = FALSE, converged = NA,
         reason = paste0("the certificate could not be computed: ", conditionMessage(e))))
+  ## Items that have run off (R/certify.R), screened whether or not the
+  ## certificate ran: one pass over the items, no evaluations.
+  fit$runaway <- tryCatch(bigIRT_runaway_items(final$state, sdat, direct_layout),
+    error = function(e) NULL)
   if(length(history)){
     history[[length(history)]][["optimizerIter"]] <- if(!is.null(fit$iter)) fit$iter else NA_integer_
     history[[length(history)]][["optimizerTerminate"]] <- if(!is.null(fit$terminate$what)) as.character(fit$terminate$what) else NA_character_
@@ -1959,13 +2026,17 @@ bigIRT_laplace_transformed_betas <- function(state, sdat){
   )
 
   if(length(state$invspAbeta)){
+    ## d loading / d raw: logistic(raw) under softplus, 1 for a signed loading.
+    a_slope <- inv_logit(state$invspApars)
+    signedA <- bigIRT_laplace_signed_A(sdat) == 1L
+    if(length(signedA) == length(a_slope) && any(signedA)) a_slope[signedA] <- 1
     if(nrow(state$invspAbeta) == 1L){
-      a_mult <- mean(inv_logit(state$invspApars), na.rm = TRUE)
+      a_mult <- mean(a_slope, na.rm = TRUE)
       if(!is.finite(a_mult)) a_mult <- 0
       out$Abeta <- state$invspAbeta * a_mult
     } else {
       out$Abeta <- state$invspAbeta * matrix(
-        inv_logit(state$invspApars),
+        a_slope,
         nrow = nrow(state$invspAbeta),
         ncol = ncol(state$invspAbeta)
       )
@@ -2531,33 +2602,47 @@ bigIRT_laplace_eb_update <- function(state, sdat, context, row_effective, row_co
     out$changed <<- c(out$changed, sd_name)
   }
 
-  ni <- as.integer(sdat$Nitems)
+  ## The refs are free-parameter indices, so each information vector has one
+  ## entry per FREE parameter, aligned with the estimates. It used to be sized
+  ## at Nitems: with f parameters of a block fixed (anchors through itemDat,
+  ## fixed loadings) its last f entries stayed zero, entered
+  ## mean(1 / pmax(info, 1e-8)) at 1e8 each, and the prior SD floored at
+  ## min_sd whatever the data said. With nothing fixed the two lengths agree,
+  ## which is why it never showed.
   if(length(state$Bpars) >= 3L)
-    set_block("BSDx", "BMeandat", state$Bpars, sum_by(w, context$B_ref, ni), sdat$fixedBMean)
+    set_block("BSDx", "BMeandat", state$Bpars,
+      sum_by(w, context$B_ref, length(state$Bpars)), sdat$fixedBMean)
 
   ## Free-parameter length is the reliable signal: a 2PL leaves logitCpars
   ## empty rather than recording a model order in standata.
   if(length(state$logitCpars) >= 3L){
-    ic <- sum_by(((1 - gg) * bigIRT_dc_dx(cr))^2 / r, context$C_ref, ni)
+    ic <- sum_by(((1 - gg) * bigIRT_dc_dx(cr))^2 / r, context$C_ref, length(state$logitCpars))
     set_block("logitCSD", "logitCMeandat", state$logitCpars, ic, sdat$fixedCMean)
   }
   if(length(state$logitDpars) >= 3L){
-    id <- sum_by((gg * bigIRT_dd_dx(dr))^2 / r, context$D_ref, ni)
+    id <- sum_by((gg * bigIRT_dd_dx(dr))^2 / r, context$D_ref, length(state$logitDpars))
     set_block("logitDSD", "logitDMeandat", state$logitDpars, id, sdat$fixedDMean)
   }
   ## Discrimination enters through a*theta, so its information carries theta^2
   ## and the softplus derivative. Only the unidimensional case is handled; with
   ## several scales the mapping from rows to per-scale loadings is not a single
   ## index and the prior is left alone rather than updated approximately.
-  if(as.integer(sdat$Nscales) == 1L && length(state$invspApars) >= 3L){
+  ## Signed loadings (signedLoadings) are left out: their prior is centred at
+  ## zero, so they are not draws from the population this block describes.
+  signedA <- bigIRT_laplace_signed_A(sdat) == 1L
+  if(as.integer(sdat$Nscales) == 1L && sum(!signedA) >= 3L){
     ## The row ability, covariate term included: that is what A multiplies.
     th <- as.numeric(bigIRT_row_ability(state, sdat, row_context, thetaBase, row_effective))
     dsp <- inv_logit(as.numeric(state$invspApars))
+    if(any(signedA)) dsp[signedA] <- 1
     aref <- as.integer(context$A_ref[, 1])
     dspr <- rep(1, length(th)); keep <- aref > 0L
     dspr[keep] <- dsp[aref[keep]]
-    ia <- sum_by(w * (th * dspr)^2, aref, ni)
-    set_block("invspASD", "invspAMeandat", state$invspApars, ia, sdat$fixedAMean)
+    ia <- sum_by(w * (th * dspr)^2, aref, length(state$invspApars))
+    if(any(signedA))
+      set_block("invspASD", "invspAMeandat", state$invspApars[!signedA], ia[which(!signedA)], sdat$fixedAMean)
+    else
+      set_block("invspASD", "invspAMeandat", state$invspApars, ia, sdat$fixedAMean)
   }
   out
 }
@@ -2609,12 +2694,18 @@ bigIRT_laplace_hyper_pieces <- function(state, sdat, context, row_effective,
   wcorr <- 1 / r - (s^2 * aSa) / r^2      # profile weight after removing theta
 
   sig <- inv_logit(as.numeric(state$invspApars))
+  ## Signed loadings (signedLoadings): slope one, and left out of the
+  ## discrimination update, since their prior is centred at zero rather than
+  ## drawn from the population this block describes.
+  signedA <- bigIRT_laplace_signed_A(sdat) == 1L
+  if(any(signedA)) sig[signedA] <- 1
   aref <- as.integer(context$A_ref[, 1])
   sigr <- rep(1, length(ids)); keep <- aref > 0L; sigr[keep] <- sig[aref[keep]]
   th1 <- bigIRT_row_ability(state, sdat, row_context, thetaBase, row_effective)[, 1]
   V <- list(B = -s, A = s * th1 * sigr,
             C = (1 - gg) * bigIRT_dc_dx(cr), D = gg * bigIRT_dd_dx(dr))
-  est <- list(B = as.numeric(state$Bpars), A = as.numeric(state$invspApars),
+  est <- list(B = as.numeric(state$Bpars),
+              A = if(any(signedA)) as.numeric(state$invspApars)[!signedA] else as.numeric(state$invspApars),
               C = as.numeric(state$logitCpars), D = as.numeric(state$logitDpars))
   ## Only blocks with enough free parameters to have a dispersion are updated.
   ## Discrimination is skipped beyond one dimension: its information carries a
@@ -2623,7 +2714,27 @@ bigIRT_laplace_hyper_pieces <- function(state, sdat, context, row_effective,
   if(K > 1L) active <- setdiff(active, "A")
   if(!length(active)) return(NULL)
   V <- V[active]; est <- est[active]; P <- length(active)
-  item <- as.integer(context$B_ref)
+  ## One block per ITEM, over that item's FREE parameters. This used to group
+  ## by B_ref, which is the free-difficulty index: the same thing while every
+  ## difficulty is free, but with anchors the rows of an item with a fixed
+  ## difficulty fell into group 0 and were dropped from every block, the
+  ## unused trailing slices were prior-only and each added log tau to the
+  ## marginal, and a fixed loading or asymptote was integrated over as if it
+  ## were free. A fixed parameter is not integrated at all, so its V is zeroed
+  ## on that item's rows and the objective puts a unit on its diagonal, which
+  ## leaves the determinant that of the item's free block.
+  item <- as.integer(row_context$items)
+  free_row <- list(B = context$B_ref > 0L, A = aref > 0L,
+                   C = context$C_ref > 0L, D = context$D_ref > 0L)[active]
+  for(b in active){
+    off <- !free_row[[b]]
+    if(any(off)) V[[b]][off] <- 0
+  }
+  ## The A block is active only at K = 1, where fixedAlog is per item.
+  fixed_flag <- list(B = sdat$fixedB, A = sdat$fixedAlog,
+                     C = sdat$fixedClogit, D = sdat$fixedDlogit)[active]
+  fixed_item <- matrix(vapply(fixed_flag, function(z) as.integer(z) == 1L, logical(ni)),
+                       nrow = ni, ncol = P)
   scat <- function(x){
     agg <- rowsum(x, item); out <- numeric(ni)
     out[as.integer(rownames(agg))] <- as.numeric(agg); out
@@ -2634,7 +2745,17 @@ bigIRT_laplace_hyper_pieces <- function(state, sdat, context, row_effective,
     Sbase[b1, b2, ] <- v
     if(b2 > b1) Sbase[b2, b1, ] <- v
   }
-  list(Sbase = Sbase, est = est, active = active, P = P, ni = ni)
+  out <- list(Sbase = Sbase, est = est, active = active, P = P, ni = ni,
+              fixed_item = if(any(fixed_item)) fixed_item else NULL)
+  ## Items whose loading is signed are still integrated over, with the A
+  ## prior precision held where it is, so that tau_A is fitted to the
+  ## softplus loadings alone.
+  if(any(signedA) && "A" %in% active){
+    srow <- rep(0, length(ids)); srow[keep] <- as.numeric(signedA[aref[keep]])
+    out$signed_item <- scat(srow) > 0
+    out$tauA_held <- max(as.numeric(sdat$invspASD)[1], 1e-8)
+  }
+  out
 }
 
 ## Negative profile log marginal at prior SDs exp(logtau).
@@ -2651,9 +2772,21 @@ bigIRT_laplace_hyper_objective <- function(logtau, pieces, fixed_tau = NULL){
     pen <- pen - sum((e - mu)^2) / (2 * tau[b]^2) - length(e) * log(tau[b])
   }
   add <- diag(1 / tau^2, P)
+  ## An item with a signed loading keeps its A precision at the held value.
+  add_signed <- NULL
+  if(!is.null(pieces$signed_item)){
+    add_signed <- add
+    iA <- match("A", pieces$active)
+    add_signed[iA, iA] <- 1 / pieces$tauA_held^2
+  }
   ld <- 0
   for(j in seq_len(pieces$ni)){
-    Sj <- pieces$Sbase[, , j] + add
+    Pj <- if(!is.null(add_signed) && pieces$signed_item[j]) add_signed else add
+    ## A parameter fixed on this item is not integrated over: unit diagonal,
+    ## and its row and column of Sbase are zero.
+    if(!is.null(pieces$fixed_item) && any(pieces$fixed_item[j, ]))
+      diag(Pj)[pieces$fixed_item[j, ]] <- 1
+    Sj <- pieces$Sbase[, , j] + Pj
     d <- suppressWarnings(determinant(Sj, logarithm = TRUE))
     if(!is.finite(d$modulus) || d$sign <= 0) return(1e10)
     ld <- ld + as.numeric(d$modulus)

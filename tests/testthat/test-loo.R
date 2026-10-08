@@ -17,8 +17,8 @@ if(identical(Sys.getenv("NOT_CRAN"), "true")& .Machine$sizeof.pointer != 4){
 
     trainingSet <- (1:nrow(dat$dat))[sample(-1:-(nrow(dat$dat)),50)]
 
-    fit <- fitIRT(dat$dat,cores=1,pl=1,plot=F,verbose=0,priors=T)
-    fit2 <- fitIRT(dat$dat,cores=1,pl=1,plot=F,verbose=0,priors=T,trainingRows = trainingSet)
+    fit <- fitIRT(dat$dat,cores=1,pl=1,plot=F,verbose=0,priors=T,marginalApprox="none",ebayes=TRUE)
+    fit2 <- fitIRT(dat$dat,cores=1,pl=1,plot=F,verbose=0,priors=T,trainingRows = trainingSet,marginalApprox="none",ebayes=TRUE)
 
     # plot(fit$pars$p, fit2$pars$p)
 
@@ -29,8 +29,8 @@ if(identical(Sys.getenv("NOT_CRAN"), "true")& .Machine$sizeof.pointer != 4){
 
 
     #parallel check
-    fit <- fitIRT(dat$dat,cores=2,pl=1,plot=F,verbose=0,priors=T)
-    fit2 <- fitIRT(dat$dat,cores=2,pl=1,plot=F,verbose=0,priors=T,trainingRows = trainingSet)
+    fit <- fitIRT(dat$dat,cores=2,pl=1,plot=F,verbose=0,priors=T,marginalApprox="none",ebayes=TRUE)
+    fit2 <- fitIRT(dat$dat,cores=2,pl=1,plot=F,verbose=0,priors=T,trainingRows = trainingSet,marginalApprox="none",ebayes=TRUE)
 
     testthat::expect_equivalent(
       exp((sum(log(fit2$pars$p[-trainingSet]))-fit2$optim$f)/fit$prepared$Nobs),

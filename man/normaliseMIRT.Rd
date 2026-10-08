@@ -13,14 +13,24 @@ normaliseMIRT(
   normaliseMean = 0,
   jitter = 1e-08,
   referenceA = NULL,
-  align = c("none", "orthogonal")
+  align = c("none", "orthogonal"),
+  AbilitySD = NULL,
+  AbilityMean = NULL
 )
 }
 \arguments{
 \item{B}{Numeric vector of item intercept/difficulty parameters.}
 
 \item{Ability}{Numeric matrix of person abilities with rows corresponding to
-persons and columns to latent factors.}
+persons and columns to latent factors. Its mean and covariance define the
+transform, so it should represent the latent distribution: true or
+generating abilities, or draws from the fitted posterior. Point estimates
+(MAP, EAP) are shrunk toward the prior mean, so their spread understates
+the latent scale by roughly the square root of the reliability, and the
+loadings come out flattened by the same factor -- about a fifth at ten
+responses per person. Solutions that already share an identification (the
+same fixed latent distribution and a confirmatory loading pattern) need
+no transform at all.}
 
 \item{A}{Numeric item-by-factor loading matrix.}
 
@@ -39,6 +49,12 @@ after normalization. Defaults to 0.}
 Procrustes alignment.}
 
 \item{align}{Character string, either \code{"none"} or \code{"orthogonal"}.}
+
+\item{AbilitySD, AbilityMean}{Optional latent standard deviations and means,
+one per factor, used in place of the spread and centre of \code{Ability}. Pass
+them whenever \code{Ability} holds point estimates; \code{\link[=extractMIRTpars]{extractMIRTpars()}}
+returns them for \code{bigIRT} and \code{mirt} fits as \code{latent_sd} and
+\code{latent_mean}.}
 }
 \value{
 A list containing normalized \code{A}, \code{B}, \code{Ability}, and associated

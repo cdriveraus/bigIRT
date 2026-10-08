@@ -145,6 +145,9 @@ inline L2Vec<int> l2_i(SEXP x) { return L2Vec_i(x); }
 
 struct L2Data {
   L2Vec<int> score, fixed_ability, A_ref, B_ref, C_ref, D_ref, free_mask;
+  // 1 where a free loading takes the identity link rather than softplus
+  // (fitIRT's signedLoadings; see the note on the link in laplace_backend.cpp).
+  L2Vec<int> A_signed;
   L2Vec<double> theta_mode, person_pred, fixed_ability_value, A_fixed_value, A_pred,
     B_fixed_value, B_pred, C_fixed_value, C_pred, D_fixed_value, D_pred,
     Abilitybeta, invspApars, invspAbeta, Bpars, Bbeta, logitCpars, logitCbeta, logitDpars, logitDbeta,
@@ -224,7 +227,8 @@ struct L2Worker : public RcppParallel::Worker {
           double a = D.A_fixed_value(o, k), am = 0;
           if (D.A_ref(o, k) > 0) { const int abx = D.invspAbeta.nr == 1 ? 1 : D.A_ref(o, k);
             const double raw = D.invspApars[D.A_ref(o, k) - 1] + D.beta_term(o, D.A_pred, D.invspAbeta, abx);
-            a = raw > 0 ? raw + std::log1p(std::exp(-raw)) : std::log1p(std::exp(raw)); am = l2_sig(raw); }
+            if (D.A_signed[D.A_ref(o, k) - 1] != 0) { a = raw; am = 1.0; }   // identity link
+            else { a = raw > 0 ? raw + std::log1p(std::exp(-raw)) : std::log1p(std::exp(raw)); am = l2_sig(raw); } }
           double of = 0;
           if (D.fixed_ability(o, k) == 0) for (int j = 0; j < D.P; ++j) of += D.person_pred(o, j) * D.Abilitybeta(k, j);
           TH(oi, k) = D.fixed_ability(o, k) != 0 ? D.fixed_ability_value(o, k) : m(k) + of;
@@ -418,7 +422,7 @@ struct L2Worker : public RcppParallel::Worker {
 extern "C" SEXP _bigIRT_laplace2_fg_cpp_impl(
     SEXP idSEXP, SEXP scoreSEXP, SEXP theta_modeSEXP,
     SEXP person_predSEXP, SEXP fixed_abilitySEXP, SEXP fixed_ability_valueSEXP,
-    SEXP A_refSEXP, SEXP A_fixed_valueSEXP, SEXP A_predSEXP,
+    SEXP A_refSEXP, SEXP A_fixed_valueSEXP, SEXP A_predSEXP, SEXP A_signedSEXP,
     SEXP B_refSEXP, SEXP B_fixed_valueSEXP, SEXP B_predSEXP,
     SEXP C_refSEXP, SEXP C_fixed_valueSEXP, SEXP C_predSEXP,
     SEXP D_refSEXP, SEXP D_fixed_valueSEXP, SEXP D_predSEXP,
@@ -443,6 +447,9 @@ extern "C" SEXP _bigIRT_laplace2_fg_cpp_impl(
   D.Bpars = l2_d(BparsSEXP); D.Bbeta = l2_d(BbetaSEXP); D.logitCpars = l2_d(logitCparsSEXP);
   D.logitCbeta = l2_d(logitCbetaSEXP); D.logitDpars = l2_d(logitDparsSEXP); D.logitDbeta = l2_d(logitDbetaSEXP);
   D.prior_mean = l2_d(prior_meanSEXP); D.prior_precision = l2_d(prior_precisionSEXP);
+  D.A_signed = l2_i(A_signedSEXP);
+  if (D.A_signed.count() != D.invspApars.count())
+    Rcpp::stop("Second-order Laplace: A_signed must hold one entry per free loading.");
   D.K = K;
   D.P = (D.person_pred.nc > 0 && D.Abilitybeta.nc == D.person_pred.nc) ? D.person_pred.nc : 0;
   BigIRTObsIndex obs_by_subj;

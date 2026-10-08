@@ -79,6 +79,52 @@ bigIRT_row_ability <- function(state, sdat, row_context, thetaBase, row_effectiv
   rab
 }
 
+## Which free parameter each item holds in each per-item block.
+##
+## A per-item block describes one parameter type with one parameter per item.
+## Every construction built on these blocks used to require that type free on
+## EVERY item and paired item j with free index j -- right only then, because
+## free parameters are stored in item order and an anchored item has none. So
+## one difficulty anchored through itemDat removed the B block everywhere, and
+## every free difficulty lost its standard error. The pairing is read here
+## from the fixed flags and the free-index maps instead (cf. the grouping in
+## bigIRT_laplace_hyper_pieces).
+##
+## Returns a P x Nitems integer matrix, one row per block in B, A, C, D order:
+## item j's position in that block's free vector (state$Bpars, ...; its
+## optimiser coordinate is layout[[b]][pos]), NA where item j has it fixed. A
+## block is present when any item has it free -- discrimination only while no
+## item has more than one free loading, since free cross-loadings are not one
+## parameter per item. `active` picks rows instead, NA throughout for a block
+## this rule does not describe.
+bigIRT_item_free_pos <- function(sdat, active = NULL){
+  ni <- as.integer(sdat$Nitems); K <- as.integer(sdat$Nscales)
+  pos <- function(fixed, ref){
+    p <- as.integer(ref); p[as.integer(fixed) == 1L] <- NA_integer_; p
+  }
+  ## fixedAlog and freeAref run item-major over the (item, scale) cells.
+  pA <- matrix(pos(sdat$fixedAlog, sdat$freeAref), ni, K, byrow = TRUE)
+  nA <- rowSums(!is.na(pA))
+  A <- rep(NA_integer_, ni)
+  if(all(nA <= 1L)){
+    pA[is.na(pA)] <- 0L
+    A <- as.integer(rowSums(pA)); A[nA == 0L] <- NA_integer_
+  }
+  fp <- rbind(B = pos(sdat$fixedB, sdat$freeBref), A = A,
+              C = pos(sdat$fixedClogit, sdat$freeCref),
+              D = pos(sdat$fixedDlogit, sdat$freeDref))
+  if(is.null(active)) active <- rownames(fp)[rowSums(!is.na(fp)) > 0L]
+  out <- fp[match(active, rownames(fp)), , drop = FALSE]
+  rownames(out) <- active
+  out
+}
+
+## Optimiser coordinates of item j's parameters in `active` blocks, NA where
+## the item has one fixed. `fp` is bigIRT_item_free_pos() over `active`.
+bigIRT_item_coords <- function(fp, layout, j){
+  vapply(rownames(fp), function(b) layout[[b]][fp[b, j]], integer(1))
+}
+
 bigIRT_item_info_blocks <- function(state, sdat, context, row_effective, posterior, thetaBase){
   if(is.null(posterior$covariance))
     stop("Item information needs the person posterior covariances.")
@@ -122,19 +168,21 @@ bigIRT_item_info_blocks <- function(state, sdat, context, row_effective, posteri
   A_ref <- context$A_ref
   if(is.null(dim(A_ref))) A_ref <- matrix(as.integer(A_ref), ncol = 1L)
   qrow <- integer(length(ids)); contrib <- numeric(length(ids))
-  a_multi <- FALSE
   if(length(invspA)){
     sig <- inv_logit(invspA)
-    Aval <- pmax(log1p(exp(invspA)), 1e-12)
-    ## More than one free discrimination on a single row cannot be represented
-    ## by one column of V, and that is the free multidimensional loading case.
-    a_multi <- any(rowSums(A_ref > 0L) > 1L)
+    Aval <- pmax(afunc(invspA), 1e-12)
+    ## A signed loading (signedLoadings) is invspA_q itself, plus any covariate
+    ## term: slope one and no ratio to carry, so its derivative is theta alone.
+    signedA <- bigIRT_laplace_signed_A(sdat) == 1L
+    if(any(signedA)) sig[signedA] <- 1
     for(k in seq_len(ncol(A_ref))){
       hit <- A_ref[, k] > 0L & A_ref[, k] <= length(invspA)
       if(!any(hit)) next
       q <- A_ref[hit, k]
       qrow[hit] <- q
-      contrib[hit] <- contrib[hit] + (lo[hit, k] / Aval[q]) * rab[hit, k]
+      ratio <- lo[hit, k] / Aval[q]
+      if(any(signedA)) ratio[signedA[q]] <- 1
+      contrib[hit] <- contrib[hit] + ratio * rab[hit, k]
     }
   }
   V_A <- numeric(length(ids))
@@ -149,17 +197,30 @@ bigIRT_item_info_blocks <- function(state, sdat, context, row_effective, posteri
             C = (1 - gg) * bigIRT_dc_dx(cr), D = gg * bigIRT_dd_dx(dr))
   est <- list(B = as.numeric(state$Bpars), A = invspA,
               C = as.numeric(state$logitCpars), D = as.numeric(state$logitDpars))
-  ## A block counts only when it holds one free parameter per item; anything
-  ## else is a different parameterisation (free multidimensional loadings, say)
-  ## that this construction does not describe.
-  active <- names(est)[vapply(est, function(z) length(z) == ni, logical(1))]
-  if(isTRUE(a_multi)) active <- setdiff(active, "A")
+  ## A block for each parameter type some item has free, one parameter per
+  ## item (bigIRT_item_free_pos); free multidimensional loadings are a
+  ## different parameterisation that this construction does not describe.
+  free_pos <- bigIRT_item_free_pos(sdat)
+  active <- rownames(free_pos)
   if(!length(active)) return(NULL)
   V <- V[active]; est <- est[active]; P <- length(active)
 
   ## All P(P+1)/2 pairs gathered by item in one pass, rather than a rowsum over
-  ## every response for each pair.
-  item <- as.integer(context$B_ref)
+  ## every response for each pair. Gathered by ITEM: this used to read B_ref,
+  ## the free-difficulty index, which is the item only while every difficulty
+  ## is free. With anchored difficulties and free loadings the A block is still
+  ## active, and the anchored items' rows carried index 0, which stopped the
+  ## accumulator -- and every caller that caught the error (the Newton polish,
+  ## the marginal covariate errors, summary, checkConvergence) silently went
+  ## without. A parameter an item has fixed is not estimated, so its V is
+  ## zeroed on that item's rows and its entries are NA, as in
+  ## bigIRT_laplace_hyper_pieces: each item's block is over its free
+  ## parameters, and the item's other parameters sit at their fixed values.
+  item <- as.integer(context$items)
+  for(b in active){
+    off <- is.na(free_pos[b, item])
+    if(any(off)) V[[b]][off] <- 0
+  }
   S <- .Call(`_bigIRT_item_info_accum_cpp_impl`, item,
              matrix(unlist(V, use.names = FALSE), ncol = P), wcorr, ni)
   dimnames(S) <- list(active, active, NULL)
@@ -173,7 +234,16 @@ bigIRT_item_info_blocks <- function(state, sdat, context, row_effective, posteri
       prec[b, ] <- 1 / rep_len(pmax(sd_b, 1e-8), ni)^2
     }
   }
-  list(info = S, prior_precision = prec, active = active, P = P, ni = ni, est = est)
+  fixed <- is.na(free_pos)
+  if(any(fixed)){
+    prec[fixed] <- NA_real_
+    for(j in which(colSums(fixed) > 0L)){
+      S[fixed[, j], , j] <- NA_real_
+      S[, fixed[, j], j] <- NA_real_
+    }
+  }
+  list(info = S, prior_precision = prec, active = active, P = P, ni = ni, est = est,
+       free_pos = free_pos)
 }
 
 ## Item information, standard errors and effective parameter count.
@@ -233,7 +303,10 @@ bigIRT_item_info_blocks <- function(state, sdat, context, row_effective, posteri
 #' @param max_blocks Integer. Refuse `"hessian"` above this many items.
 #' @param time_budget Numeric. Seconds `"auto"` may spend before falling back.
 #'
-#' @return An object of class `bigIRT_iteminfo`:
+#' @return An object of class `bigIRT_iteminfo`. P counts the parameter
+#'   types free on at least one item; a parameter an item has fixed (an
+#'   anchor through `itemDat`) is `NA` in every per-item entry below, and the
+#'   item's block covers only the parameters it has free.
 #' \describe{
 #'   \item{information}{P x P x Nitems array of likelihood information; for
 #'     `"exact"`, the inverse of each item's covariance block, prior included.}
@@ -243,6 +316,13 @@ bigIRT_item_info_blocks <- function(state, sdat, context, row_effective, posteri
 #'     of the full inverse.}
 #'   \item{se}{Nitems x P matrix of standard errors.}
 #'   \item{edf}{Effective parameters per item and block.}
+#'   \item{free}{Nitems x P logical matrix, `TRUE` where the item has that
+#'     parameter free.}
+#'   \item{se_loadings}{For `"exact"` on a fit with signed loadings
+#'     (`signedLoadings` in [fitIRT()]) only: the standard error of every free
+#'     loading's parameter, Nitems x Nscales, `NA` where the loading is fixed.
+#'     With cross-loadings free there is more than one loading per item, which
+#'     the per-item blocks do not describe.}
 #' }
 #'
 #' @seealso [checkConvergence()]
@@ -285,35 +365,42 @@ itemInformation <- function(fit, cores = 1L, method = c("auto", "exact", "profil
         "Raise `max_blocks` to insist, or use method = \"profile\"."), 2L * P * ni, ni))
     blocks$info <- bigIRT_item_hessian_blocks(d, fit, blocks, person_tol = person_tol, eps = eps)
     ## The differenced curvature already carries the prior, so do not add it twice.
-    blocks$prior_precision[] <- 0
+    blocks$prior_precision[!is.na(blocks$prior_precision)] <- 0
   }
   se <- matrix(NA_real_, nrow = ni, ncol = P, dimnames = list(NULL, active))
   edf <- matrix(NA_real_, nrow = ni, ncol = P, dimnames = list(NULL, active))
   cov_arr <- array(NA_real_, c(P, P, ni), dimnames = list(active, active, NULL))
+  ## Each item's block over the parameters it has free; one it has fixed keeps
+  ## NA, and is held at its value rather than integrated over.
+  free <- !is.na(blocks$free_pos)
   for(j in seq_len(ni)){
-    Sj <- matrix(blocks$info[, , j], P, P)
-    Hj <- Sj + diag(blocks$prior_precision[, j], P)
+    f <- free[, j]
+    if(!any(f)) next
+    Sj <- matrix(blocks$info[, , j], P, P)[f, f, drop = FALSE]
+    Hj <- Sj + diag(blocks$prior_precision[f, j], sum(f))
     Vj <- try(solve(Hj), silent = TRUE)
     if(inherits(Vj, "try-error")) next
-    cov_arr[, , j] <- Vj
+    cov_arr[f, f, j] <- Vj
     dv <- diag(Vj)
-    se[j, ] <- sqrt(pmax(dv, 0))
+    se[j, f] <- sqrt(pmax(dv, 0))
     ## Effective parameters: how much of each block the data, rather than the
     ## prior, is responsible for. Equals P when the prior is flat.
-    edf[j, ] <- pmax(pmin(diag(Sj %*% Vj), 1), 0)
+    edf[j, f] <- pmax(pmin(diag(Sj %*% Vj), 1), 0)
   }
   structure(list(
     information = blocks$info, prior_precision = blocks$prior_precision,
     covariance = cov_arr, se = se, edf = edf, active = active,
     method = method,
     penalised = isTRUE(as.logical(d$sdat$dopriors)),
-    n_items = ni, edf_total = sum(edf, na.rm = TRUE)
+    n_items = ni, edf_total = sum(edf, na.rm = TRUE),
+    free = matrix(t(free), ni, P, dimnames = list(NULL, active))
   ), class = "bigIRT_iteminfo")
 }
 
 ## Per-item curvature by central differences of the analytic gradient, with the
 ## person modes re-solved at every perturbed point.  Returns the same
-## P x P x Nitems array shape as the closed-form construction.
+## P x P x Nitems array shape as the closed-form construction, NA where the
+## item has the parameter fixed.
 bigIRT_item_hessian_blocks <- function(d, fit, blocks, person_tol = 1e-8, eps = 1e-4){
   lay <- d$layout; P <- blocks$P; ni <- blocks$ni; active <- blocks$active
   gf <- function(p) bigIRT_laplace_direct_objective(par = p, state = d$state,
@@ -321,20 +408,24 @@ bigIRT_item_hessian_blocks <- function(d, fit, blocks, person_tol = 1e-8, eps = 
     theta_init = d$eval$posterior$theta_mode, keep_covariance = TRUE,
     context = d$context, tol = person_tol, max_iter = 200L)$approx_grad
   out <- array(0, c(P, P, ni), dimnames = list(active, active, NULL))
-  idx <- lapply(active, function(b) lay[[b]])
-  names(idx) <- active
+  ## Item j's coordinate in each block, through its free position: index j
+  ## is item j only while no item has that parameter fixed.
+  cj <- vapply(seq_len(ni), function(j) bigIRT_item_coords(blocks$free_pos, lay, j), integer(P))
+  cj <- matrix(cj, P, ni)
   for(a in seq_len(P)){
-    ia <- idx[[a]]
     for(j in seq_len(ni)){
-      pu <- d$par; pu[ia[j]] <- pu[ia[j]] + eps
-      pl <- d$par; pl[ia[j]] <- pl[ia[j]] - eps
+      if(is.na(cj[a, j])) next
+      pu <- d$par; pu[cj[a, j]] <- pu[cj[a, j]] + eps
+      pl <- d$par; pl[cj[a, j]] <- pl[cj[a, j]] - eps
       col <- (gf(pu) - gf(pl)) / (2 * eps)
-      for(b in seq_len(P)) out[b, a, j] <- -col[idx[[b]][j]]
+      for(b in seq_len(P)) if(!is.na(cj[b, j])) out[b, a, j] <- -col[cj[b, j]]
     }
   }
   for(j in seq_len(ni)){
     M <- matrix(out[, , j], P, P)
     out[, , j] <- 0.5 * (M + t(M))
+    fx <- is.na(cj[, j])
+    if(any(fx)){ out[fx, , j] <- NA_real_; out[, fx, j] <- NA_real_ }
   }
   out
 }
@@ -349,7 +440,8 @@ print.bigIRT_iteminfo <- function(x, ...){
     switch(if(is.null(x$method)) "profile" else x$method,
       profile = " (about 6% small; see ?itemInformation)",
       exact = " (the inverse of the convergence certificate's curvature)", "")))
-  cat(sprintf("Effective parameters: %.1f of %d\n", x$edf_total, x$n_items * length(x$active)))
+  cat(sprintf("Effective parameters: %.1f of %d\n", x$edf_total,
+    if(!is.null(x$free)) sum(x$free) else x$n_items * length(x$active)))
   print(summary(as.data.frame(x$se)))
   invisible(x)
 }
@@ -401,10 +493,16 @@ bigIRT_covariate_vcov <- function(fit, eps = 1e-4, cores = 1L, person_tol = 1e-8
     ii <- try(itemInformation(fit, cores = cores, method = "profile"), silent = TRUE)
     if(!inherits(ii, "try-error")){
       P <- length(ii$active); ni <- ii$n_items
+      ## Over each item's free parameters, found through its free position:
+      ## with an anchored difficulty the free ones used to be left out of the
+      ## correction, which matters wherever a covariate is not centred.
+      fp <- bigIRT_item_free_pos(d$sdat, ii$active)
       for(j in seq_len(ni)){
-        rows <- vapply(ii$active, function(b) d$layout[[b]][j], integer(1))
+        f <- !is.na(fp[, j])
+        if(!any(f)) next
+        rows <- bigIRT_item_coords(fp, d$layout, j)[f]
         if(anyNA(rows)) next
-        Vj <- matrix(ii$covariance[, , j], P, P)
+        Vj <- matrix(ii$covariance[, , j], P, P)[f, f, drop = FALSE]
         if(anyNA(Vj)) next
         Hpb <- -cols[rows, , drop = FALSE]          # P x n
         prec <- prec - t(Hpb) %*% Vj %*% Hpb
@@ -510,18 +608,22 @@ checkConvergence <- function(fit, cores = 1L, se = TRUE){
     if(!inherits(info, "try-error")){
       P <- length(info$active); ni <- info$n_items
       nd <- 0; wz <- 0; wlab <- NA_character_
+      ## Each item over its free parameters (bigIRT_item_free_pos).
+      fp <- bigIRT_item_free_pos(fit$prepared %||% fit$internals$sdat, info$active)
       for(j in seq_len(ni)){
-        idx <- vapply(info$active, function(b) lay[[b]][j], integer(1))
+        f <- !is.na(fp[, j])
+        if(!any(f)) next
+        idx <- bigIRT_item_coords(fp, lay, j)[f]
         if(anyNA(idx)) next
-        gj <- g[idx]; Vj <- matrix(info$covariance[, , j], P, P)
+        gj <- g[idx]; Vj <- matrix(info$covariance[, , j], P, P)[f, f, drop = FALSE]
         if(anyNA(Vj)) next
         nd <- nd + as.numeric(t(gj) %*% Vj %*% gj)
         ## |g_i| * se_i is the parameter's distance from stationarity measured
         ## in its own standard errors, which is comparable across blocks.
-        z <- abs(gj) * info$se[j, ]
+        z <- abs(gj) * info$se[j, f]
         if(max(z, na.rm = TRUE) > wz){
           wz <- max(z, na.rm = TRUE)
-          wlab <- sprintf("%s[%d]", info$active[which.max(z)], j)
+          wlab <- sprintf("%s[%d]", info$active[f][which.max(z)], j)
         }
       }
       newton <- nd; worst <- wz; worst_at <- wlab
@@ -626,8 +728,9 @@ logLik.bigIRT_fit <- function(object, effective = TRUE, cores = 1L, ...){
     if(!inherits(ii, "try-error")){
       ## Item blocks contribute their effective count; anything outside them
       ## (covariates, means, correlations) is unpenalised or weakly so and is
-      ## counted at face value.
-      item_nominal <- ii$n_items * length(ii$active)
+      ## counted at face value. The blocks hold only the parameters items have
+      ## free, not n_items of each.
+      item_nominal <- sum(!is.na(bigIRT_item_free_pos(sdat, ii$active)))
       df <- ii$edf_total + max(nominal - item_nominal, 0)
     }
   }

@@ -25,8 +25,9 @@ repo); the full round-1/2 evidence is `optimisation-review-2026-09.md` there.
   - `"laplace2"`: second-order Laplace, E T4 + E T3^2 / 2
     (`src/laplace2_backend.cpp`), exact reverse-mode gradient with a mode
     adjoint.
-  - `"auto"`: no free asymptotes -> none at K = 1, laplace2 at K >= 2;
-    free asymptotes -> agq at every K.
+  - `"auto"`: no free asymptotes -> none at K = 1, agq at K = 2-3, laplace2
+    at K >= 4 (laplace2 from K = 2 until October 2026; see below); free
+    asymptotes -> agq at every K.
   - Guard: a refinement moving the objective by more than max(50, N/2) nats
     reverts to the Laplace optimum.
 - One CSR person->rows index type (`src/bigirt_obsindex.h`, built by counting
@@ -49,6 +50,27 @@ Scripts: `laplace_vs_agq.R` (K = 1), `mdim_lowk.R` (K <= 3), `mdim_refine.R`
 (K = 9), `mdim_rules.R` (per-person accuracy of candidate rules).
 Accuracy of the refinements: GH 3 nodes/dim poor, 5 acceptable (<= 0.4 SE),
 7 accurate (<= 0.06); laplace2 accurate for the 2PL at K = 2-9 (<= 0.1 SE).
+
+That laplace2 figure is for these designs (N = 2,000, 10 items per
+dimension, every person answering many items), and does not carry over to
+very few responses per person. In the paper's Study 2 three-dimensional
+cells (24 items, 16 answered, 8 fitted per person, signed cross-loadings,
+matched priors) laplace2 primary loadings had RMSE .283 against .235 under
+`"agq"` at N = 1,350 (mean error +.045 against +.020), worse in all 40
+replications checked over both sample sizes; plain Laplace was .76 on the
+worst replication. Curve recovery under laplace2 trailed mirt's EM fit
+(.0453 against .0425 over 10 replications), under agq it matched it
+(.0424); at K = 9 (E9 cell) agq beat mirt in 10 of 10 where laplace2
+trailed. agq cost about five times as much. Worse, at N = 1,350 laplace2
+certified a spurious optimum in 18 of 600 fits (one item at a = 4-10;
+quadrature 1.6, mirt under 2; plain Laplace also steep), costing .03-.11 in
+held-out loss on those fits. So "auto" now uses agq for the 2PL at K = 2-3
+(2026-10-08, the user's decision; `test-refine-auto.R`), and keeps laplace2
+at K >= 4, where agq is ~4x the cost and the 9D cell showed only the
+systematic part. Not a gradient error: the
+signed-loading laplace2 gradient passes central differences at K = 2, 3
+(`test-signed-loadings.R`). Scripts: `paper/Submission2` scratch checks
+`m3d_bias.R`, `refine_check.R` (session of 2026-10-08).
 
 The T2 "local maximum" was a Laplace artefact: one item held steep with high
 guessing plus `C_mean` dragging the rest (`basins.R`, `basin_hybrid.R`,

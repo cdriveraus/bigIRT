@@ -67,12 +67,16 @@ bigIRT_laplace_row_derivatives <- function(ev, sdat, context, layout){
     add(keepB, beta_col(layout$B_beta, st$Bbeta, rc$B_beta_row[keepB], m),
       -s[keepB] * rc$B_pred[keepB, m] * w[keepB])
   ## Discrimination: loading = softplus(raw), raw = invspA + item-covariate
-  ## term, so d loading / d raw = plogis(raw), times the row ability.
+  ## term, so d loading / d raw = plogis(raw), times the row ability. A signed
+  ## loading (signedLoadings) is raw itself, slope one.
+  signedA <- (rc$A_signed %||% bigIRT_laplace_signed_A(sdat)) == 1L
   for(k in seq_len(K)){
     ref <- rc$A_ref[, k]
     keep <- which(ref > 0L)
     if(!length(keep)) next
-    vA <- s[keep] * inv_logit(alin[keep, k]) * rab[keep, k] * w[keep]
+    slope <- inv_logit(alin[keep, k])
+    if(any(signedA)) slope[signedA[ref[keep]]] <- 1
+    vA <- s[keep] * slope * rab[keep, k] * w[keep]
     if(length(layout$A)) add(keep, layout$A[ref[keep]], vA)
     if(length(layout$A_beta)) for(m in seq_len(ncol(rc$A_pred)))
       add(keep, beta_col(layout$A_beta, st$invspAbeta, rc$A_beta_row[keep, k], m),
@@ -132,6 +136,10 @@ bigIRT_laplace_prior_curvature <- function(sdat, layout, n, N, P0){
       put(idx, idx, prec)
       mi <- layout[[b[[2]]]]
       if(length(mi)){
+        ## A signed loading's prior is centred at zero, not at the A mean, so
+        ## it does not couple to it.
+        tied <- if(identical(b[[1]], "A")) bigIRT_laplace_signed_A(sdat) != 1L else NULL
+        if(!is.null(tied) && !all(tied)){ idx <- idx[tied]; prec <- prec[tied] }
         put(idx, rep(mi, length(idx)), -prec); put(rep(mi, length(idx)), idx, -prec)
         put(mi, mi, sum(prec) + 1 / max(as.numeric(sdat[[b[[4]]]])[1], 1e-8)^2)
       }
@@ -469,6 +477,7 @@ bigIRT_fisher_kernel_call <- function(entry, ev, sdat, context, layout, ps, prio
     as.integer(sdat$id[rows]), as.integer(rc$items), as.matrix(ev$posterior$theta_mode),
     as.matrix(person_pred), bigirt_int_matrix(rc$fixed_ability, nr, K), as.matrix(rc$fixed_ability_value),
     bigirt_int_matrix(rc$A_ref, nr, K), as.matrix(rc$fixed_A_value), as.matrix(rc$A_pred),
+    as.integer(rc$A_signed %||% bigIRT_laplace_signed_A(sdat)),
     as.integer(rc$B_ref), as.numeric(rc$B_fixed_value), as.matrix(rc$B_pred),
     as.integer(rc$C_ref), as.numeric(rc$C_fixed_value), as.matrix(rc$C_pred),
     as.integer(rc$D_ref), as.numeric(rc$D_fixed_value), as.matrix(rc$D_pred),
@@ -481,8 +490,8 @@ bigIRT_fisher_kernel_call <- function(entry, ev, sdat, context, layout, ps, prio
     as.numeric(prior_diag), as.integer(context$grain_size %||% 64L))
   ## Literal .Call()s: configure regenerates the native registration by
   ## scanning the R code for them, so the routine must be named at the call.
-  if(identical(entry, "dense")) .Call(`_bigIRT_fisher_dense_cpp_impl`, a[[1]], a[[2]], a[[3]], a[[4]], a[[5]], a[[6]], a[[7]], a[[8]], a[[9]], a[[10]], a[[11]], a[[12]], a[[13]], a[[14]], a[[15]], a[[16]], a[[17]], a[[18]], a[[19]], a[[20]], a[[21]], a[[22]], a[[23]], a[[24]], a[[25]], a[[26]], a[[27]], a[[28]], a[[29]], a[[30]], a[[31]], a[[32]], a[[33]], a[[34]], a[[35]], a[[36]], a[[37]], a[[38]], a[[39]], a[[40]], a[[41]], a[[42]])
-  else .Call(`_bigIRT_fisher_blocks_cpp_impl`, a[[1]], a[[2]], a[[3]], a[[4]], a[[5]], a[[6]], a[[7]], a[[8]], a[[9]], a[[10]], a[[11]], a[[12]], a[[13]], a[[14]], a[[15]], a[[16]], a[[17]], a[[18]], a[[19]], a[[20]], a[[21]], a[[22]], a[[23]], a[[24]], a[[25]], a[[26]], a[[27]], a[[28]], a[[29]], a[[30]], a[[31]], a[[32]], a[[33]], a[[34]], a[[35]], a[[36]], a[[37]], a[[38]], a[[39]], a[[40]], a[[41]], a[[42]])
+  if(identical(entry, "dense")) .Call(`_bigIRT_fisher_dense_cpp_impl`, a[[1]], a[[2]], a[[3]], a[[4]], a[[5]], a[[6]], a[[7]], a[[8]], a[[9]], a[[10]], a[[11]], a[[12]], a[[13]], a[[14]], a[[15]], a[[16]], a[[17]], a[[18]], a[[19]], a[[20]], a[[21]], a[[22]], a[[23]], a[[24]], a[[25]], a[[26]], a[[27]], a[[28]], a[[29]], a[[30]], a[[31]], a[[32]], a[[33]], a[[34]], a[[35]], a[[36]], a[[37]], a[[38]], a[[39]], a[[40]], a[[41]], a[[42]], a[[43]])
+  else .Call(`_bigIRT_fisher_blocks_cpp_impl`, a[[1]], a[[2]], a[[3]], a[[4]], a[[5]], a[[6]], a[[7]], a[[8]], a[[9]], a[[10]], a[[11]], a[[12]], a[[13]], a[[14]], a[[15]], a[[16]], a[[17]], a[[18]], a[[19]], a[[20]], a[[21]], a[[22]], a[[23]], a[[24]], a[[25]], a[[26]], a[[27]], a[[28]], a[[29]], a[[30]], a[[31]], a[[32]], a[[33]], a[[34]], a[[35]], a[[36]], a[[37]], a[[38]], a[[39]], a[[40]], a[[41]], a[[42]], a[[43]])
 }
 
 ## Dense metric, assembled in C++: the full F with its item-item coupling, in

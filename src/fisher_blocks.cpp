@@ -101,6 +101,9 @@ struct FbRow { int item; std::vector<std::pair<int, double> > v; VectorXd w; };
 
 struct FbData {
   FbVec<int> items, fixed_ability, A_ref, B_ref, C_ref, D_ref;
+  // 1 where a free loading takes the identity link rather than softplus
+  // (fitIRT's signedLoadings; see the note on the link in laplace_backend.cpp).
+  FbVec<int> A_signed;
   FbVec<double> theta_mode, person_pred, fixed_ability_value, A_fixed_value, A_pred,
     B_fixed_value, B_pred, C_fixed_value, C_pred, D_fixed_value, D_pred,
     Abilitybeta, invspApars, invspAbeta, Bpars, Bbeta, logitCpars, logitCbeta, logitDpars, logitDbeta, ps;
@@ -172,7 +175,8 @@ struct FbData {
       if (A_ref(o, k) > 0) {
         const int abx = invspAbeta.nr == 1 ? 1 : A_ref(o, k);
         const double raw = invspApars[A_ref(o, k) - 1] + beta_term(o, A_pred, invspAbeta, abx);
-        a(k) = fb_softplus(raw); am(k) = fb_inv_logit(raw);
+        if (A_signed[A_ref(o, k) - 1] != 0) { a(k) = raw; am(k) = 1.0; }   // identity link
+        else { a(k) = fb_softplus(raw); am(k) = fb_inv_logit(raw); }
       }
       double of = 0.0;
       if (fixed_ability(o, k) == 0) for (int j = 0; j < P; ++j) of += person_pred(o, j) * Abilitybeta(k, j);
@@ -346,7 +350,7 @@ struct FbDenseWorker : public RcppParallel::Worker {
 static SEXP fb_impl(const bool dense,
     SEXP idSEXP, SEXP itemsSEXP, SEXP theta_modeSEXP, SEXP person_predSEXP,
     SEXP fixed_abilitySEXP, SEXP fixed_ability_valueSEXP,
-    SEXP A_refSEXP, SEXP A_fixed_valueSEXP, SEXP A_predSEXP,
+    SEXP A_refSEXP, SEXP A_fixed_valueSEXP, SEXP A_predSEXP, SEXP A_signedSEXP,
     SEXP B_refSEXP, SEXP B_fixed_valueSEXP, SEXP B_predSEXP,
     SEXP C_refSEXP, SEXP C_fixed_valueSEXP, SEXP C_predSEXP,
     SEXP D_refSEXP, SEXP D_fixed_valueSEXP, SEXP D_predSEXP,
@@ -376,6 +380,9 @@ static SEXP fb_impl(const bool dense,
   D.Bpars = fb_d(BparsSEXP); D.Bbeta = fb_d(BbetaSEXP); D.logitCpars = fb_d(logitCparsSEXP);
   D.logitCbeta = fb_d(logitCbetaSEXP); D.logitDpars = fb_d(logitDparsSEXP); D.logitDbeta = fb_d(logitDbetaSEXP);
   D.ps = fb_d(psSEXP);
+  D.A_signed = fb_i(A_signedSEXP);
+  if (D.A_signed.count() != D.invspApars.count())
+    Rcpp::stop("Fisher information: A_signed must hold one entry per free loading.");
   D.lay_A = fb_i(lay_ASEXP); D.lay_B = fb_i(lay_BSEXP); D.lay_C = fb_i(lay_CSEXP); D.lay_D = fb_i(lay_DSEXP);
   D.lay_Ab = fb_i(lay_AbSEXP); D.lay_Bb = fb_i(lay_BbSEXP); D.lay_Cb = fb_i(lay_CbSEXP); D.lay_Db = fb_i(lay_DbSEXP);
   D.lay_abil = fb_i(lay_abilSEXP);
@@ -500,7 +507,7 @@ static SEXP fb_impl(const bool dense,
 extern "C" SEXP _bigIRT_fisher_blocks_cpp_impl(
     SEXP idSEXP, SEXP itemsSEXP, SEXP theta_modeSEXP, SEXP person_predSEXP,
     SEXP fixed_abilitySEXP, SEXP fixed_ability_valueSEXP,
-    SEXP A_refSEXP, SEXP A_fixed_valueSEXP, SEXP A_predSEXP,
+    SEXP A_refSEXP, SEXP A_fixed_valueSEXP, SEXP A_predSEXP, SEXP A_signedSEXP,
     SEXP B_refSEXP, SEXP B_fixed_valueSEXP, SEXP B_predSEXP,
     SEXP C_refSEXP, SEXP C_fixed_valueSEXP, SEXP C_predSEXP,
     SEXP D_refSEXP, SEXP D_fixed_valueSEXP, SEXP D_predSEXP,
@@ -511,7 +518,7 @@ extern "C" SEXP _bigIRT_fisher_blocks_cpp_impl(
     SEXP lay_abilSEXP, SEXP lay_ameanSEXP, SEXP item_parSEXP, SEXP psSEXP, SEXP prior_diagSEXP,
     SEXP grainSEXP) {
   BEGIN_RCPP
-  return fb_impl(false, idSEXP, itemsSEXP, theta_modeSEXP, person_predSEXP, fixed_abilitySEXP, fixed_ability_valueSEXP, A_refSEXP, A_fixed_valueSEXP, A_predSEXP, B_refSEXP, B_fixed_valueSEXP, B_predSEXP, C_refSEXP, C_fixed_valueSEXP, C_predSEXP, D_refSEXP, D_fixed_valueSEXP, D_predSEXP, AbilitybetaSEXP, invspAparsSEXP, invspAbetaSEXP, BparsSEXP, BbetaSEXP, logitCparsSEXP, logitCbetaSEXP, logitDparsSEXP, logitDbetaSEXP, P0SEXP, lay_ASEXP, lay_BSEXP, lay_CSEXP, lay_DSEXP, lay_AbSEXP, lay_BbSEXP, lay_CbSEXP, lay_DbSEXP, lay_abilSEXP, lay_ameanSEXP, item_parSEXP, psSEXP, prior_diagSEXP, grainSEXP);
+  return fb_impl(false, idSEXP, itemsSEXP, theta_modeSEXP, person_predSEXP, fixed_abilitySEXP, fixed_ability_valueSEXP, A_refSEXP, A_fixed_valueSEXP, A_predSEXP, A_signedSEXP, B_refSEXP, B_fixed_valueSEXP, B_predSEXP, C_refSEXP, C_fixed_valueSEXP, C_predSEXP, D_refSEXP, D_fixed_valueSEXP, D_predSEXP, AbilitybetaSEXP, invspAparsSEXP, invspAbetaSEXP, BparsSEXP, BbetaSEXP, logitCparsSEXP, logitCbetaSEXP, logitDparsSEXP, logitDbetaSEXP, P0SEXP, lay_ASEXP, lay_BSEXP, lay_CSEXP, lay_DSEXP, lay_AbSEXP, lay_BbSEXP, lay_CbSEXP, lay_DbSEXP, lay_abilSEXP, lay_ameanSEXP, item_parSEXP, psSEXP, prior_diagSEXP, grainSEXP);
   END_RCPP
 }
 
@@ -520,7 +527,7 @@ extern "C" SEXP _bigIRT_fisher_blocks_cpp_impl(
 extern "C" SEXP _bigIRT_fisher_dense_cpp_impl(
     SEXP idSEXP, SEXP itemsSEXP, SEXP theta_modeSEXP, SEXP person_predSEXP,
     SEXP fixed_abilitySEXP, SEXP fixed_ability_valueSEXP,
-    SEXP A_refSEXP, SEXP A_fixed_valueSEXP, SEXP A_predSEXP,
+    SEXP A_refSEXP, SEXP A_fixed_valueSEXP, SEXP A_predSEXP, SEXP A_signedSEXP,
     SEXP B_refSEXP, SEXP B_fixed_valueSEXP, SEXP B_predSEXP,
     SEXP C_refSEXP, SEXP C_fixed_valueSEXP, SEXP C_predSEXP,
     SEXP D_refSEXP, SEXP D_fixed_valueSEXP, SEXP D_predSEXP,
@@ -531,6 +538,6 @@ extern "C" SEXP _bigIRT_fisher_dense_cpp_impl(
     SEXP lay_abilSEXP, SEXP lay_ameanSEXP, SEXP item_parSEXP, SEXP psSEXP, SEXP prior_diagSEXP,
     SEXP grainSEXP) {
   BEGIN_RCPP
-  return fb_impl(true, idSEXP, itemsSEXP, theta_modeSEXP, person_predSEXP, fixed_abilitySEXP, fixed_ability_valueSEXP, A_refSEXP, A_fixed_valueSEXP, A_predSEXP, B_refSEXP, B_fixed_valueSEXP, B_predSEXP, C_refSEXP, C_fixed_valueSEXP, C_predSEXP, D_refSEXP, D_fixed_valueSEXP, D_predSEXP, AbilitybetaSEXP, invspAparsSEXP, invspAbetaSEXP, BparsSEXP, BbetaSEXP, logitCparsSEXP, logitCbetaSEXP, logitDparsSEXP, logitDbetaSEXP, P0SEXP, lay_ASEXP, lay_BSEXP, lay_CSEXP, lay_DSEXP, lay_AbSEXP, lay_BbSEXP, lay_CbSEXP, lay_DbSEXP, lay_abilSEXP, lay_ameanSEXP, item_parSEXP, psSEXP, prior_diagSEXP, grainSEXP);
+  return fb_impl(true, idSEXP, itemsSEXP, theta_modeSEXP, person_predSEXP, fixed_abilitySEXP, fixed_ability_valueSEXP, A_refSEXP, A_fixed_valueSEXP, A_predSEXP, A_signedSEXP, B_refSEXP, B_fixed_valueSEXP, B_predSEXP, C_refSEXP, C_fixed_valueSEXP, C_predSEXP, D_refSEXP, D_fixed_valueSEXP, D_predSEXP, AbilitybetaSEXP, invspAparsSEXP, invspAbetaSEXP, BparsSEXP, BbetaSEXP, logitCparsSEXP, logitCbetaSEXP, logitDparsSEXP, logitDbetaSEXP, P0SEXP, lay_ASEXP, lay_BSEXP, lay_CSEXP, lay_DSEXP, lay_AbSEXP, lay_BbSEXP, lay_CbSEXP, lay_DbSEXP, lay_abilSEXP, lay_ameanSEXP, item_parSEXP, psSEXP, prior_diagSEXP, grainSEXP);
   END_RCPP
 }

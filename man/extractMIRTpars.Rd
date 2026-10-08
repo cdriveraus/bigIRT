@@ -14,8 +14,16 @@ object.}
 extracting abilities from a \code{mirt} fit.}
 }
 \value{
-A list with components \code{source}, \code{A}, \code{B}, \code{C}, \code{D}, \code{Ability}, and
-\code{corr}.
+A list with components \code{source}, \code{A}, \code{B}, \code{C}, \code{D}, \code{Ability},
+\code{corr}, and \code{latent_mean} and \code{latent_sd}: the mean and standard
+deviation of the latent variable on the solution's own metric, which is
+what a normalisation should use. \code{Ability} holds point estimates, whose
+spread understates the latent scale. For a \code{bigIRT} fit they come from the
+posterior by the law of total variance (variance of the posterior modes
+plus the mean posterior variance), for a \code{mirt} fit from its estimated
+latent distribution; they are \code{NULL} for a simulation, whose \code{Ability} is
+the latent variable itself, and for a fit that kept no posterior
+precision.
 }
 \description{
 Extracts a common set of multidimensional IRT parameters from either a
