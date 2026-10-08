@@ -22,13 +22,11 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
       sim$dat,
       pl = 2,
       cores = 1,
-      iter = 20,
       priors = TRUE,
       ebayes = FALSE,
       dropPerfectScores = FALSE,
       normalise = FALSE,
-      verbose = 0,
-      plot = FALSE
+      verbose = 0
     )
 
     nitems <- nrow(sim$dat[!duplicated(Item), .(Item)])
@@ -75,13 +73,11 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
       sim$dat,
       pl = 2,
       cores = 1,
-      iter = 20,
       priors = TRUE,
       ebayes = FALSE,
       dropPerfectScores = FALSE,
       normalise = FALSE,
       verbose = 0,
-      plot = FALSE,
       loadings = loadings,
       loadingsFixed = loadingsFixed
     )
@@ -113,16 +109,13 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
       sim$dat,
       pl = 2,
       cores = 1,
-      iter = 10,
       priors = TRUE,
       ebayes = FALSE,
       marginalApprox = "laplace_fast",
       laplaceOuterIter = 1,
-      noptimsteps = 5,
       dropPerfectScores = FALSE,
       normalise = FALSE,
-      verbose = 0,
-      plot = FALSE
+      verbose = 0
     )
 
     expectedRowEff <- c("b_row", "c_row", "d_row", "eta_row", "row_loadings")

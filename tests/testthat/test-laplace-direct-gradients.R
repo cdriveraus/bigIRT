@@ -18,8 +18,7 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
   direct_evaluator <- function(sim, sdat_args = list(), ecorr = FALSE) {
     f <- do.call(fitIRT, c(list(dat = sim$dat, pl = 2, cores = 1, priors = TRUE,
       ebayes = FALSE, dropPerfectScores = FALSE, normalise = FALSE,
-      marginalApprox = "laplace_fast", laplaceOuterIter = 2, verbose = 0,
-      plot = FALSE, keepInternals = TRUE), sdat_args))
+      marginalApprox = "laplace_fast", laplaceOuterIter = 2, verbose = 0, keepInternals = TRUE), sdat_args))
     sdat <- f$internals$sdat
     st <- bigIRT:::bigIRT_laplace_initial_state(sdat, eps = 1e-6,
       corr_paramization = "normalized_chol")
@@ -135,8 +134,7 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
   direct_evaluator_pl <- function(sim, pl) {
     f <- fitIRT(dat = sim$dat, pl = pl, cores = 1, priors = TRUE,
       ebayes = FALSE, dropPerfectScores = FALSE, normalise = FALSE,
-      marginalApprox = "laplace_fast", laplaceOuterIter = 2, verbose = 0,
-      plot = FALSE, keepInternals = TRUE)
+      marginalApprox = "laplace_fast", laplaceOuterIter = 2, verbose = 0, keepInternals = TRUE)
     sdat <- f$internals$sdat
     st <- bigIRT:::bigIRT_laplace_initial_state(sdat, eps = 1e-6,
       corr_paramization = "normalized_chol")
@@ -187,6 +185,70 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     }
   })
 
+  test_that("the gradient is right with some abilities fixed (personDat)", {
+    ## Two faults, one behind the other. The item kernel took each person's
+    ## log-determinant over every dimension, while the person kernel -- whose
+    ## log-determinant the value uses -- pins fixed abilities out: with 40 of
+    ## 150 persons fixed the gradient was off by 1.06 relative (1.15 in two
+    ## dimensions), against 2e-7 now. And the positive-semidefinite guard ran
+    ## over every dimension, so a fixed ability's curvature could clip the
+    ## free block and drop a log-determinant term that was not flat: 7.8e-2
+    ## in two dimensions with one ability fixed for some persons, once the
+    ## first was fixed. Every case has free asymptotes, covariates and an
+    ## estimated ability mean, and second-order Laplace inherits the same terms.
+    skip_on_cran()
+    set.seed(3)
+    lap_eval <- function(dat, args){
+      f <- suppressWarnings(do.call(fitIRT, c(list(dat = dat, pl = 3, cores = 1, priors = TRUE,
+        dropPerfectScores = FALSE, laplaceOuterIter = 2, laplaceCertify = FALSE,
+        laplaceRefine = "none", keepInternals = TRUE), args)))
+      sdat <- f$internals$sdat
+      st <- bigIRT:::bigIRT_laplace_initial_state(sdat, eps = 1e-6, corr_paramization = "normalized_chol")
+      pp <- bigIRT:::bigIRT_laplace_prior_mats(sdat, jitter = 1e-6)$precision_array
+      lay <- bigIRT:::bigIRT_laplace_direct_layout(sdat, estimateAbilityCorr = FALSE)
+      ctx <- bigIRT:::bigIRT_laplace_item_context(sdat,
+        layout = lay[setdiff(names(lay), c("corr", "ability_mean", "ability_beta"))])
+      ctx$grain_size <- 16L; ctx$direct_layout <- lay; ctx$corr_paramization <- "normalized_chol"
+      st$laplaceCorrParam <- "normalized_chol"
+      set.seed(1)
+      par <- bigIRT:::bigIRT_laplace_pack_direct_state(st, sdat, layout = lay)
+      par <- par + stats::rnorm(length(par), 0, .2)
+      make <- function(l2) function(v){
+        cx <- ctx; cx$laplace2 <- l2
+        bigIRT:::bigIRT_laplace_direct_objective(par = v, state = st, sdat = sdat,
+          prior_precision = pp, theta_init = st$AbilityBase, jitter = 1e-6, max_iter = 4000L,
+          tol = 1e-13, keep_covariance = TRUE, context = cx)
+      }
+      list(par = par, make = make)
+    }
+    relerr <- function(f, par, h = 1e-5){
+      g <- f(par)$approx_grad
+      fd <- vapply(seq_along(par), function(k){
+        u <- par; u[k] <- u[k] + h; d <- par; d[k] <- d[k] - h
+        (f(u)$value - f(d)$value) / (2 * h)
+      }, numeric(1))
+      max(abs(g - fd) / pmax(1, abs(fd)))
+    }
+    ## One dimension, 40 of 150 persons fixed.
+    s1 <- simIRT(Nsubs = 150, Nitems = 15, Nscales = 1, NitemsAnswered = 12, AMean = 1.2,
+      ASD = .3, BMean = 0, BSD = 1, logitCMean = -1.5, logitCSD = .3)
+    d1 <- s1$dat; d1[, x := stats::rnorm(1), by = id]
+    pd1 <- data.frame(id = unique(d1$id)[1:40], a = stats::rnorm(40))
+    names(pd1)[2] <- as.character(unique(d1$Scale))
+    ## Two dimensions: 40 persons with the first ability fixed only, 10 with both.
+    s2 <- simIRT(Nsubs = 150, Nitems = 16, Nscales = 2, NitemsAnswered = 16, AMean = 1.2,
+      ASD = .3, BMean = 0, BSD = 1, logitCMean = -1.5, logitCSD = .3)
+    d2 <- s2$dat; d2[, x := stats::rnorm(1), by = id]
+    pd2 <- data.frame(id = unique(d2$id)[1:50], a = stats::rnorm(50), b = c(rep(NA, 40), stats::rnorm(10)))
+    names(pd2)[2:3] <- sort(unique(as.character(d2$Scale)))
+    for(case in list(list(d = d1, pd = pd1, nm = "1D"), list(d = d2, pd = pd2, nm = "2D"))){
+      e <- lap_eval(case$d, list(personDat = case$pd, personPreds = "x",
+        estMeans = c("ability", "A", "C")))
+      expect_lt(relerr(e$make(FALSE), e$par), 1e-5, label = paste(case$nm, "Laplace"))
+      expect_lt(relerr(e$make(TRUE), e$par), 1e-5, label = paste(case$nm, "second-order Laplace"))
+    }
+  })
+
   test_that("laplace results do not depend on response row order", {
     ## Per-person and per-item sums were built with rowsum(reorder = FALSE),
     ## which returns groups in the order they are encountered rather than in
@@ -206,7 +268,7 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     d <- data.table::as.data.table(sim$dat)
     args <- list(pl = 2, cores = 1, priors = TRUE, personPreds = "V1",
       marginalApprox = "laplace", dropPerfectScores = FALSE, normalise = FALSE,
-      verbose = 0, plot = FALSE, laplaceOuterIter = 25)
+      verbose = 0, laplaceOuterIter = 25)
     fit_a <- do.call(fitIRT, c(list(dat = d), args))
     set.seed(9)
     fit_b <- do.call(fitIRT, c(list(dat = d[sample(.N)]), args))

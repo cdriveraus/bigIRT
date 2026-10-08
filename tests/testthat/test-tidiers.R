@@ -19,7 +19,7 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     n <- nrow(s$dat)
     set.seed(seed + 1); tr <- sort(sample.int(n, floor(0.85 * n)))
     fitIRT(s$dat, score = "score", id = "id", item = "Item", scale = "Scale",
-      pl = pl, marginalApprox = "laplace", cores = 1L, verbose = 0L, plot = FALSE,
+      pl = pl, marginalApprox = "laplace", cores = 1L, verbose = 0L,
       priors = TRUE, ebayes = FALSE, normalise = FALSE, dropPerfectScores = FALSE,
       trainingRows = tr, keepInternals = TRUE, laplaceKeepCovariance = TRUE)
   }
@@ -98,7 +98,7 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
       AMean = 1.1, ASD = .25, BMean = 0, BSD = 1, AbilityMean = 0, AbilitySD = 1,
       logitCMean = -1.6, logitCSD = .2, logitDMean = 0.6, logitDSD = .15)
     fit4 <- fitIRT(s$dat, score = "score", id = "id", item = "Item", scale = "Scale",
-      pl = 4L, marginalApprox = "laplace", cores = 1L, verbose = 0L, plot = FALSE,
+      pl = 4L, marginalApprox = "laplace", cores = 1L, verbose = 0L,
       priors = TRUE, ebayes = FALSE, normalise = FALSE, dropPerfectScores = FALSE,
       keepInternals = TRUE, laplaceKeepCovariance = TRUE)
     ti4 <- tidyIRT(fit4, conf.int = TRUE, method = "profile")
@@ -164,8 +164,7 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     s <- simIRT(Nsubs = 600L, Nitems = 20L, Nscales = 1, NitemsAnswered = 15L,
       AMean = 1, ASD = .3, BMean = 0, BSD = 1,
       logitCMean = -1.4, logitCSD = .2, logitDMean = 20, logitDSD = 0)
-    args <- list(s$dat, pl = 3L, marginalApprox = "laplace", cores = 1L, verbose = 0L,
-      plot = FALSE, ebayes = FALSE, dropPerfectScores = FALSE)
+    args <- list(s$dat, pl = 3L, marginalApprox = "laplace", cores = 1L, verbose = 0L, ebayes = FALSE, dropPerfectScores = FALSE)
     f0 <- do.call(fitIRT, args)
     f1 <- do.call(fitIRT, c(args, keepInternals = TRUE))
     expect_null(f0$internals)

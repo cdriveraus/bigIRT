@@ -38,7 +38,7 @@ test_that("looIRT scores only the training rows, not the held-out ones", {
   fit <- fitIRT(dat = dat, score = "score", id = "id", item = "code",
     scale = "Scale", pl = 2L, trainingRows = train,
     marginalApprox = "laplace", priors = TRUE, normalise = FALSE,
-    dropPerfectScores = FALSE, verbose = 0L, plot = FALSE, cores = 1L,
+    dropPerfectScores = FALSE, verbose = 0L, cores = 1L,
     laplaceKeepCovariance = TRUE)
 
   res <- suppressWarnings(looIRT(fit, draws = 50L, seed = 1L))
@@ -72,7 +72,7 @@ test_that("looIRT's row ability includes the person-covariate offset", {
   fit <- fitIRT(dat = dat, score = "score", id = "id", item = "code",
     scale = "Scale", pl = 2L, personPreds = "xcov",
     marginalApprox = "laplace", priors = TRUE, normalise = FALSE,
-    dropPerfectScores = FALSE, verbose = 0L, plot = FALSE, cores = 1L,
+    dropPerfectScores = FALSE, verbose = 0L, cores = 1L,
     laplaceKeepCovariance = TRUE, keepInternals = TRUE)
 
   expect_gt(abs(as.numeric(fit$pars$Abilitybeta)[1]), 0.3)

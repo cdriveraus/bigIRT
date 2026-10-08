@@ -14,7 +14,7 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     n <- nrow(s$dat)
     set.seed(seed + 1); tr <- sort(sample.int(n, floor(0.85 * n)))
     fitIRT(s$dat, score = "score", id = "id", item = "Item", scale = "Scale",
-      pl = 2L, marginalApprox = "laplace", cores = 1L, verbose = 0L, plot = FALSE,
+      pl = 2L, marginalApprox = "laplace", cores = 1L, verbose = 0L,
       priors = TRUE, ebayes = FALSE, normalise = FALSE, dropPerfectScores = FALSE,
       trainingRows = tr, keepInternals = TRUE, laplaceKeepCovariance = TRUE)
   }

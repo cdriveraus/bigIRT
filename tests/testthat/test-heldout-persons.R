@@ -41,7 +41,7 @@ test_that("persons with no training rows take the prior, and items still cannot"
                 scale = "Scale", pl = 2L, personPreds = "xcov",
                 trainingRows = train, marginalApprox = "laplace",
                 priors = TRUE, normalise = FALSE, dropPerfectScores = FALSE,
-                verbose = 0L, plot = FALSE, cores = 1L)
+                verbose = 0L, cores = 1L)
 
   ab <- as.numeric(as.matrix(fit$pars$Ability))
   bet <- as.numeric(as.matrix(fit$pars$Abilitybeta))
@@ -68,6 +68,6 @@ test_that("persons with no training rows take the prior, and items still cannot"
     fitIRT(dat = dat, score = "score", id = "id", item = "code", scale = "Scale",
            pl = 2L, personPreds = "xcov", trainingRows = bad,
            marginalApprox = "laplace", priors = TRUE, normalise = FALSE,
-           dropPerfectScores = FALSE, verbose = 0L, plot = FALSE, cores = 1L),
+           dropPerfectScores = FALSE, verbose = 0L, cores = 1L),
     "every item")
 })

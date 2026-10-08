@@ -40,13 +40,11 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
         sim$dat,
         pl = pl,
         cores = 1,
-        iter = 25,
         priors = TRUE,
         ebayes = FALSE,
         dropPerfectScores = FALSE,
         normalise = FALSE,
-        verbose = 0,
-        plot = FALSE
+        verbose = 0
       )
 
       cmp <- compare_models(list(truth = sim, bigirt = fit))
@@ -109,7 +107,6 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
       sim$dat,
       pl = 4,
       cores = 1,
-      iter = 30,
       priors = TRUE,
       ebayes = FALSE,
       marginalApprox = "laplace_direct",
@@ -117,8 +114,7 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
       loadings = build_loading_mask(sim$A, scale_names = sort(unique(sim$dat$Scale))),
       dropPerfectScores = FALSE,
       normalise = FALSE,
-      verbose = 0,
-      plot = FALSE
+      verbose = 0
     )
 
     wide <- dcast(copy(sim$dat), id ~ Item, value.var = "score")

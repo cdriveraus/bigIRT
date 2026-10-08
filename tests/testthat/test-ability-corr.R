@@ -18,7 +18,7 @@ test_that("laplace recovers a known latent correlation", {
 
   fit <- suppressMessages(fitIRT(sim$dat, pl = 2, cores = 1, priors = TRUE, ebayes = FALSE,
     marginalApprox = "laplace_fast", dropPerfectScores = FALSE, normalise = FALSE,
-    estimateAbilityCorr = TRUE, verbose = 0, plot = FALSE,
+    estimateAbilityCorr = TRUE, verbose = 0,
     laplaceTol = 0.1, laplaceOuterIter = 300L))
 
   est <- fit$abilityPrior$corr
@@ -45,7 +45,7 @@ test_that("the latent correlation stays at the identity when not requested", {
 
   fit <- suppressMessages(fitIRT(sim$dat, pl = 2, cores = 1, priors = TRUE, ebayes = FALSE,
     marginalApprox = "laplace_fast", dropPerfectScores = FALSE, normalise = FALSE,
-    estimateAbilityCorr = FALSE, verbose = 0, plot = FALSE,
+    estimateAbilityCorr = FALSE, verbose = 0,
     laplaceTol = 0.1, laplaceOuterIter = 100L))
 
   expect_false(isTRUE(fit$abilityPrior$estimated))
@@ -68,7 +68,7 @@ test_that("the correlation estimate corrects the bias in the person modes", {
     AbilityCorr = trueR)
   fit <- suppressMessages(fitIRT(sim$dat, pl = 2, cores = 1, priors = TRUE,
     ebayes = FALSE, marginalApprox = "laplace", dropPerfectScores = FALSE,
-    normalise = FALSE, estimateAbilityCorr = TRUE, verbose = 0, plot = FALSE,
+    normalise = FALSE, estimateAbilityCorr = TRUE, verbose = 0,
     laplaceOuterIter = 60))
 
   est <- as.matrix(fit$abilityPrior$corr)[1, 2]

@@ -56,7 +56,7 @@ test_that("an unregularised fit that runs off says so by name, with every probab
   ## refinement does with it now.
   fit <- withCallingHandlers(
     fitIRT(d, pl = 2, priors = FALSE, estMeans = character(0), dropPerfectScores = FALSE,
-      laplaceRefine = "none", trainingRows = train, cores = 1, verbose = 0, plot = FALSE),
+      laplaceRefine = "none", trainingRows = train, cores = 1, verbose = 0),
     warning = function(w){ ws <<- c(ws, conditionMessage(w)); invokeRestart("muffleWarning") })
   st <- fit$laplaceStatus
 
@@ -86,7 +86,7 @@ test_that("an unregularised fit that runs off says so by name, with every probab
   ## With the certificate off the screen still names it.
   fit0 <- suppressWarnings(fitIRT(d, pl = 2, priors = FALSE, estMeans = character(0),
     dropPerfectScores = FALSE, laplaceRefine = "none", trainingRows = train,
-    laplaceCertify = FALSE, cores = 1, verbose = 0, plot = FALSE))
+    laplaceCertify = FALSE, cores = 1, verbose = 0))
   expect_null(fit0$laplaceStatus$certificate)
   expect_identical(fit0$laplaceStatus$reason, "diverged")
   expect_false(fit0$laplaceStatus$converged)
@@ -107,7 +107,7 @@ test_that("the quadrature refinement does not exploit a separated item", {
   ## reports is the exact one, to within quadrature's error, where it ends.
   d <- bigirt_separated_data()
   fit <- suppressWarnings(fitIRT(d, pl = 2, priors = FALSE, estMeans = character(0),
-    dropPerfectScores = FALSE, laplaceRefine = "agq", cores = 1, verbose = 0, plot = FALSE))
+    dropPerfectScores = FALSE, laplaceRefine = "agq", cores = 1, verbose = 0))
   rf <- fit$laplaceStatus$refine
   expect_gte(rf$agq_end - rf$agq_start, -1e-3)
   grid <- seq(-7, 7, length.out = 1401)
@@ -126,7 +126,7 @@ test_that("the quadrature refinement does not exploit a separated item", {
 test_that("a well-behaved fit is not called diverged", {
   d <- bigirt_separated_data()
   d <- d[Item != 11L]
-  fit <- suppressWarnings(fitIRT(d, pl = 2, cores = 1, verbose = 0, plot = FALSE))
+  fit <- suppressWarnings(fitIRT(d, pl = 2, cores = 1, verbose = 0))
   expect_null(fit$laplaceStatus$diverged)
   expect_false(identical(fit$laplaceStatus$reason, "diverged"))
   expect_false(identical(fit$laplaceStatus$certificate$status, "diverged"))
@@ -142,7 +142,7 @@ test_that("an item pushed onto a step is pulled back with a gain, and named", {
   d <- d[Item != 11L]
   fit <- suppressWarnings(fitIRT(d, pl = 2, priors = FALSE, estMeans = character(0),
     dropPerfectScores = FALSE, laplaceRefine = "agq", keepInternals = TRUE,
-    cores = 1, verbose = 0, plot = FALSE))
+    cores = 1, verbose = 0))
   expect_null(fit$laplaceStatus$diverged)
   e <- bigIRT:::bigIRT_direct_eval_from_fit(fit)
   par <- e$par

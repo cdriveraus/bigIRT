@@ -21,10 +21,8 @@ test_that("laplace records timing and optimizer diagnostics", {
     normalise = FALSE,
     marginalApprox = "laplace_fast",
     laplaceOuterIter = 3,
-    noptimsteps = 6,
     laplaceDiagnostics = TRUE,
-    verbose = 0,
-    plot = FALSE
+    verbose = 0
   ), "iteration limit")
 
   dx <- fit$laplaceDiagnostics

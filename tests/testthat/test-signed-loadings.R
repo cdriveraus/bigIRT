@@ -55,7 +55,7 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
   signed_evaluator <- function(ss, pl, signed = "cross") {
     f <- suppressWarnings(fitIRT(ss$sim$dat, pl = pl, cores = 1, priors = TRUE,
       ebayes = FALSE, dropPerfectScores = FALSE, normalise = FALSE,
-      marginalApprox = "laplace", laplaceOuterIter = 2, verbose = 0, plot = FALSE,
+      marginalApprox = "laplace", laplaceOuterIter = 2, verbose = 0,
       keepInternals = TRUE, laplaceRefine = "none", laplaceCertify = FALSE,
       loadings = ss$L, signedLoadings = signed))
     sdat <- f$internals$sdat
@@ -458,8 +458,11 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
   test_that("signedLoadings is refused where it cannot apply, and checked where it can", {
     ss <- signed_sim(7405, 2L, 2L, Np = 150)
     dat <- ss$sim$dat; L <- ss$L
-    expect_error(fitIRT(dat, pl = 2, loadings = L, signedLoadings = "cross", marginalApprox = "none"),
-      "marginalApprox = \"laplace\"")
+    ## Both estimators take signed loadings ("none" is the former name of "map").
+    fm <- suppressWarnings(fitIRT(dat, pl = 2, loadings = L, signedLoadings = "cross",
+      marginalApprox = "none", laplaceOuterIter = 3, laplaceCertify = FALSE))
+    expect_identical(fm$backend, "map")
+    expect_false(is.null(fm$prepared$signedA))
     expect_error(fitIRT(dat, pl = 1, marginalApprox = "laplace", signedLoadings = "cross"),
       "pl >= 2")
     S <- matrix(FALSE, nrow(L), ncol(L), dimnames = dimnames(L))

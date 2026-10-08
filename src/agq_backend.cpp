@@ -50,7 +50,9 @@
 // cost of one evaluation, where differencing the gradient costs two
 // evaluations per parameter. A grouped rule contributes group by group, with
 // the group coefficients. Per item, parameter slots are B, the loading on
-// each of the K dimensions, C and D; slots a row does not free are zero.
+// each of the K dimensions, C and D; slots a row does not free are zero. They
+// are followed by the item's covariate coefficients, each row's slot block
+// carried into them by its own covariate values (src/bigirt_item_blocks.h).
 
 #include <RcppEigen.h>
 #include <RcppParallel.h>
@@ -59,6 +61,7 @@
 #include <cmath>
 #include <algorithm>
 #include "bigirt_obsindex.h"
+#include "bigirt_item_blocks.h"
 using Eigen::MatrixXd;
 using Eigen::VectorXd;
 
@@ -178,9 +181,11 @@ struct AgqWorker : public RcppParallel::Worker {
   const int K, P;
   const bool want_person;
   // Item blocks of the Hessian (see the header): item of each row (1-based,
-  // 0 skips the row), and S = K + 3 slots an item.
+  // 0 skips the row), S = K + 3 slots an item, and E columns with its
+  // covariate coefficients (src/bigirt_item_blocks.h).
   AgqVec<int> block_items;
   int n_items = 0, S_slots = 0;
+  BigirtBlockLayout bl;
   std::vector<double> blk;
   // outputs owned by R, written per subject (disjoint)
   double* eap;        // N x K
@@ -211,7 +216,7 @@ struct AgqWorker : public RcppParallel::Worker {
       logitDbeta(o.logitDbeta), prior_mean(o.prior_mean), prior_precision(o.prior_precision),
       free_mask(o.free_mask), rules(o.rules), K(o.K), P(o.P),
       want_person(o.want_person), block_items(o.block_items), n_items(o.n_items), S_slots(o.S_slots),
-      eap(o.eap), post_cov(o.post_cov), value_by_subj(o.value_by_subj),
+      bl(o.bl), eap(o.eap), post_cov(o.post_cov), value_by_subj(o.value_by_subj),
       value(0.0), failure(0) { zero_like(o); }
 
   void zero_like(const AgqWorker& o) {
@@ -485,7 +490,8 @@ struct AgqWorker : public RcppParallel::Worker {
 
   // Each row's contribution to its item's block (the Louis identity; see the
   // header): the node-weighted sum of h + s s', less the outer product of the
-  // weighted score, group by group for a grouped rule.
+  // weighted score, group by group for a grouped rule; then carried into the
+  // item's covariate coefficients by the row's covariate values.
   template <class MemNode, class MemVal, class MemGrp>
   void item_blocks_impl(const BigIRTObsSpan& obs, int n, long nq, const std::vector<VectorXd>& th,
                         const MatrixXd& off, const MatrixXd& amul, const std::vector<double>& crow,
@@ -497,6 +503,8 @@ struct AgqWorker : public RcppParallel::Worker {
     const int SS = S_slots;
     std::vector<double> sv(SS), hv(static_cast<std::size_t>(SS) * SS), M(hv.size()), m(SS);
     std::vector<double> mg(grouped ? static_cast<std::size_t>(rule.G) * SS : 0);
+    std::vector<double> xv(static_cast<std::size_t>(bl.E - SS) + 1);
+    const std::size_t EE = static_cast<std::size_t>(bl.E) * bl.E;
     for (int oi = 0; oi < n; ++oi) {
       const int o = obs[oi];
       const int it = block_items[o];
@@ -529,8 +537,8 @@ struct AgqWorker : public RcppParallel::Worker {
             M[a + SS * b] -= rule.coef[g] * mgg[a] * mgg[b];
         }
       }
-      double* B = &blk[static_cast<std::size_t>(it - 1) * SS * SS];
-      for (std::size_t e = 0; e < M.size(); ++e) B[e] += M[e];
+      bl.covariates(o, K, A_ref, B_ref, C_ref, D_ref, A_pred, B_pred, C_pred, D_pred, xv.data());
+      bl.add(&blk[static_cast<std::size_t>(it - 1) * EE], M.data(), xv.data());
     }
   }
 
@@ -548,11 +556,11 @@ struct AgqWorker : public RcppParallel::Worker {
 
 } // namespace
 
-// The item blocks as an S x S x items array, or NULL when none were asked for.
+// The item blocks as an E x E x items array, or NULL when none were asked for.
 static SEXP blocks_out(const AgqWorker& w) {
   if (w.n_items == 0) return R_NilValue;
   Rcpp::NumericVector out(w.blk.begin(), w.blk.end());
-  out.attr("dim") = Rcpp::IntegerVector::create(w.S_slots, w.S_slots, w.n_items);
+  out.attr("dim") = Rcpp::IntegerVector::create(w.bl.E, w.bl.E, w.n_items);
   return out;
 }
 
@@ -647,6 +655,12 @@ extern "C" SEXP _bigIRT_agq_fg_cpp_impl(
   w.free_mask = cp_i(free_maskSEXP);
   if (w.A_signed.count() != w.invspApars.count())
     Rcpp::stop("AGQ: A_signed must hold one entry per free loading.");
+  // A matrix with zero rows in R still reports its column count; the kernels
+  // treat "no predictors" as zero columns.
+  if (w.A_pred.nr == 0) w.A_pred.nc = 0;
+  if (w.B_pred.nr == 0) w.B_pred.nc = 0;
+  if (w.C_pred.nr == 0) w.C_pred.nc = 0;
+  if (w.D_pred.nr == 0) w.D_pred.nc = 0;
   // Item blocks: the item of each row, 1-based; empty asks for none.
   w.block_items = cp_i(block_itemsSEXP);
   if (w.block_items.count() > 0) {
@@ -655,14 +669,9 @@ extern "C" SEXP _bigIRT_agq_fg_cpp_impl(
     int mx = 0;
     for (std::size_t i = 0; i < w.block_items.count(); ++i) mx = std::max(mx, w.block_items[i]);
     w.n_items = mx; w.S_slots = K + 3;
-    w.blk.assign(static_cast<std::size_t>(w.S_slots) * w.S_slots * mx, 0.0);
+    w.bl.init(K, w.B_pred.nc, w.A_pred.nc, w.C_pred.nc, w.D_pred.nc);
+    w.blk.assign(static_cast<std::size_t>(w.bl.E) * w.bl.E * mx, 0.0);
   }
-  // A matrix with zero rows in R still reports its column count; the kernels
-  // treat "no predictors" as zero columns.
-  if (w.A_pred.nr == 0) w.A_pred.nc = 0;
-  if (w.B_pred.nr == 0) w.B_pred.nc = 0;
-  if (w.C_pred.nr == 0) w.C_pred.nc = 0;
-  if (w.D_pred.nr == 0) w.D_pred.nc = 0;
   w.gA.assign(w.invspApars.count(), 0.0); w.gB.assign(w.Bpars.count(), 0.0);
   w.gC.assign(w.logitCpars.count(), 0.0); w.gD.assign(w.logitDpars.count(), 0.0);
   w.gAb.assign(w.invspAbeta.count(), 0.0); w.gBb.assign(w.Bbeta.count(), 0.0);

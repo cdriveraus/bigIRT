@@ -3,44 +3,19 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
   library(testthat)
   library(data.table)
 
-  mock_optimIRT <- function(standata, ...){
-    Avals <- standata$Adata
-    Avals[Avals == -99] <- 1
-    Bvals <- standata$Bdata
-    Bvals[Bvals == -99] <- 0
-    Cvals <- standata$Cdata
-    Cvals[Cvals == -99] <- 0
-    Dvals <- standata$Ddata
-    Dvals[Dvals == -99] <- 1
-    Ability <- standata$Abilitydata
-    Ability[Ability == -99] <- 0
-
-    list(
-      optim = list(par = numeric(0), masked_grad_norm = 0),
-      parcov = NULL,
-      stanfit = NULL,
-      pars = list(
-        A = matrix(Avals, nrow = standata$Nitems, ncol = standata$Nscales, byrow = TRUE),
-        B = matrix(as.numeric(Bvals), ncol = 1),
-        C = matrix(as.numeric(Cvals), ncol = 1),
-        D = matrix(as.numeric(Dvals), ncol = 1),
-        Ability = Ability,
-        p = rep(0.5, standata$Nobs)
-      ),
-      prepared = standata
-    )
-  }
+  ## What the loading arguments become in the prepared data. Two optimiser
+  ## iterations of the joint-MAP estimator are enough to build it; the
+  ## estimates themselves are not under test here.
+  quick_fit <- function(...) suppressWarnings(fitIRT(..., marginalApprox = "map",
+    laplaceOuterIter = 2, laplaceCertify = FALSE))
 
   test_that("legacy scale bridge builds one-hot loading standata", {
-    local_mocked_bindings(optimIRT = mock_optimIRT, .package = "bigIRT")
-
     set.seed(11)
     sim <- simIRT(Nsubs = 80, Nitems = 5, Nscales = 2, NitemsAnswered = 5)
-    fit <- fitIRT(
+    fit <- quick_fit(
       sim$dat,
       pl = 2,
       cores = 1,
-      iter = 1,
       priors = TRUE,
       ebayes = FALSE,
       dropPerfectScores = FALSE,
@@ -69,8 +44,6 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
   })
 
   test_that("custom loadings support mixed fixed/free entries", {
-    local_mocked_bindings(optimIRT = mock_optimIRT, .package = "bigIRT")
-
     set.seed(12)
     sim <- simIRT(Nsubs = 60, Nitems = 4, Nscales = 2, NitemsAnswered = 4)
     items <- sim$dat[!duplicated(Item), .(Item, Scale)][order(Item)]
@@ -93,11 +66,10 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     loadingsFixed[4, 2] <- FALSE
     loadingsFixed[5, 1] <- TRUE
 
-    fit <- fitIRT(
+    fit <- quick_fit(
       sim$dat,
       pl = 2,
       cores = 1,
-      iter = 1,
       priors = TRUE,
       ebayes = FALSE,
       dropPerfectScores = FALSE,

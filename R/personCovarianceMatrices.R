@@ -126,89 +126,6 @@ bigIRT_person_covariance_cpp_impl <- function(id, theta_mean, b, c, d, row_ptr,
   )
 }
 
-bigIRT_person_sigma_points_cpp_impl <- function(id, theta_mean, b, c, d, row_ptr,
-  load_idx, load_val, prior_precision, jitter, max_attempts, sigma_scale){
-  .Call(
-    `_bigIRT_person_sigma_points_cpp_impl`,
-    id, theta_mean, b, c, d, row_ptr, load_idx, load_val, prior_precision,
-    jitter, max_attempts, as.numeric(sigma_scale)
-  )
-}
-
-bigIRT_person_sigma_points_cpp_dense_impl <- function(id, theta_mean, b, c, d, loadings,
-  prior_precision, jitter, max_attempts, sigma_scale){
-  .Call(
-    `_bigIRT_person_sigma_points_cpp_dense_impl`,
-    id, theta_mean, b, c, d, loadings, prior_precision,
-    jitter, max_attempts, as.numeric(sigma_scale)
-  )
-}
-
-bigIRT_person_sigma_points_cpp <- function(id, theta_mean, b, loadings, c = NULL, d = NULL,
-  prior_precision = NULL, jitter = 1e-8, max_attempts = 8, sigma_scale = 0.5){
-  theta_mean <- as.matrix(theta_mean)
-  if(!is.numeric(theta_mean)) stop("theta_mean must be numeric.")
-  Nsubs <- nrow(theta_mean)
-  K <- ncol(theta_mean)
-  Nobs <- length(id)
-
-  if(length(b) != Nobs) stop("b must have length Nobs.")
-  if(is.null(c)) c <- rep(0, Nobs)
-  if(is.null(d)) d <- rep(1, Nobs)
-  if(length(c) != Nobs || length(d) != Nobs) stop("c and d must have length Nobs.")
-
-  if(is.integer(id) && length(id) == Nobs && all(id >= 1L) && max(id) == Nsubs){
-    id_index <- as.integer(id)
-    id_levels <- as.character(seq_len(Nsubs))
-  } else {
-    id_factor <- factor(id)
-    id_index <- as.integer(id_factor)
-    id_levels <- levels(id_factor)
-    if(length(id_levels) != Nsubs){
-      stop("theta_mean must have one row per unique person id.")
-    }
-  }
-
-  prior_precision_arr <- bigIRT_prior_precision_array(prior_precision, Nsubs = Nsubs, K = K)
-  if(is.matrix(loadings)){
-    if(nrow(loadings) != Nobs || ncol(loadings) != K){
-      stop("loadings matrix must have dimensions Nobs x K.")
-    }
-    out <- bigIRT_person_sigma_points_cpp_dense_impl(
-      id = id_index,
-      theta_mean = theta_mean,
-      b = as.numeric(b),
-      c = as.numeric(c),
-      d = as.numeric(d),
-      loadings = loadings,
-      prior_precision = prior_precision_arr,
-      jitter = jitter,
-      max_attempts = as.integer(max_attempts),
-      sigma_scale = sigma_scale
-    )
-  } else {
-    sparse <- bigIRT_normalise_sparse_loadings(loadings, Nobs = Nobs, K = K)
-    out <- bigIRT_person_sigma_points_cpp_impl(
-      id = id_index,
-      theta_mean = theta_mean,
-      b = as.numeric(b),
-      c = as.numeric(c),
-      d = as.numeric(d),
-      row_ptr = sparse$row_ptr,
-      load_idx = sparse$load_idx,
-      load_val = sparse$load_val,
-      prior_precision = prior_precision_arr,
-      jitter = jitter,
-      max_attempts = as.integer(max_attempts),
-      sigma_scale = sigma_scale
-    )
-  }
-
-  out$id_levels <- id_levels
-  out$backend <- "cpp_sigma"
-  out
-}
-
 #' Compute person covariance matrices with a pure R reference implementation
 #'
 #' This function mirrors \code{\link{personCovarianceMatrices}} but performs the
@@ -317,8 +234,8 @@ personCovarianceMatrices_R <- function(id, theta_mean, b, loadings, c = NULL, d 
 #'
 #' Builds a posterior precision matrix for each person by combining a prior
 #' precision matrix with row-wise Fisher information contributions. The intended
-#' input is the row-level moderated parameter state already produced inside the
-#' Stan likelihood:
+#' input is the row-level moderated parameter state a fit reports
+#' (\code{fit$rowEffective}):
 #' \itemize{
 #'   \item a current person mean matrix \code{theta_mean}
 #'   \item row-level effective difficulties \code{b}

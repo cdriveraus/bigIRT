@@ -137,16 +137,14 @@ if(identical(Sys.getenv("NOT_CRAN"), "true")){
       sim$dat,
       pl = 4,
       # cores = 1,
-      # iter = 35,
-      priors = TRUE,
+      # priors = TRUE,
       ebayes = FALSE,
       marginalApprox = "laplace_direct",
       estimateAbilityCorr = TRUE,
       loadings = loading_mask,
       dropPerfectScores = FALSE,
       normalise = FALSE,
-      verbose = 0,
-      plot = FALSE
+      verbose = 0
     )
 
     wide <- dcast(copy(sim$dat), id ~ Item, value.var = "score")

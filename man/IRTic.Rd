@@ -16,9 +16,12 @@ A data frame of criterion, degrees-of-freedom type, sample-size
 type, degrees of freedom and value.
 }
 \description{
-Person parameters are integrated out of the Laplace objective, so they are
-not free parameters of it and are not counted; counting them would penalise
-a model for the size of its sample. Effective and nominal degrees of freedom
+Person parameters are integrated out of the marginal likelihood, so they
+are not free parameters of it and are not counted; counting them would
+penalise a model for the size of its sample. For a joint-MAP fit the
+likelihood is that same marginal, evaluated at the MAP estimates (see
+\code{\link[=logLik.bigIRT_fit]{logLik.bigIRT_fit()}}), so the criteria compare fits by either estimator on
+one scale. Effective and nominal degrees of freedom
 are both reported, as are BIC on persons and on responses, since the two
 answer different questions.
 }

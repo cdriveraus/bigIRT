@@ -13,10 +13,10 @@ test_that("fit validation accepts data frames and data tables consistently", {
     Scale = 1, score = c(0, 1, 1, 0))
   expect_silent(bigIRT:::bigIRT_validate_fit_inputs(
     dat, "score", "id", "Item", "Scale", 2,
-    list(iter = 1, cores = 1), c(1L, 2L, 3L, 4L)))
+    list(cores = 1), c(1L, 2L, 3L, 4L)))
   expect_silent(bigIRT:::bigIRT_validate_fit_inputs(
     data.table::as.data.table(dat), "score", "id", "Item", "Scale", 2,
-    list(iter = 1, cores = 1), c(1L, 2L, 3L, 4L)))
+    list(cores = 1), c(1L, 2L, 3L, 4L)))
 })
 
 test_that("direct Laplace fits both item and person predictor models", {
@@ -33,7 +33,7 @@ test_that("direct Laplace fits both item and person predictor models", {
   fitI <- fitIRT(simI$dat, pl = 2, marginalApprox = "laplace_direct",
     BitemPreds = c("V1", "V2"), itemSpecificBetas = FALSE,
     dropPerfectScores = FALSE, normalise = FALSE, cores = 1,
-    laplaceOuterIter = 30, verbose = 0, plot = FALSE)
+    laplaceOuterIter = 30, verbose = 0)
   expect_length(as.numeric(fitI$pars$Bbeta), 2)
   expect_true(all(is.finite(as.numeric(fitI$pars$Bbeta))))
 
@@ -46,7 +46,7 @@ test_that("direct Laplace fits both item and person predictor models", {
     AbilityPredEffects = eff)
   fitP <- fitIRT(simP$dat, pl = 2, marginalApprox = "laplace_direct",
     personPreds = c("V1", "V2"), dropPerfectScores = FALSE, normalise = FALSE,
-    cores = 1, laplaceOuterIter = 40, verbose = 0, plot = FALSE)
+    cores = 1, laplaceOuterIter = 40, verbose = 0)
   ab <- as.numeric(fitP$pars$Abilitybeta)
   expect_length(ab, 2)
   expect_true(all(is.finite(ab)))

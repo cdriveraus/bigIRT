@@ -46,7 +46,10 @@ the same factor. For a \code{fitIRT} fit, \code{extractMIRTpars()} returns
 them as \code{latent_sd} and \code{latent_mean}.}
 }
 \value{
-A list containing the normalised A, B, and Ability parameters.
+A list containing the normalised A, B, and Ability parameters, and
+for \code{normbase} 'Ability' or 'B' the \code{center} and \code{scale}
+of the transform: the normalised abilities are
+\code{(Ability - center) / scale + normaliseMean}.
 }
 \description{
 Normalise item response theory (IRT) parameters.

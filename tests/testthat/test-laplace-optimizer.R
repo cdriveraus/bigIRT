@@ -214,9 +214,11 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     }
   })
 
-  test_that("the block-diagonal metric is F's item blocks and shared block, and nothing else", {
+  test_that("the block-diagonal metric is F's item blocks, shared block and prior border, and nothing else", {
     ## A sparse design with every kind of block: person covariates and an
     ## estimated ability mean (shared), and a 3PL (three parameters an item).
+    ## With the item means estimated, the prior ties every item parameter to
+    ## its mean: that border is kept, the data's item-shared coupling is not.
     for(cfg in list(list(pl = 3, preds = TRUE, est = c("A", "B", "C", "D")),
                     list(pl = 2, preds = FALSE, est = c("A", "ability")))){
       f <- opt_fit(pl = cfg$pl, preds = cfg$preds, ns = 600, ni = 20, na = 8, estMeans = cfg$est)
@@ -237,10 +239,35 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
       same_block <- outer(item_of, item_of, "==")
       same_block[is.na(same_block)] <- FALSE
       same_block[shared, shared] <- TRUE
+      ps <- attr(L, "par_scale")
+      Pr <- as.matrix(bigIRT:::bigIRT_laplace_prior_curvature(d$sdat, L, n, as.integer(d$sdat$Nsubs),
+        as.matrix(d$eval$prior_mats$precision))) * outer(ps, ps)
+      border <- Pr != 0 & !same_block
+      border[shared, shared] <- FALSE
+      if(any(cfg$est %in% c("A", "B", "C", "D"))) expect_gt(sum(border), 0L)
+      same_block <- same_block | border
       scale <- max(abs(Fd))
       expect_lt(max(abs(Bd[same_block] - Fd[same_block])) / scale, 1e-8)
       expect_lt(max(abs(Bd[!same_block])) / scale, 1e-8)
     }
+  })
+
+  test_that("with tight item priors the block metric still finds the optimum", {
+    ## Item SDs at 0.001, as empirical Bayes can leave them, with the item
+    ## means estimated: the prior ties every item to its mean with precision
+    ## 1e6. Without that border the block metric took moving a mean (the items
+    ## following) to be a million times stiffer than it is, and this fit
+    ## stopped after two iterations 8.9 nats short of its optimum; with it, it
+    ## is certified in four.
+    withr::local_options(bigIRT.laplace_metric = "blockdiag")
+    set.seed(3)
+    s <- simIRT(Nsubs = 300, Nitems = 30, Nscales = 1, AMean = 1, ASD = .2, BMean = 0, BSD = .5,
+      logitCMean = -20, logitCSD = 0)
+    f <- suppressWarnings(fitIRT(s$dat, pl = 2, cores = 1, ebayes = FALSE, BSD = .001,
+      invspASD = .001, dropPerfectScores = FALSE))
+    expect_equal(f$laplaceStatus$optimizer_metric, "blockdiag")
+    expect_equal(f$laplaceStatus$certificate$status, "certified")
+    expect_lt(f$laplaceStatus$certificate$gap, 1e-3)
   })
 
   test_that("the C++ block-diagonal metric equals the R assembly", {

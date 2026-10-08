@@ -17,6 +17,7 @@ bigIRT_direct_eval_from_fit <- function(fit, keep_covariance = TRUE, cores = 1L,
     stop("This needs the prepared data. Refit with `keepInternals = TRUE`.")
   sdat <- fit$internals$sdat
   state <- fit$internals$state
+  map <- identical(fit$backend, "map")
   ecorr <- isTRUE(fit$laplaceStatus$estimated_corr)
   layout <- bigIRT_laplace_direct_layout(sdat, estimateAbilityCorr = ecorr)
   ilay <- layout[setdiff(names(layout), c("corr", "ability_mean", "ability_beta"))]
@@ -27,7 +28,9 @@ bigIRT_direct_eval_from_fit <- function(fit, keep_covariance = TRUE, cores = 1L,
   ctx$corr_paramization <- if(!is.null(state$laplaceCorrParam)) state$laplaceCorrParam else "normalized_chol"
   state$laplaceCorrParam <- ctx$corr_paramization
   ## A fit refined by quadrature is at the optimum of the quadrature objective,
-  ## not of Laplace; anything differenced around it must use the same one.
+  ## not of Laplace, and a joint-MAP fit at the joint mode; anything differenced
+  ## around a fit must use the objective it ended on.
+  ctx$map <- map
   if(identical(fit$laplaceStatus$marginal, "laplace2")) ctx$laplace2 <- TRUE
   if(identical(fit$laplaceStatus$marginal, "agq"))
     ctx$agq <- bigIRT_agq_rules(sdat$Nscales, nodes = fit$laplaceStatus$agq_rule$nodes,
@@ -123,6 +126,32 @@ bigIRT_item_free_pos <- function(sdat, active = NULL){
 ## the item has one fixed. `fp` is bigIRT_item_free_pos() over `active`.
 bigIRT_item_coords <- function(fp, layout, j){
   vapply(rownames(fp), function(b) layout[[b]][fp[b, j]], integer(1))
+}
+
+## Optimiser coordinates of item j's own covariate coefficients
+## (itemSpecificBetas), in the order the kernels' item blocks hold them after
+## the slots (src/bigirt_item_blocks.h): the B covariates, the A covariates for
+## each dimension in turn, then C and D. NA where the item has that parameter
+## fixed, and throughout when coefficients are shared across items: a shared
+## coefficient belongs to no item's block.
+bigIRT_item_beta_coords <- function(sdat, layout, j){
+  K <- as.integer(sdat$Nscales)
+  own <- identical(as.integer(sdat$itemSpecificBetas)[1], 1L)
+  one <- function(lay, npred, fixed, ref){
+    npred <- as.integer(npred)
+    if(npred == 0L) return(integer(0))
+    if(!own || !length(lay) || as.integer(fixed) == 1L || as.integer(ref) <= 0L)
+      return(rep(NA_integer_, npred))
+    ## Coefficients are rows (one per free parameter) by covariates, packed
+    ## column major; an item's row is its free parameter's index.
+    as.integer(lay[(seq_len(npred) - 1L) * (length(lay) %/% npred) + as.integer(ref)])
+  }
+  cell <- (j - 1L) * K + seq_len(K)
+  c(one(layout$B_beta, sdat$NBitemPreds, sdat$fixedB[j], sdat$freeBref[j]),
+    unlist(lapply(seq_len(K), function(k) one(layout$A_beta, sdat$NAitemPreds,
+      sdat$fixedAlog[cell[k]], sdat$freeAref[cell[k]]))),
+    one(layout$C_beta, sdat$NCitemPreds, sdat$fixedClogit[j], sdat$freeCref[j]),
+    one(layout$D_beta, sdat$NDitemPreds, sdat$fixedDlogit[j], sdat$freeDref[j]))
 }
 
 bigIRT_item_info_blocks <- function(state, sdat, context, row_effective, posterior, thetaBase){
@@ -685,11 +714,39 @@ print.bigIRT_convergence <- function(x, ...){
 ## subtracted back off, so that what is returned is a likelihood rather than a
 ## posterior. The degrees of freedom are then the effective ones, which fall
 ## below the nominal count in proportion to how much the priors are doing.
+##
+## A joint-MAP fit maximises the joint posterior, which is not a likelihood of
+## anything; but it estimates the same model, and that model's marginal
+## likelihood can be evaluated at its estimates. fitIRT does so once, by the
+## approximation the Laplace path would use (laplaceStatus$marginal_approx),
+## and that value is reported here, so fits by either estimator sit on one
+## scale. The joint mode is not the marginal's optimum, so as an objective
+## (with the item prior) it cannot exceed a Laplace fit's; logLik() removes the
+## prior, after which either can be the higher.
+#' Marginal log-likelihood of a fit
+#'
+#' The log-likelihood with the abilities integrated out, at the fitted item
+#' parameters, with the item prior density removed and the ability prior's
+#' normalising constants restored. For a joint-MAP fit (`marginalApprox =
+#' "map"`), the marginal likelihood of the same model evaluated at the MAP
+#' estimates, by the approximation `laplaceRefine` selects, so that fits by
+#' either estimator are compared on one scale.
+#'
+#' @param object A fitted object from [fitIRT()].
+#' @param effective Logical. Report effective rather than nominal degrees of
+#'   freedom when the fit is penalised.
+#' @param cores Integer. Cores for the effective-parameter calculation.
+#' @param ... Unused.
+#'
+#' @return An object of class `logLik`, with attributes `df`, `nominal_df`,
+#'   `nobs` (persons) and `penalised`.
 #' @export
 logLik.bigIRT_fit <- function(object, effective = TRUE, cores = 1L, ...){
-  val <- object$optim$logLik
-  if(is.null(val)) val <- object$logLik
-  if(is.null(val)) stop("This fit carries no objective value.")
+  map <- identical(object$backend, "map")
+  val <- if(map) object$laplaceStatus$marginal_logLik else object$optim$logLik %||% object$logLik
+  if(!isTRUE(is.finite(val)))
+    stop(if(map) "This MAP fit carries no marginal likelihood (it could not be evaluated at the fitted point)."
+      else "This fit carries no objective value.")
   sdat <- object$prepared
   penalised <- isTRUE(as.logical(sdat$dopriors))
   N <- as.numeric(sdat$Nsubs); K <- as.numeric(sdat$Nscales)
@@ -710,15 +767,18 @@ logLik.bigIRT_fit <- function(object, effective = TRUE, cores = 1L, ...){
   ## Checked against dense quadrature at the fitted parameters: uncorrected the
   ## objective was 6.5 per cent adrift, corrected it agrees to 0.04 per cent,
   ## the remainder being the Laplace approximation itself.
-  ipv <- object$laplaceStatus$item_prior_value
-  if(is.finite(ipv)) val <- val - as.numeric(ipv)
+  ipv <- if(map) object$laplaceStatus$marginal_item_prior else object$laplaceStatus$item_prior_value
+  if(isTRUE(is.finite(ipv))) val <- val - as.numeric(ipv)
   if(!isTRUE(object$laplaceStatus$estimated_corr)){
-    Lam <- object$abilityPrior$precision
-    if(!is.null(Lam)){
-      ld <- suppressWarnings(determinant(as.matrix(Lam), logarithm = TRUE))
-      if(is.finite(as.numeric(ld$modulus)) && ld$sign > 0)
-        val <- val + 0.5 * N * as.numeric(ld$modulus)
+    ## The prior the objective was evaluated with: abilityPrior$precision
+    ## describes the reported metric, which normalise = TRUE changes.
+    ld <- object$laplaceStatus$ability_prior_logdet
+    if(is.null(ld)){
+      Lam <- object$abilityPrior$precision
+      d <- if(!is.null(Lam)) suppressWarnings(determinant(as.matrix(Lam), logarithm = TRUE)) else NULL
+      ld <- if(!is.null(d) && d$sign > 0) as.numeric(d$modulus) else NA_real_
     }
+    if(isTRUE(is.finite(ld))) val <- val + 0.5 * N * ld
   }
   val <- val - N * (K / 2) * log(2 * pi)
   nominal <- length(object$optim$grad %||% numeric(0))
@@ -746,8 +806,9 @@ nobs.bigIRT_fit <- function(object, type = c("persons", "responses"), ...){
 
 ## Information criteria for a marginal IRT fit.
 ##
-## Person parameters are integrated out of the Laplace objective, so they are
-## not counted here. That is the standard marginal (MML) convention and it is
+## Person parameters are integrated out of the marginal likelihood, so they are
+## not counted here -- for a joint-MAP fit too, whose logLik() is the same
+## model's marginal likelihood at its estimates. That is the standard marginal (MML) convention and it is
 ## also the only defensible one for these fits: the person parameters are not
 ## estimated freely, and counting them would penalise a model for the size of
 ## its sample.
@@ -758,9 +819,12 @@ nobs.bigIRT_fit <- function(object, type = c("persons", "responses"), ...){
 ## estimated from. Both are reported rather than one being chosen silently.
 #' Information criteria for a marginal fit
 #'
-#' Person parameters are integrated out of the Laplace objective, so they are
-#' not free parameters of it and are not counted; counting them would penalise
-#' a model for the size of its sample. Effective and nominal degrees of freedom
+#' Person parameters are integrated out of the marginal likelihood, so they
+#' are not free parameters of it and are not counted; counting them would
+#' penalise a model for the size of its sample. For a joint-MAP fit the
+#' likelihood is that same marginal, evaluated at the MAP estimates (see
+#' [logLik.bigIRT_fit()]), so the criteria compare fits by either estimator on
+#' one scale. Effective and nominal degrees of freedom
 #' are both reported, as are BIC on persons and on responses, since the two
 #' answer different questions.
 #'

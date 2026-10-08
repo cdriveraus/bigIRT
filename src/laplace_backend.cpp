@@ -63,7 +63,7 @@ extern "C" SEXP _bigIRT_laplace_item_block_objective_cpp_impl(
     SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP,
     SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP,
     SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP,
-    SEXP, SEXP, SEXP, SEXP, SEXP);
+    SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
 
 inline double bigirt_softplus_scalar(const double x) {
   if (x > 0.0) return x + std::log1p(std::exp(-x));
@@ -322,6 +322,38 @@ inline MatrixXd bigirt_psd_clip(const MatrixXd& W) {
   if (nclipped == lam.size()) bigirt_laplace_clip_full.fetch_add(1);
   else if (nclipped > 0) bigirt_laplace_clip_partial.fetch_add(1);
   return es.eigenvectors() * lam.asDiagonal() * es.eigenvectors().transpose();
+}
+
+// The guard above, over the FREE abilities only. `like` is the data's
+// curvature over all K dimensions; on return the rows and columns of fixed
+// abilities are zero and the free block is clipped if it needed to be. A fixed
+// ability is not integrated over, so its curvature must have no say: applied
+// over every dimension, the guard let a fixed dimension's negative curvature
+// clip the free block, and the gradient then dropped a log-determinant term
+// that was not flat -- a 7.8e-2 error against central differences in two
+// dimensions with one ability fixed for some persons. Returns whether it
+// clipped. The person and item kernels both call it, from identical inputs,
+// so they reach the identical decision.
+inline bool bigirt_guard_free_curvature(MatrixXd& like, const std::vector<char>& is_free) {
+  const int K = static_cast<int>(like.rows());
+  std::vector<int> f;
+  for (int k = 0; k < K; ++k) {
+    if (is_free[static_cast<std::size_t>(k)]) { f.push_back(k); continue; }
+    like.row(k).setZero(); like.col(k).setZero();
+  }
+  const int d = static_cast<int>(f.size());
+  if (d == 0) return false;
+  if (d == K) {
+    if (bigirt_like_curvature_ok(like)) return false;
+    like = bigirt_psd_clip(like);
+    return true;
+  }
+  MatrixXd sub(d, d);
+  for (int r = 0; r < d; ++r) for (int c = 0; c < d; ++c) sub(r, c) = like(f[r], f[c]);
+  if (bigirt_like_curvature_ok(sub)) return false;
+  sub = bigirt_psd_clip(sub);
+  for (int r = 0; r < d; ++r) for (int c = 0; c < d; ++c) like(f[r], f[c]) = sub(r, c);
+  return true;
 }
 
 inline MatrixXd bigirt_matrix_from_array(const Rcpp::NumericVector& arr, const int K, const int idx) {
@@ -1337,6 +1369,15 @@ struct BigIRTLaplaceItemBlockWorker : public RcppParallel::Worker {
   double* out_loadings = nullptr;   // Nobs x K, column major
   int out_nobs = 0;
 
+  // Which abilities are free, Nsubs x K (0 where personDat fixes one); empty
+  // means all free. A fixed dimension is pinned out of the person's precision
+  // here exactly as the person kernel pins it, whose log-determinant is the one
+  // the objective's value uses. Without it this worker took log|H| and its
+  // derivatives over every dimension, so with any ability fixed the gradient
+  // described a different function from the value: off by 100 per cent and
+  // more against central differences (test-laplace-direct-gradients.R).
+  BigIRTOwnedMatrix<int> free_mask;
+
   BigIRTLaplaceItemBlockWorker(
       const BigIRTObsIndex& obs_by_subj,
       Rcpp::IntegerVector score,
@@ -1415,7 +1456,8 @@ struct BigIRTLaplaceItemBlockWorker : public RcppParallel::Worker {
       grad_D_beta(static_cast<std::size_t>(std::max(0, other.nD_beta_row * other.pD)), 0.0),
       subject_order(other.subject_order), adjoint_scale(other.adjoint_scale),
       logdet_scale(other.logdet_scale), out_eta(other.out_eta), out_c(other.out_c),
-      out_d(other.out_d), out_loadings(other.out_loadings), out_nobs(other.out_nobs) {}
+      out_d(other.out_d), out_loadings(other.out_loadings), out_nobs(other.out_nobs),
+      free_mask(other.free_mask) {}
 
   inline double softplus(const double x) const {
     if (x > 0.0) return x + std::log1p(std::exp(-x));
@@ -1537,13 +1579,20 @@ struct BigIRTLaplaceItemBlockWorker : public RcppParallel::Worker {
       // (bigirt_psd_clip), not switched to Fisher. `guarded` also switches
       // the adjoint and gradient terms below, so the value and the gradient
       // continue to describe one function.
-      bool guarded = false;
-      {
-        const MatrixXd like = Q - Q_prior;
-        if (!bigirt_like_curvature_ok(like)) {
-          guarded = true;
-          Q = Q_prior + bigirt_psd_clip(like);
-        }
+      // Over the free abilities only (bigirt_guard_free_curvature), and then
+      // the fixed ones pinned out, as the person kernel pins them (see
+      // free_mask above): what remains is the precision of the free ones.
+      std::vector<char> is_free(static_cast<std::size_t>(K), 1);
+      bool any_fixed = false;
+      if (free_mask.nrow() > 0) for (int k = 0; k < K; ++k)
+        if (free_mask(static_cast<int>(subj), k) == 0) { is_free[static_cast<std::size_t>(k)] = 0; any_fixed = true; }
+      MatrixXd like = Q - Q_prior;
+      const bool guarded = bigirt_guard_free_curvature(like, is_free);
+      Q = Q_prior + like;
+      if (any_fixed) for (int k = 0; k < K; ++k) {
+        if (is_free[static_cast<std::size_t>(k)]) continue;
+        Q.row(k).setZero(); Q.col(k).setZero();
+        Q(k, k) = 1.0 / jitter;
       }
 
       Eigen::LLT<MatrixXd> llt;
@@ -1563,6 +1612,16 @@ struct BigIRTLaplaceItemBlockWorker : public RcppParallel::Worker {
       if (!success) { failure_code = 1; return; }
 
       MatrixXd Sigma = llt.solve(eye);
+      // A pinned block's log-determinant is constant in every parameter, so
+      // it contributes no derivative, and its rows of Sigma go to exactly zero
+      // rather than to the jitter: every gradient term below then runs over
+      // the free abilities alone.
+      if (any_fixed) {
+        for (int k = 0; k < K; ++k) {
+          if (free_mask(static_cast<int>(subj), k) != 0) continue;
+          Sigma.row(k).setZero(); Sigma.col(k).setZero();
+        }
+      }
       MatrixXd L = llt.matrixL();
       double logdet = 0.0;
       for (int k = 0; k < K; ++k) logdet += 2.0 * std::log(std::max(L(k, k), 1e-12));
@@ -1649,88 +1708,6 @@ struct BigIRTLaplaceItemBlockWorker : public RcppParallel::Worker {
   }
 };
 
-// Persistent data for repeated item objective evaluations.
-//
-// The item line search evaluates the objective about eleven times per outer
-// iteration, and every one of those calls previously re-marshalled all the
-// per-response arrays from R: id, score, row_ability, and the ref/fixed/pred
-// triples for A, B, C and D. Those are data, not parameters -- they do not
-// change while the item block is being optimised -- so the marshalling was
-// repeated for nothing, and on a fit with millions of responses it dominated
-// the R-level share of the profile.
-//
-// Holding them in one object behind an external pointer means they are
-// converted once per item step. Each evaluation then passes only the item
-// parameter vectors, which are small. The Rcpp vector types preserve their
-// underlying SEXPs for as long as this object lives, so the data stay valid
-// across calls without further copying.
-struct BigIRTItemPrepared {
-  Rcpp::IntegerVector id, score;
-  Rcpp::NumericMatrix row_ability;
-  Rcpp::IntegerMatrix A_ref, A_beta_row;
-  Rcpp::NumericMatrix A_fixed_value, A_pred;
-  Rcpp::IntegerVector A_signed;
-  Rcpp::IntegerVector B_ref, B_beta_row, C_ref, C_beta_row, D_ref, D_beta_row;
-  Rcpp::NumericVector B_fixed_value, C_fixed_value, D_fixed_value;
-  Rcpp::NumericMatrix B_pred, C_pred, D_pred;
-  Rcpp::NumericVector prior_precision;
-  int K = 0, Nsubs = 0, max_attempts = 0;
-  double jitter = 0.0;
-  BigIRTObsIndex obs_by_subj;
-  std::vector<int> subject_order;
-};
-
-extern "C" SEXP _bigIRT_laplace_item_eval_cpp_impl(
-    SEXP ptrSEXP,
-    SEXP invspAparsSEXP, SEXP invspAbetaSEXP, SEXP BparsSEXP, SEXP BbetaSEXP,
-    SEXP logitCparsSEXP, SEXP logitCbetaSEXP, SEXP logitDparsSEXP, SEXP logitDbetaSEXP,
-    SEXP adjoint_scaleSEXP, SEXP logdet_scaleSEXP, SEXP grain_sizeSEXP) {
-  BEGIN_RCPP
-  Rcpp::XPtr<BigIRTItemPrepared> ptr(ptrSEXP);
-  BigIRTItemPrepared& d = *ptr;
-
-  Rcpp::NumericVector invspApars(invspAparsSEXP);
-  Rcpp::NumericMatrix invspAbeta(invspAbetaSEXP);
-  Rcpp::NumericVector Bpars(BparsSEXP);
-  Rcpp::NumericMatrix Bbeta(BbetaSEXP);
-  Rcpp::NumericVector logitCpars(logitCparsSEXP);
-  Rcpp::NumericMatrix logitCbeta(logitCbetaSEXP);
-  Rcpp::NumericVector logitDpars(logitDparsSEXP);
-  Rcpp::NumericMatrix logitDbeta(logitDbetaSEXP);
-  bigirt_check_signed(d.A_signed, invspApars.size());
-
-  BigIRTLaplaceItemBlockWorker worker(
-    d.obs_by_subj, d.score, d.row_ability, d.A_ref, d.A_fixed_value, d.A_beta_row, d.A_pred,
-    d.A_signed,
-    d.B_ref, d.B_fixed_value, d.B_beta_row, d.B_pred,
-    d.C_ref, d.C_fixed_value, d.C_beta_row, d.C_pred,
-    d.D_ref, d.D_fixed_value, d.D_beta_row, d.D_pred,
-    invspApars, invspAbeta, Bpars, Bbeta, logitCpars, logitCbeta, logitDpars, logitDbeta,
-    d.prior_precision, d.K, d.jitter, d.max_attempts
-  );
-  worker.subject_order = &d.subject_order;
-  worker.adjoint_scale = Rcpp::as<double>(adjoint_scaleSEXP);
-  worker.logdet_scale = Rcpp::as<double>(logdet_scaleSEXP);
-
-  const std::size_t grain_size = static_cast<std::size_t>(Rcpp::as<int>(grain_sizeSEXP));
-  RcppParallel::parallelReduce(static_cast<std::size_t>(0),
-    static_cast<std::size_t>(d.Nsubs), worker, grain_size);
-  if (worker.failure_code != 0)
-    Rcpp::stop("Laplace block objective failed to factor a person precision matrix.");
-
-  return Rcpp::List::create(
-    Rcpp::Named("objective") = worker.objective,
-    Rcpp::Named("grad_A") = Rcpp::NumericVector(worker.grad_A.begin(), worker.grad_A.end()),
-    Rcpp::Named("grad_B") = Rcpp::NumericVector(worker.grad_B.begin(), worker.grad_B.end()),
-    Rcpp::Named("grad_C") = Rcpp::NumericVector(worker.grad_C.begin(), worker.grad_C.end()),
-    Rcpp::Named("grad_D") = Rcpp::NumericVector(worker.grad_D.begin(), worker.grad_D.end()),
-    Rcpp::Named("grad_A_beta") = Rcpp::NumericVector(worker.grad_A_beta.begin(), worker.grad_A_beta.end()),
-    Rcpp::Named("grad_B_beta") = Rcpp::NumericVector(worker.grad_B_beta.begin(), worker.grad_B_beta.end()),
-    Rcpp::Named("grad_C_beta") = Rcpp::NumericVector(worker.grad_C_beta.begin(), worker.grad_C_beta.end()),
-    Rcpp::Named("grad_D_beta") = Rcpp::NumericVector(worker.grad_D_beta.begin(), worker.grad_D_beta.end()));
-  END_RCPP
-}
-
 extern "C" SEXP _bigIRT_laplace_item_block_objective_cpp_impl(
     SEXP idSEXP,
     SEXP scoreSEXP,
@@ -1766,7 +1743,8 @@ extern "C" SEXP _bigIRT_laplace_item_block_objective_cpp_impl(
     SEXP adjoint_scaleSEXP,
     SEXP logdet_scaleSEXP,
     SEXP grain_sizeSEXP,
-    SEXP want_row_effectiveSEXP) {
+    SEXP want_row_effectiveSEXP,
+    SEXP free_maskSEXP) {
   BEGIN_RCPP
 
   Rcpp::IntegerVector id(idSEXP);
@@ -1826,6 +1804,16 @@ extern "C" SEXP _bigIRT_laplace_item_block_objective_cpp_impl(
     invspApars, invspAbeta, Bpars, Bbeta, logitCpars, logitCbeta, logitDpars, logitDbeta,
     prior_precision, K, jitter, max_attempts
   );
+
+  // Which abilities are free (see the worker's free_mask): Nsubs x K, or NULL
+  // for all of them.
+  Rcpp::IntegerMatrix free_mask;
+  if (!Rf_isNull(free_maskSEXP)) {
+    free_mask = Rcpp::IntegerMatrix(free_maskSEXP);
+    if (free_mask.nrow() != Nsubs || free_mask.ncol() != K)
+      Rcpp::stop("free_mask must be Nsubs x K.");
+    worker.free_mask = BigIRTOwnedMatrix<int>(free_mask);
+  }
 
   // Walk subjects in locality order rather than input order. This changes only
   // which subjects land in the same chunk, not the sum they contribute to.
@@ -2366,9 +2354,13 @@ extern "C" SEXP _bigIRT_laplace_person_step_block_cpp_impl(
 
         logpost_and_grad(theta, grad, prec, lp, true);
         {
-          const MatrixXd like = prec - prior_prec;
-          if (!bigirt_like_curvature_ok(like))
-            prec = prior_prec + bigirt_psd_clip(like);
+          // Guarded over the free abilities only; the fixed ones are pinned
+          // just below (bigirt_guard_free_curvature).
+          std::vector<char> is_free(static_cast<std::size_t>(K), 1);
+          for (int k = 0; k < K; ++k) is_free[static_cast<std::size_t>(k)] = free_mask(subj, k) != 0;
+          MatrixXd like = prec - prior_prec;
+          bigirt_guard_free_curvature(like, is_free);
+          prec = prior_prec + like;
         }
         objective[subj] = lp;
         if (subj_converged && subj_status == 1) subj_status = 0;
@@ -2614,7 +2606,7 @@ extern "C" SEXP _bigIRT_laplace_direct_block_fg_cpp_impl(
     logitCparsSEXP, logitCbetaSEXP, logitDparsSEXP, logitDbetaSEXP,
     prior_precisionSEXP, jitterSEXP, max_attemptsSEXP,
     adjoint_scale_holder, logdet_scale_holder, grain_sizeSEXP,
-    want_row_effectiveSEXP
+    want_row_effectiveSEXP, free_maskSEXP
   ));
   const auto t3_item = Clock::now();
 

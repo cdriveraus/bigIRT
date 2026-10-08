@@ -40,10 +40,14 @@
 ## identity, the node-weighted sum of each row's h + s s' less the outer product
 ## of its weighted score (src/agq_backend.cpp). That keeps the coupling between
 ## an item and its own persons exact and drops only the coupling between two
-## items through the persons who answered both. The parameters shared across
-## items get full columns: the mean hyperparameters from the item prior alone,
-## which is all they enter, and the rest -- latent correlations, the ability
-## mean, covariate coefficients -- by differencing the gradient. Items meet
+## items through the persons who answered both. An item's own covariate
+## coefficients (itemSpecificBetas) are in its block, from the same pass
+## (src/bigirt_item_blocks.h); differencing them instead cost two evaluations
+## each, and over ten minutes on a 500-item fit that took seconds. The
+## parameters shared across items get full columns: the mean hyperparameters
+## from the item prior alone, which is all they enter, and the rest -- latent
+## correlations, the ability mean, shared covariate coefficients -- by
+## differencing the gradient. Items meet
 ## each other only through that shared block's Schur complement. Cost: about
 ## one evaluation for the blocks plus two per shared parameter that the data
 ## reach, whatever the number of items or persons. On a quadrature fit the
@@ -52,7 +56,11 @@
 ## fitted modes, which the fitted objective's equals up to the Laplace error
 ## near the optimum. Far from it the two can differ even in sign: a Laplace fit
 ## stopped after three iterations read "suboptimal" by the exact route and
-## "notmaximum" by this one -- both true, neither certifying.
+## "notmaximum" by this one -- both true, neither certifying. A joint-MAP fit
+## (marginalApprox = "map") has exact blocks of its own instead, from the same
+## pass as an evaluation: the profiled Hessian's item blocks, the persons'
+## absorption of each item included (src/map_backend.cpp, checked against
+## central differences in test-map.R).
 ##
 ## "exact" (`laplaceCertify = "exact"`, or a number of seconds as its
 ## budget). Central differences (step 1e-4) of the analytic gradient in every
@@ -70,9 +78,10 @@
 ## Every column is a full gradient, so the coupling between items through
 ## their shared persons costs nothing to keep, and up to
 ## `bigIRT.certify_dense_max` free parameters (default 2000) the whole matrix
-## is kept and nothing is dropped. Above that only each item's own block, the
-## block of the parameters shared across items (mean hyperparameters, latent
-## correlations, covariate coefficients, the ability mean) and the coupling
+## is kept and nothing is dropped. Above that only each item's own block (its
+## own covariate coefficients included), the block of the parameters shared
+## across items (mean hyperparameters, latent correlations, shared covariate
+## coefficients, the ability mean) and the coupling
 ## between those two are kept; items then meet each other only through the
 ## Schur complement of the shared block. What is dropped is the coupling
 ## between two items through the persons who answered both. Its effect,
@@ -746,16 +755,25 @@ bigIRT_certify_fast_hessian <- function(par, keep, context, final, run, ctx_h,
   K <- as.integer(sdat$Nscales)
   rc <- context$row_context
   ## One pass with the nodes held at the fitted posterior: the fit's own rule,
-  ## or the refinement's default one for a fit that was not refined.
+  ## or the refinement's default one for a fit that was not refined. A
+  ## joint-MAP fit has its own exact blocks instead, the profiled Hessian's
+  ## (src/map_backend.cpp).
   ctx_b <- context
-  if(is.null(ctx_b$agq)) ctx_b$agq <- bigIRT_agq_rules(K)
-  ctx_b$agq_centre <- final$posterior
-  ctx_b$agq_blocks <- TRUE
+  if(isTRUE(context$map)){
+    ctx_b$map_blocks <- TRUE
+  } else {
+    if(is.null(ctx_b$agq)) ctx_b$agq <- bigIRT_agq_rules(K)
+    ctx_b$agq_centre <- final$posterior
+    ctx_b$agq_blocks <- TRUE
+  }
   arr <- run(par, ctx_b)$item_fg$item_blocks
   if(is.null(arr)) stop("the quadrature kernel returned no item blocks")
-  S <- K + 3L
+  E <- dim(arr)[1]
   ## Each item's coordinates, slot by slot (B, the loading on each dimension,
   ## C, D), from its first row: every row of an item frees the same ones.
+  ## Then its own covariate coefficients, which the kernels carry in the same
+  ## block (src/bigirt_item_blocks.h); NA for shared ones, which stay with the
+  ## shared coordinates and are differenced.
   first <- match(seq_len(dim(arr)[3]), rc$items)
   Aref <- if(is.null(dim(rc$A_ref))) matrix(as.integer(rc$A_ref), ncol = 1L) else rc$A_ref
   slot_coord <- function(r) c(
@@ -764,28 +782,39 @@ bigIRT_certify_fast_hessian <- function(par, keep, context, final, run, ctx_h,
       if(length(layout$A) && Aref[r, k] > 0L) layout$A[Aref[r, k]] else NA_integer_, 1L),
     if(length(layout$C) && rc$C_ref[r] > 0L) layout$C[rc$C_ref[r]] else NA_integer_,
     if(length(layout$D) && rc$D_ref[r] > 0L) layout$D[rc$D_ref[r]] else NA_integer_)
-  ## The item prior's own curvature, which the pass does not include.
+  ## The item prior's own curvature, which the pass does not include, in
+  ## natural coordinates like the blocks.
   prec <- numeric(n)
-  if(isTRUE(as.logical(sdat$dopriors))) for(b in list(c("B", "BSDx"), c("A", "invspASD"),
-      c("C", "logitCSD"), c("D", "logitDSD"))){
-    idx <- layout[[b[1]]]
-    if(length(idx)) prec[idx] <- 1 / rep_len(pmax(as.numeric(sdat[[b[2]]]), 1e-8), length(idx))^2
+  if(isTRUE(as.logical(sdat$dopriors))){
+    for(b in list(c("B", "BSDx"), c("A", "invspASD"), c("C", "logitCSD"), c("D", "logitDSD"))){
+      idx <- layout[[b[1]]]
+      if(length(idx)) prec[idx] <- 1 / rep_len(pmax(as.numeric(sdat[[b[2]]]), 1e-8), length(idx))^2
+    }
+    bs <- as.numeric(sdat$betaScale)[1]
+    if(isTRUE(bs > 0)) for(b in c("A_beta", "B_beta", "C_beta", "D_beta"))
+      if(length(layout[[b]])) prec[layout[[b]]] <- 1 / bs^2
   }
+  ps <- attr(layout, "par_scale"); if(length(ps) != n) ps <- rep(1, n)
   Hblocks <- list(); blocks <- list()
   for(j in seq_len(dim(arr)[3])){
     r <- first[j]
     if(is.na(r)) next
-    sc <- slot_coord(r)
+    sc <- c(slot_coord(r), bigIRT_item_beta_coords(sdat, layout, j))
+    if(length(sc) != E) stop("the item blocks do not match the item's coordinates")
     ok <- which(!is.na(sc))
     ok <- ok[!is.na(pos[sc[ok]])]          # saturated coordinates are left out
     if(!length(ok)) next
-    Hj <- matrix(arr[, , j], S)[ok, ok, drop = FALSE] - diag(prec[sc[ok]], length(ok))
+    cj <- sc[ok]
+    ## Into the optimiser's coordinates (bigIRT_laplace_par_scale): an item
+    ## parameter's scale is one, an item-specific coefficient's is not.
+    Hj <- (matrix(arr[, , j], E)[ok, ok, drop = FALSE] - diag(prec[cj], length(ok))) *
+      outer(ps[cj], ps[cj])
     Hblocks[[length(Hblocks) + 1L]] <- Hj
-    blocks[[length(blocks) + 1L]] <- pos[sc[ok]]
+    blocks[[length(blocks) + 1L]] <- pos[cj]
   }
+  if(anyDuplicated(unlist(blocks))) stop("a coordinate is in more than one item block")
   shared <- setdiff(seq_len(m), unlist(blocks))
   G <- keep[shared]
-  ps <- attr(layout, "par_scale"); if(length(ps) != n) ps <- rep(1, n)
   means <- unlist(layout[intersect(c("B_mean", "A_mean", "C_mean", "D_mean"), names(layout))])
   prior_grad <- function(p){
     st <- bigIRT_laplace_unpack_direct_state(p, state, sdat, layout = layout,
@@ -811,7 +840,9 @@ bigIRT_certify_fast_hessian <- function(par, keep, context, final, run, ctx_h,
 ## meet only through the shared block: V_jj = A_j^-1 + W_j S^-1 W_j', with
 ## W_j = A_j^-1 B_j and S = C - sum_j B_j' W_j the shared block's Schur
 ## complement (A, B, C the information's item blocks, cross blocks and shared
-## block). The same shape bigIRT_certificate_covariance() returns.
+## block). The same shape bigIRT_certificate_covariance() returns, except that
+## item-specific covariate coefficients sit in their items' blocks and so are
+## not in `shared`.
 bigIRT_block_covariance <- function(Hblocks, Hcross, Hshared, blocks, shared, keep,
                                     layout, sdat, names_all){
   n <- length(names_all)
@@ -907,7 +938,8 @@ bigIRT_certify <- function(final, par, context, state, sdat, prior_precision,
   names_all <- bigIRT_coordinate_names(layout)
   out <- list(status = "skipped", certified = FALSE, converged = NA,
     reason = NA_character_, tolerance = tolerance, budget = budget,
-    marginal = if(agq) "agq" else if(isTRUE(context$laplace2)) "laplace2" else "laplace",
+    marginal = if(isTRUE(context$map)) "map" else if(agq) "agq" else
+      if(isTRUE(context$laplace2)) "laplace2" else "laplace",
     gap = NA_real_, lambda = NA_real_, ntrusted = NA_integer_, nflat = NA_integer_,
     nnegative = NA_integer_, lambda_min = NA_real_, noise = NA_real_,
     residual_gain = NA_real_, overshoot_gain = NA_real_, saturated = character(0),
@@ -996,11 +1028,12 @@ bigIRT_certify <- function(final, par, context, state, sdat, prior_precision,
     ## Positions within `keep`, per item, over the parameters the item has
     ## free. Through its free positions: pairing item j with index j left
     ## every block with an anchored item out, and its coordinates in the
-    ## shared block.
+    ## shared block. Its own covariate coefficients (itemSpecificBetas) too,
+    ## as on the fast route.
     fp <- bigIRT_item_free_pos(sdat)
     pos <- match(seq_len(n), keep)
     blocks <- lapply(seq_len(as.integer(sdat$Nitems)), function(j){
-      ix <- pos[bigIRT_item_coords(fp, layout, j)]
+      ix <- pos[c(bigIRT_item_coords(fp, layout, j), bigIRT_item_beta_coords(sdat, layout, j))]
       ix[!is.na(ix)]
     })
     blocks <- blocks[lengths(blocks) > 0L]
@@ -1065,7 +1098,7 @@ bigIRT_certify <- function(final, par, context, state, sdat, prior_precision,
         return(ex)
       }
     }
-    v$reason <- paste0(v$reason, if(!agq) paste0(" (by the quadrature marginal's ",
+    v$reason <- paste0(v$reason, if(!agq && !isTRUE(context$map)) paste0(" (by the quadrature marginal's ",
       "curvature, as this fit was not refined)"),
       sprintf(paste0("; the exact route, which keeps the coupling between items, ",
         "would take about %.0f s, beyond the %s s of option bigIRT.certify_escalate ",

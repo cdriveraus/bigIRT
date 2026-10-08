@@ -1,5 +1,8 @@
 ## The Laplace path's own optimiser: L-BFGS whose initial inverse Hessian is
 ## shaped by the Fisher information of the marginal, person coupling included.
+## The joint-MAP estimator (R/mapBackend.R) uses it unchanged: the same Schur
+## complement of the joint information over the persons is the curvature of
+## its profiled objective.
 ##
 ## Why not mize alone. mize's L-BFGS is configured sensibly (secant-scaled H0,
 ## strong Wolfe search), and a unit initial step changes nothing measurable.
@@ -410,9 +413,21 @@ bigIRT_laplace_fisher_solver <- function(ev, x, g, sdat, context, layout, gfun, 
 ## Block-diagonal metric, for fits too large for the dense one.
 ##
 ## F restricted to its item-diagonal blocks, plus the exact block of the
-## parameters shared across items, with the coupling between the two dropped:
+## parameters shared across items, with the data's coupling between the two
+## dropped:
 ##
-##   Bd = blockdiag( F_jj for each item j,  F_GG ).
+##   Bd = blockdiag( F_jj for each item j,  F_GG ) + the prior's item-G border.
+##
+## The prior's coupling is kept: it ties each item parameter to its mean
+## hyperparameter with the prior precision, which empirical Bayes can drive
+## to 1e6 (an item SD at its 0.001 floor). Without it the metric took moving a
+## mean, with every item following it, to be about that many times stiffer
+## than it is, since only the data curve that way; L-BFGS predicted almost no
+## gain and stopped 0.033 nats short, on a 500-item fit the dense metric
+## certified in one iteration (test_fixedItemPars.R's item-specific fit). The
+## border is a few columns, applied through the shared block's Schur
+## complement, and the matrix stays positive semidefinite: block-diagonal
+## principal submatrices of F plus the whole prior curvature.
 ##
 ## W Ipp^-1 W' couples only rows of the same person, and a person answers an
 ## item once, so the item block F_jj is exactly V_j' diag(q) V_j with q from
@@ -468,6 +483,12 @@ bigIRT_laplace_blockdiag_solver <- function(ev, x, g, sdat, context, layout, gfu
     FG <- (FG + t(FG)) / 2
     ti <- c(ti, rep(G, times = length(G))); tj <- c(tj, rep(G, each = length(G)))
     tx <- c(tx, as.numeric(FG))
+    ## The border: the prior's coupling of item parameters to shared ones.
+    Cg <- as(P$Pr[local, G, drop = FALSE], "TsparseMatrix")
+    if(length(Cg@x)){
+      ti <- c(ti, local[Cg@i + 1L], G[Cg@j + 1L]); tj <- c(tj, G[Cg@j + 1L], local[Cg@i + 1L])
+      tx <- c(tx, Cg@x, Cg@x)
+    }
   }
   Bd <- Matrix::sparseMatrix(i = ti, j = tj, x = tx, dims = c(n, n))
   ## A parameter no data and no prior reach (possible only in odd
@@ -581,7 +602,30 @@ bigIRT_laplace_blockdiag_solver_cpp <- function(ev, x, g, sdat, context, layout,
   described <- unique(c(layout$B, layout$B_beta, layout$A, layout$A_beta, layout$C, layout$C_beta,
     layout$D, layout$D_beta, layout$B_mean, layout$A_mean, layout$C_mean, layout$D_mean,
     layout$ability_beta, layout$ability_mean))
-  FG <- NULL
+  ## Group the blocks by size, so applying them is a few vector operations
+  ## whatever the number of items. `blocks(v)` applies their inverse, zero in G.
+  dims <- out$block_dim
+  ofs <- c(0L, cumsum(as.numeric(dims)^2))
+  pofs <- c(0L, cumsum(dims))
+  groups <- lapply(sort(unique(dims)), function(P){
+    b <- which(dims == P)
+    idx <- vapply(b, function(i) out$block_par[pofs[i] + seq_len(P)], integer(P))
+    inv <- vapply(b, function(i) out$block_inv[ofs[i] + seq_len(P * P)], numeric(P * P))
+    list(P = P, idx = matrix(idx, nrow = P), inv = matrix(inv, nrow = P * P))
+  })
+  blocks <- function(v){
+    res <- numeric(length(v))
+    for(gr in groups){
+      P <- gr$P
+      for(a in seq_len(P)){
+        acc <- 0
+        for(b in seq_len(P)) acc <- acc + gr$inv[a + P * (b - 1L), ] * v[gr$idx[b, ]]
+        res[gr$idx[a, ]] <- acc
+      }
+    }
+    res
+  }
+  FG <- NULL; border <- NULL
   if(length(G)){
     FG <- out$FGG + as.matrix(Pr[G, G, drop = FALSE]) * outer(ps[G], ps[G])
     cb <- bigIRT_laplace_use_corr_block(FG, match(intersect(layout$corr, G), G), ev, sdat, context, layout)
@@ -593,7 +637,23 @@ bigIRT_laplace_blockdiag_solver_cpp <- function(ev, x, g, sdat, context, layout,
       k <- match(j, G)
       FG[, k] <- col; FG[k, ] <- col
     }
-    FG <- bigIRT_metric_decouple((FG + t(FG)) / 2)
+    FG <- (FG + t(FG)) / 2
+    flatG <- bigIRT_metric_flat(diag(FG))
+    FG <- bigIRT_metric_decouple(FG)
+    ## The border (see bigIRT_laplace_blockdiag_solver): the prior's coupling
+    ## of item parameters to shared ones, applied through the shared block's
+    ## Schur complement S = F_GG - C' B^-1 C.
+    loc <- out$block_par
+    Cg <- Pr[loc, G, drop = FALSE]
+    kc <- setdiff(which(Matrix::colSums(abs(Cg)) > 0), flatG)
+    if(length(kc)){
+      C <- matrix(0, n, length(kc))
+      C[loc, ] <- as.matrix(Cg[, kc, drop = FALSE]) * outer(ps[loc], ps[G[kc]])
+      BC <- apply(C, 2, blocks)
+      FG[kc, kc] <- FG[kc, kc] - crossprod(C, BC)
+      FG <- (FG + t(FG)) / 2
+      border <- list(k = kc, C = C, BC = BC)
+    }
     ch <- NULL; ridge <- 0
     for(attempt in 1:6){
       ch <- tryCatch(chol(if(ridge > 0) FG + diag(ridge, nrow(FG)) else FG), error = function(e) NULL)
@@ -602,29 +662,16 @@ bigIRT_laplace_blockdiag_solver_cpp <- function(ev, x, g, sdat, context, layout,
     }
     if(is.null(ch)) return(NULL)
   }
-  ## Group the blocks by size, so applying them is a few vector operations
-  ## whatever the number of items.
-  dims <- out$block_dim
-  ofs <- c(0L, cumsum(as.numeric(dims)^2))
-  pofs <- c(0L, cumsum(dims))
-  groups <- lapply(sort(unique(dims)), function(P){
-    b <- which(dims == P)
-    idx <- vapply(b, function(i) out$block_par[pofs[i] + seq_len(P)], integer(P))
-    inv <- vapply(b, function(i) out$block_inv[ofs[i] + seq_len(P * P)], numeric(P * P))
-    list(P = P, idx = matrix(idx, nrow = P), inv = matrix(inv, nrow = P * P))
-  })
   function(v){
     v <- as.numeric(v)
-    res <- numeric(length(v))
-    for(gr in groups){
-      P <- gr$P
-      for(a in seq_len(P)){
-        acc <- 0
-        for(b in seq_len(P)) acc <- acc + gr$inv[a + P * (b - 1L), ] * v[gr$idx[b, ]]
-        res[gr$idx[a, ]] <- acc
-      }
+    res <- blocks(v)
+    if(length(G)){
+      rG <- v[G]
+      if(!is.null(border)) rG[border$k] <- rG[border$k] - as.numeric(crossprod(border$C, res))
+      yG <- backsolve(ch, forwardsolve(t(ch), rG))
+      res[G] <- yG
+      if(!is.null(border)) res <- res - as.numeric(border$BC %*% yG[border$k])
     }
-    if(length(G)) res[G] <- backsolve(ch, forwardsolve(t(ch), v[G]))
     res
   }
 }

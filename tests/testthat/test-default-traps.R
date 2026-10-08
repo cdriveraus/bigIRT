@@ -20,7 +20,7 @@ if(identical(Sys.getenv("NOT_CRAN"), "true")){
     d[p1, score := 1]; d[ho1[1], score := 0]
     fit_ids <- function(dd) {
       f <- suppressWarnings(fitIRT(dd, pl = 2, cores = 1, marginalApprox = "laplace",
-        ebayes = FALSE, trainingRows = train, verbose = 0, plot = FALSE))
+        ebayes = FALSE, trainingRows = train, verbose = 0))
       sort(as.character(f$personPars$id))
     }
     ids_a <- fit_ids(d)
@@ -38,12 +38,12 @@ if(identical(Sys.getenv("NOT_CRAN"), "true")){
       AMean = 1, ASD = .2, BMean = 0, BSD = 1)
     d <- data.table::as.data.table(s$dat)
     bank <- data.table::as.data.table(suppressWarnings(fitIRT(d[id <= 400], pl = 2, cores = 1,
-      verbose = 0, plot = FALSE))$itemPars)
+      verbose = 0))$itemPars)
     new <- d[id > 400]
-    f <- suppressWarnings(fitIRT(new, pl = 2, cores = 1, verbose = 0, plot = FALSE, itemDat = bank))
+    f <- suppressWarnings(fitIRT(new, pl = 2, cores = 1, verbose = 0, itemDat = bank))
     ## With every item fixed the item-prior centres describe nothing, so the
     ## scores are those of a fit that holds them fixed explicitly.
-    f0 <- suppressWarnings(fitIRT(new, pl = 2, cores = 1, verbose = 0, plot = FALSE, itemDat = bank,
+    f0 <- suppressWarnings(fitIRT(new, pl = 2, cores = 1, verbose = 0, itemDat = bank,
       estMeans = character(0)))
     expect_equal(f$personPars, f0$personPars, tolerance = 1e-8)
     expect_gt(stats::cor(f$personPars[[2]], s$Ability[as.integer(f$personPars[[1]])]), .6)
@@ -51,7 +51,7 @@ if(identical(Sys.getenv("NOT_CRAN"), "true")){
 
   test_that("a Laplace fit without empirical Bayes reports person SDs", {
     args <- list(dat = sim$dat, pl = 2, cores = 1, marginalApprox = "laplace", ebayes = FALSE,
-      dropPerfectScores = FALSE, verbose = 0, plot = FALSE)
+      dropPerfectScores = FALSE, verbose = 0)
     f <- suppressWarnings(do.call(fitIRT, args))
     sdcol <- grep("_SD$", names(f$personPars), value = TRUE)
     expect_length(sdcol, 1L)

@@ -84,7 +84,7 @@ bigIRT_resolve_signed_loadings <- function(signedLoadings, fixed, itemScale,
 }
 
 checkP <- function(fit){
-  ## Recomputes the per-response probabilities in R, to check the Stan/C++ ones.
+  ## Recomputes the per-response probabilities in R, to check the C++ ones.
   ## Everything here is indexed in fit$prepared's internal (person-sorted) order, but
   ## the result is returned in the caller's input row order so that it lines up
   ## element-for-element with fit$pars$p.  Without that final mapping the two
@@ -119,99 +119,6 @@ checkP <- function(fit){
   return(p)
 }
 
-# birtRunGeneratedQuantities<- function(fit){
-#
-#   log1p_exp=function(x) log1p(exp(x))
-#
-#   genq <- function(){
-#     browser()
-#
-#     A=rep(NA,Nitems) # item A values
-#     B=rep(NA,Nitems) #item B values
-#     C=rep(NA,Nitems) #item C values
-#     #put the user supplied fixed values into the item parameter objects
-#     A[fixedA] = Adata[fixedA];
-#     B[fixedB] = Bdata[fixedB];
-#     C[fixedC] = Cdata[fixedC];
-#
-#     #put the free parameters into the item parameter objects
-#     A[whichnotfixedA] = invspApars;
-#     B[whichnotfixedB] = Bpars;
-#     C[whichnotfixedC] = logitCpars;
-#
-#
-#     # for(i in 1:Nsubs){ #for every subject
-#     #   for(j in 1:Nscales){ #and every scale
-#     #     if(fixedAbilityLogical[i,j]==1){
-#     #       Ability[i,j] = Abilitydata[i,j];
-#     #     } else{ #if ability is user supplied, input it
-#     #       Ability[i,j] = Abilitypars[Abilityparsindex[i,j]]; # or input the free parameter
-#     #       if(NpersonPreds) {
-#     #         predsmean=rep(0, NpersonPreds); #compute mean of person predictors
-#     #         count=0;
-#     #         for( ri in 1:Nobs){
-#     #           if(id[i] == i){
-#     #             count=count+1;
-#     #             predsmean=predsmean+personPreds[i,];
-#     #           }
-#     #         }
-#     #         predsmean= predsmean/count;
-#     #         Ability[i,j] = Ability[i,j] +predsmean * Abilitybeta[j,]; #when there are person predictors, apply the effect
-#     #       }
-#     #     }
-#     #   }
-#     # }
-#
-#
-#     for(i in 1:Nitems){ #for every item
-#       count=0;
-#       predsmean=rep(0,NitemPreds);
-#       for( ri in 1:Nobs){
-#         if(item[ri] == i){
-#           count=count+1;
-#           predsmean=predsmean+itemPreds[ri,];
-#         }
-#       }
-#       predsmean= predsmean/count;
-#       if(fixedAlog[i]==0){ #if free A par and item predictors, compute average item effect
-#         A[i] =A[i]+ matrix(predsmean,1) %*% t(invspAbeta[ifelse(itemSpecificBetas==1,freeAref[item[i]],1),,drop=FALSE]); #when there are person predictors, apply the effect
-#         A[i]=log1p_exp(A[i]);
-#       }
-#       if(fixedB[i]==0){ #if free B par and item predictors, compute average item effect
-#         B[i] = B[i] + matrix(predsmean,1) %*% t(Bbeta[ifelse(itemSpecificBetas==1, freeBref[item[i]], 1),,drop=F]); #when there are person predictors, apply the effect
-#       }
-#     }
-#
-#
-#     #
-#     #       #linearised regression weights for reporting
-#     #       if(doApreds){
-#     #         if(size(Abeta)==1){
-#     #           Abeta[1,] = ((log1p_exp(mean(invspApars)+invspAbeta[1,]*.01))-(log1p_exp(mean(invspApars)-invspAbeta[1,]*.01)))/.02;
-#     #         }
-#     #         if(size(Abeta)>1){
-#     #           for(i in 1:size(Abeta)){
-#     #             Abeta[i,] = ((log1p(exp(invspApars[i])+invspAbeta[i,]*.01))-(log1p(exp(invspApars[i])-invspAbeta[i,]*.01)))/.02;
-#     #           }
-#     #         }
-#     #       }
-#     #
-#     #       if(doCpreds){
-#     #         if(size(Cbeta)==1)   Cbeta[1,] = ((inv_logit(mean(logitCpars))+logitCbeta[1,]*.01)-(inv_logit(mean(logitCpars))-logitCbeta[1,]*.01))/.02;
-#     #         if(size(Cbeta)>1){
-#     #           for(i in 1:size(Cbeta)){
-#     #             Cbeta[i,] = ((inv_logit(logitCpars[i])+logitCbeta[i,]*.01)-(inv_logit(logitCpars[i])-logitCbeta[i,]*.01))/.02;
-#     #           }
-#     #         }
-#     #       }
-#
-#   } #end internal genq function
-#
-#   e <- list2env(c(fit$pars,fit$prepared))
-#   environment(genq) <- e
-#   genq()
-# }
-
 #' normaliseIRT
 #'
 #' Normalise item response theory (IRT) parameters.
@@ -237,7 +144,10 @@ checkP <- function(fit){
 #'   the same factor. For a \code{fitIRT} fit, \code{extractMIRTpars()} returns
 #'   them as \code{latent_sd} and \code{latent_mean}.
 #'
-#' @return A list containing the normalised A, B, and Ability parameters.
+#' @return A list containing the normalised A, B, and Ability parameters, and
+#'   for \code{normbase} 'Ability' or 'B' the \code{center} and \code{scale}
+#'   of the transform: the normalised abilities are
+#'   \code{(Ability - center) / scale + normaliseMean}.
 #' @export
 #' @examples
 #' B <- rnorm(100,2,1)
@@ -280,6 +190,7 @@ normaliseIRT <- function(B,Ability, A,normbase='Ability',normaliseScale=1,  norm
     Ability <- (Ability - nm) / nsd + normaliseMean
     A <- A * nsd
     B <- B - A / nsd * nm + A * normaliseMean
+    return(list(A=A,B=B,Ability=Ability,center=nm,scale=nsd))
   }
 
   # if(normbase == 'A'){
@@ -479,6 +390,61 @@ bigIRT_latent_moments <- function(object){
   if(!all(is.finite(pv))) return(NULL)
   list(mean = colMeans(ab, na.rm = TRUE),
     sd = sqrt(apply(ab, 2, stats::var, na.rm = TRUE) + colMeans(pv)))
+}
+
+## Carry the person side of a fit across the affine reparameterisation that
+## normalise = TRUE applies to the abilities, theta' = (theta - center) M +
+## shift in row-vector form (M is K x K; a scalar in one dimension). Everything
+## in ability units moves with it: the posterior modes (the base abilities),
+## the person-covariate coefficients, beta' = M' beta, so that abilities stay
+## base + xbar' beta, and the row-level abilities; the posterior covariance as
+## M' V M and the precision as its inverse. Everything in loading units takes
+## the inverse transpose, as the item parameters do: row loadings a' = a M^-T,
+## row difficulties b' = b - a.center + a'.shift, so every row's linear
+## predictor is unchanged. Until October 2026 the one-dimensional transform
+## left the posterior and the rows on the old metric -- reliability() then
+## changed under a pure reparameterisation, .859 to .868 in one check -- and
+## neither branch moved the covariate coefficients, so the reported abilities
+## stopped being base + xbar' beta.
+bigIRT_normalise_person_side <- function(fit, center, M, shift){
+  K <- ncol(as.matrix(fit$pars$Ability))
+  M <- matrix(as.numeric(M), K, K)
+  Minv <- solve(M)
+  center <- rep_len(as.numeric(center), K); shift <- rep_len(as.numeric(shift), K)
+  move <- function(x){
+    x <- matrix(as.numeric(x), ncol = K)
+    sweep(sweep(x, 2, center, "-") %*% M, 2, shift, "+")
+  }
+  pp <- fit$personPosterior
+  if(!is.null(pp$mode)) pp$mode <- move(pp$mode)
+  if(!is.null(pp$covariance)){
+    for(i in seq_len(dim(pp$covariance)[3]))
+      pp$covariance[, , i] <- t(M) %*% matrix(pp$covariance[, , i], K, K) %*% M
+  }
+  if(!is.null(pp$precision)){
+    for(i in seq_len(dim(pp$precision)[3])){
+      P <- Minv %*% matrix(pp$precision[, , i], K, K) %*% t(Minv)
+      P <- (P + t(P)) / 2
+      pp$precision[, , i] <- P
+      ch <- tryCatch(chol(P), error = function(e) NULL)
+      if(!is.null(ch)){
+        if(!is.null(pp$precision_chol)) pp$precision_chol[, , i] <- t(ch)
+        if(!is.null(pp$logdet_precision)) pp$logdet_precision[i] <- 2 * sum(log(diag(ch)))
+      }
+    }
+  }
+  fit$personPosterior <- pp
+  if(length(fit$pars$Abilitybeta))
+    fit$pars$Abilitybeta <- t(M) %*% as.matrix(fit$pars$Abilitybeta)
+  if(!is.null(fit$pars$row_ability)) fit$pars$row_ability <- move(fit$pars$row_ability)
+  if(!is.null(fit$pars$row_loadings)){
+    lo <- matrix(as.numeric(fit$pars$row_loadings), ncol = K)
+    lo2 <- lo %*% t(Minv)
+    if(!is.null(fit$pars$b_row))
+      fit$pars$b_row <- as.numeric(fit$pars$b_row) - as.numeric(lo %*% center) + as.numeric(lo2 %*% shift)
+    fit$pars$row_loadings <- lo2
+  }
+  fit
 }
 
 #' Extract Comparable MIRT Parameters
@@ -1009,204 +975,6 @@ dropPerfectScores <- function(dat,scoreref.='score',itemref.='Item',idref.='id',
   return(dat)
 }
 
-## Build a sampled-step objective once so repeated target evaluations inside mize
-## do not rebuild block/sample bookkeeping.
-bigIRT_sampled_make_objective <- function(engine, free_par_index=NULL,
-  fixed_par_full=NULL, fixed_par_samples=NULL, sample_weights=NULL){
-  if(is.null(fixed_par_samples)) fixed_par_samples <- list()
-  has_mask <- !is.null(free_par_index)
-  has_samples <- length(fixed_par_samples) > 0
-  Nsamp <- if(has_samples) length(fixed_par_samples) else 1L
-  weights <- if(is.null(sample_weights)) rep(1 / Nsamp, Nsamp) else sample_weights / sum(sample_weights)
-  npars <- if(has_mask) length(free_par_index) else engine$npars_full
-
-  build_full_par <- function(free_par, sample_id = 1L){
-    if(!has_mask) return(free_par)
-    base_par <- fixed_par_full
-    if(sample_id > 0L && has_samples){
-      base_par <- fixed_par_samples[[sample_id]]
-    }
-    base_par[free_par_index] <- free_par
-    base_par
-  }
-
-  target <- function(parm){
-    if(!has_mask && !has_samples){
-      return(engine$target_full(parm,gradnoise=TRUE))
-    }
-
-    out <- 0
-    grad <- NULL
-    for(si in seq_len(Nsamp)){
-      tsi <- engine$target_full(build_full_par(parm, si),gradnoise=TRUE)
-      gsi <- attributes(tsi)$gradient
-      if(!is.null(free_par_index)) gsi <- gsi[free_par_index]
-      out <- out + weights[si] * tsi[1]
-      if(is.null(grad)) grad <- weights[si] * gsi else grad <- grad + weights[si] * gsi
-    }
-    attributes(out) <- list(gradient=grad)
-    out
-  }
-
-  list(
-    target = target,
-    build_full_par = build_full_par,
-    npars = npars,
-    Nsamp = Nsamp,
-    has_mask = has_mask,
-    has_samples = has_samples,
-    free_par_index = free_par_index
-  )
-}
-
-## Evaluate a sampled-ability objective at a full unconstrained parameter vector.
-## The objective itself may operate on only a masked subset of coordinates.
-## Inputs: objective contract from bigIRT_sampled_make_objective() and a full
-## unconstrained parameter vector.
-## Returns: scalar target value; mutates nothing.
-bigIRT_sampled_eval_objective <- function(objective, full_par){
-  parm <- if(objective$has_mask) full_par[objective$free_par_index] else full_par
-  objective$target(parm)[1]
-}
-
-## Build a small deterministic support around the current person estimate.
-## These points are used only in the item step to average over person uncertainty.
-bigIRT_sigma_points <- function(mu, Sigma, jitter = 1e-6, sigmaScale = 0.25){
-  K <- length(mu)
-  if(K == 1){
-    Sigma <- matrix(Sigma,1,1)
-  }
-  Sigma <- (Sigma + t(Sigma)) / 2
-  cholSigma <- try(chol(Sigma + diag(jitter,K)), silent = TRUE)
-  if("try-error" %in% class(cholSigma)){
-    cholSigma <- chol(diag(pmax(diag(Sigma), jitter), K))
-  }
-  lambda <- 1
-  scale <- sigmaScale * sqrt(K + lambda)
-  points <- matrix(rep(mu, each = (2 * K + 1)), nrow = 2 * K + 1, byrow = FALSE)
-  for(k in seq_len(K)){
-    offset <- scale * cholSigma[,k]
-    points[1 + k,] <- mu + offset
-    points[1 + K + k,] <- mu - offset
-  }
-  weights <- c(lambda / (K + lambda), rep(1 / (2 * (K + lambda)), 2 * K))
-  list(points=points,weights=weights)
-}
-
-## Approximate each person's local posterior with a Gaussian centered on the
-## current person estimates and scaled by the local curvature returned by Stan.
-## Inputs: accepted fit state and standata.
-## Returns: person-wise Gaussian posterior summaries; mutates nothing.
-bigIRT_person_posterior <- function(fit, sdat, jitter = 1e-6, priorPrec = NULL){
-  if(is.null(priorPrec)){
-    priorSD <- pmax(as.numeric(sdat$AbilitySD), jitter)
-    priorCov <- diag(priorSD, length(priorSD)) %*% sdat$AbilityCorr %*% diag(priorSD, length(priorSD))
-    priorPrec <- solve(priorCov + diag(jitter, nrow(priorCov)))
-  }
-  meanMat <- fit$pars$Ability
-  if(is.null(dim(meanMat))) meanMat <- matrix(meanMat, ncol = sdat$Nscales)
-
-  useRowEffective <- all(c("b_row", "c_row", "d_row", "row_loadings") %in% names(fit$pars))
-  if(useRowEffective){
-    rowLoadings <- fit$pars$row_loadings
-    if(nrow(rowLoadings) != sdat$Nobs || ncol(rowLoadings) != sdat$Nscales){
-      stop("Unexpected row-effective loading matrix dimensions from Stan.")
-    }
-    covObj <- personCovarianceMatrices(
-      id = sdat$id,
-      theta_mean = meanMat,
-      b = fit$pars$b_row,
-      c = fit$pars$c_row,
-      d = fit$pars$d_row,
-      loadings = rowLoadings,
-      prior_precision = priorPrec,
-      jitter = jitter,
-      return_precision = FALSE
-    )
-    covList <- vector("list", sdat$Nsubs)
-    for(i in seq_len(sdat$Nsubs)){
-      covList[[i]] <- covObj$covariance[,,i]
-    }
-    backend <- covObj$backend
-    rowEff <- list(
-      id = sdat$id,
-      theta_mean = meanMat,
-      b = fit$pars$b_row,
-      c = fit$pars$c_row,
-      d = fit$pars$d_row,
-      loadings = rowLoadings,
-      source = "stan_gq"
-    )
-  } else {
-    likeSD <- fit$pars$sAbilitySD
-    if(is.null(dim(likeSD))) likeSD <- matrix(likeSD, ncol = sdat$Nscales)
-    covList <- vector("list", sdat$Nsubs)
-    for(i in seq_len(sdat$Nsubs)){
-      likPrecDiag <- rep(0, sdat$Nscales)
-      valid <- is.finite(likeSD[i,]) & likeSD[i,] > jitter
-      likPrecDiag[valid] <- 1 / (likeSD[i,valid]^2)
-      covList[[i]] <- solve(priorPrec + diag(likPrecDiag, sdat$Nscales) + diag(jitter, sdat$Nscales))
-    }
-    rowEff <- NULL
-    backend <- "legacy_sAbilitySD"
-  }
-
-  postMean <- colMeans(meanMat)
-  postCov <- matrix(0, nrow = sdat$Nscales, ncol = sdat$Nscales)
-  for(i in seq_len(sdat$Nsubs)) postCov <- postCov + covList[[i]]
-  postCov <- postCov / sdat$Nsubs
-  postCov <- postCov + crossprod(meanMat) / sdat$Nsubs - tcrossprod(postMean)
-  postSD <- sqrt(pmax(diag(postCov), jitter))
-  postCorr <- cov2cor(postCov + diag(jitter, sdat$Nscales))
-
-  list(
-    mean = meanMat,
-    cov = covList,
-    meanPrior = postMean,
-    sdPrior = postSD,
-    corrPrior = postCorr,
-    rowEffective = rowEff,
-    backend = backend
-  )
-}
-
-## Convert person-level sigma points into full unconstrained parameter vectors
-## with only the ability coordinates replaced, leaving item parameters intact.
-## Inputs: accepted fit state, posterior object, and parameter layout.
-## Returns: weighted full-parameter templates for the item step; mutates nothing.
-bigIRT_sigma_templates <- function(fit, sdat, posterior, layout, jitter = 1e-6, sigmaScale = 0.25){
-  if(length(layout$ability) == 0) return(list(samples=list(fit$optim$par),weights=1))
-
-  pointTemplate <- bigIRT_sigma_points(
-    as.numeric(posterior$mean[1,,drop=FALSE]),
-    posterior$cov[[1]],
-    jitter = jitter,
-    sigmaScale = sigmaScale
-  )
-  Nsamp <- nrow(pointTemplate$points)
-  abilitySamples <- array(0, dim = c(sdat$Nsubs, sdat$Nscales, Nsamp))
-  weights <- pointTemplate$weights
-
-  for(i in seq_len(sdat$Nsubs)){
-    sp <- bigIRT_sigma_points(
-      as.numeric(posterior$mean[i,,drop=FALSE]),
-      posterior$cov[[i]],
-      jitter = jitter,
-      sigmaScale = sigmaScale
-    )
-    abilitySamples[i,,] <- matrix(t(sp$points), nrow = sdat$Nscales, ncol = Nsamp)
-  }
-
-  fullSamples <- lapply(seq_len(Nsamp), function(si){
-    fullPar <- fit$optim$par
-    sampleSlice <- matrix(abilitySamples[,,si], nrow = sdat$Nsubs, ncol = sdat$Nscales)
-    fullPar[layout$ability] <- sampleSlice[fit$prepared$Abilityparsindex > 0]
-    fullPar
-  })
-
-  list(samples=fullSamples,weights=weights)
-}
-
 bigIRT_plot_laplace_diag_df <- function(diagdf, logGrad = TRUE, showTiming = TRUE){
   if(is.null(diagdf) || nrow(diagdf) == 0) return(invisible(NULL))
 
@@ -1319,16 +1087,25 @@ plotLaplaceDiagnostics <- function(fit, logGrad = TRUE, showTiming = TRUE){
 
 `%||%` <- function(x, y) if(is.null(x)) y else x
 
+## What a fit's estimator and objective are called in printed output.
+bigIRT_estimator_label <- function(backend, marginal = NULL){
+  if(identical(backend, "map")) return("joint MAP")
+  switch(marginal %||% "laplace", agq = "Laplace, refined by adaptive quadrature",
+    laplace2 = "Laplace, refined by second-order Laplace", "Laplace")
+}
+
 #' @export
 print.bigIRT_fit <- function(x, ...){
-  backend <- x$backend %||% x$call$marginalApprox %||% "none"
+  backend <- x$backend %||% "laplace"
   dat <- x$prepared
-  cat(sprintf("bigIRT fit: %s backend | %s persons, %s items, %s dimensions\n",
-    backend, dat$Nsubs %||% NA_integer_, dat$Nitems %||% NA_integer_, dat$Nscales %||% NA_integer_))
-  if(!is.null(x$optim$logLik)) cat(sprintf("Objective: %.6f\n", x$optim$logLik))
+  cat(sprintf("bigIRT fit: %s | %s persons, %s items, %s dimensions\n",
+    bigIRT_estimator_label(backend, x$laplaceStatus$marginal),
+    dat$Nsubs %||% NA_integer_, dat$Nitems %||% NA_integer_, dat$Nscales %||% NA_integer_))
+  if(!is.null(x$optim$logLik)) cat(sprintf("Objective: %.6f%s\n", x$optim$logLik,
+    if(identical(backend, "map")) " (joint log posterior; logLik() gives the marginal likelihood)" else ""))
   status <- x$laplaceStatus
   if(!is.null(status)){
-    cat(sprintf("Laplace: %s after %s iteration(s) [%s]\n",
+    cat(sprintf("Optimiser: %s after %s iteration(s) [%s]\n",
       if(isTRUE(status$converged)) "strictly converged" else "not strictly converged",
       status$outer_iters %||% NA_integer_, status$reason %||% "unknown"))
     if(isTRUE(status$beta_frozen)) cat("Note: person-predictor effects were held fixed.\n")
@@ -1374,7 +1151,7 @@ summary.bigIRT_fit <- function(object, se = TRUE, ...){
 
 #' @export
 print.summary.bigIRT_fit <- function(x, ...){
-  cat(sprintf("bigIRT summary (%s backend)\n", x$backend %||% "none"))
+  cat(sprintf("bigIRT summary (%s)\n", bigIRT_estimator_label(x$backend %||% "laplace", x$status$marginal)))
   if(!is.null(x$n)) cat(sprintf("%s persons, %s items, %s responses, %s dimension(s)\n",
     x$n[["persons"]], x$n[["items"]], x$n[["responses"]], x$n[["dimensions"]]))
   if(!is.null(x$status)) cat(sprintf("Termination: %s%s\n", x$status$reason %||% "unknown",
@@ -1394,6 +1171,43 @@ print.summary.bigIRT_fit <- function(x, ...){
       x$heldout$heldout_responses, x$heldout$log_loss, x$heldout$brier,
       x$heldout$item_base_brier, x$heldout$auc))
   invisible(x)
+}
+
+## fitIRT's `...` holds only arguments earlier versions took. Anything else in
+## it is an error: an argument dropped in silence once turned a stale install
+## into 1,500 fits that ignored the very argument they were varying, and
+## looked entirely healthy.
+##
+## Of the old ones, `plot` drew the Stan optimiser's trace and `noptimsteps`
+## did nothing since the alternating Laplace backend was withdrawn, so neither
+## changes a result and both pass in silence: a great deal of existing code,
+## the paper's included, passes `plot = FALSE`. The Stan optimiser's own
+## controls did change results, on the path that is gone, so ignoring them is
+## said out loud; so is `laplaceItemIter`, which earlier versions already
+## warned about, and `ebayesFromFixed`, which never took effect.
+bigIRT_check_dots <- function(dots){
+  if(!length(dots)) return(invisible())
+  nm <- names(dots)
+  if(is.null(nm) || any(!nzchar(nm)))
+    stop("fitIRT() was given an unnamed argument it has no place for; ",
+      "name every argument after `dat`.", call. = FALSE)
+  silent <- c("plot", "noptimsteps")
+  removed <- c(iter = "laplaceOuterIter", tol = "laplaceTol", init = NA, carefulfit = NA,
+    stochastic = NA, laplaceItemIter = NA, ebayesFromFixed = NA)
+  unknown <- setdiff(nm, c(silent, names(removed)))
+  if(length(unknown))
+    stop(sprintf(ngettext(length(unknown), "unused argument: %s", "unused arguments: %s"),
+      paste(unknown, collapse = ", ")), ". Check the spelling, and that the installed bigIRT ",
+      "is recent enough to have it.", call. = FALSE)
+  gone <- intersect(nm, names(removed))
+  if(length(gone)){
+    hint <- removed[gone]
+    warning("fitIRT() ignored ", paste(ifelse(is.na(hint), gone,
+      sprintf("%s (the optimiser's equivalent is %s)", gone, hint)), collapse = ", "),
+      ": removed in bigIRT 0.2.0 with the Stan joint-MAP path, which they configured. ",
+      "See NEWS.", call. = FALSE)
+  }
+  invisible()
 }
 
 bigIRT_validate_fit_inputs <- function(dat, score, id, item, scale, pl, controls, trainingRows,
@@ -1417,79 +1231,30 @@ bigIRT_validate_fit_inputs <- function(dat, score, id, item, scale, pl, controls
   invisible(as.integer(trainingRows))
 }
 
-# fitIRTstepwise <- function(dat,itemsteps,item='Item',id='id',normalise=FALSE,ebayes=FALSE,...){ #need to rethink...
-#   .itemref <- item
-#   .idref <- id
-#   itemDat <- NA
-#   stepseq <- c(1:length(itemsteps))#,length(itemsteps):1)
-#   firststep <- TRUE
-#
-#
-#   for(stepi in 1:length(stepseq)){
-#     include <- which(dat[[.itemref]] %in% itemsteps[[stepseq[stepi]]]) #which rows to include for current item set
-#     stepids <- unique(dat[include,get(.idref)]) #which subjects are relevant
-#     if(stepi > 1){ #for subsequent steps,
-#       itemDat <- itemDat[!get(.itemref) %in% itemsteps[[stepseq[stepi]]],] #freely estimate current item set
-#       include <- unique(c(include, # and use prior step as link
-#         which(dat[[.itemref]] %in% itemsteps[[stepseq[stepi-1]]] & dat[[.idref]] %in% stepids)))
-#     }
-#     smalldat <- dat[include,] #step specific data set
-#
-#     fit <- fitIRT(dat = smalldat,itemDat=itemDat,normalise=normalise,ebayes=ebayes,item=item,id=id,...)
-#     itemDat <- data.table(fit$itemPars)
-#
-#     if(firststep){
-#       itemout <- itemDat
-#       personout <- data.table(fit$personPars)
-#     }
-#     if(!firststep){ #add new items to output
-#       itemout <- rbind(itemout,itemDat[!get(.itemref) %in% itemout[[.itemref]]]) #update item output with newest estimates
-#       personout <- rbind(personout, data.table(fit$personPars)[!get(.idref) %in% personout[[.idref]],]) #update item output with newest estimates
-#     }
-#
-#     # plot(itemout[order(as.character(get(.itemref))),B],dat[!duplicated(Item) & get(.itemref) %in% itemout[[.itemref]],][order(get(.itemref)),B])
-#     # rmse <- sqrt(mean((itemout[order(as.character(get(.itemref))),B]-dat[!duplicated(get(.itemref)) & Item %in% itemout[[.itemref]],][order(get(.itemref)),B])^2))
-#     # message(paste('corr =',cor(cbind(itemout[order(as.character(get(.itemref))),B],dat[!duplicated(get(.itemref)) & get(.itemref) %in% itemout[[.itemref]],][order(get(.itemref)),B]))[2,1]))
-#     # message(paste('RMSE =',round(rmse,3)))
-#
-#     firststep <- FALSE
-#   }
-#
-#   if(FALSE){ #for testing
-#     fullfit <- fitIRT(dat = dat,normalise=normalise,ebayes=ebayes)
-#     #item par comparison to true
-#     message(paste('corr =',cor(cbind(
-#       data.table(fullfit$itemPars)[order(as.character(Item)),B],
-#       dat[!duplicated(Item) & Item %in% fullfit$itemPars[[.itemref]],][order(Item),B])
-#     )[2,1]))
-#
-#     points(data.table(fullfit$itemPars)[order(as.character(Item)),B],
-#       dat[!duplicated(Item) & Item %in% itemout[[.itemref]],][order(Item),B],col=2)
-#
-#     #person par comparison to true
-#     message(paste('corr =',cor(cbind( #stepwise fit
-#       personout[order(as.character(get(.idref))),s1],
-#       dat[!duplicated(get(.idref)) & get(.idref) %in% personout[[.idref]],][order(get(.idref)),Ability])
-#     )[2,1]))
-#
-#     message(paste('corr =',cor(cbind( #full fit
-#       data.table(fullfit$personPars)[order(as.character(Item)),B],
-#       dat[!duplicated(Item) & Item %in% fullfit$itemPars[[.itemref]],][order(Item),B])
-#     )[2,1]))
-#
-#     points(data.table(fullfit$itemPars)[order(as.character(Item)),B],
-#       dat[!duplicated(Item) & Item %in% itemout[[.itemref]],][order(Item),B],col=2)
-#   }
-#
-#   personout <- personout[order(get(.idref)),]
-#   itemout <- itemout[order(get(.itemref)),]
-#
-#   return(list(itemPars=itemout,personPars=personout))
-# }
-
 #' Fit a binary Item Response Theory (IRT) model
 #'
-#' This function fits a binary Item Response Theory (IRT) model using various parameters and options.
+#' Fits a 1PL to 4PL model to long-format binary response data, in one or
+#' more dimensions, with optional covariates on ability and on every item
+#' parameter. Two estimators are available through `marginalApprox`, and they
+#' take the same arguments and return the same kind of object:
+#'
+#' \describe{
+#'   \item{`"laplace"` (default)}{Marginal maximum likelihood (or posterior
+#'   mode, with priors): the abilities are integrated out by a Laplace
+#'   approximation at each person's mode, refined by adaptive quadrature where
+#'   Laplace is biased (`laplaceRefine`).}
+#'   \item{`"map"`}{The joint posterior mode over item parameters and
+#'   abilities together. Each evaluation solves every person's mode and
+#'   differentiates the joint posterior at it, so it is cheaper per evaluation
+#'   than Laplace, and much cheaper than Laplace refined by quadrature. Its
+#'   latent scale is set by the priors rather than the data (see
+#'   `marginalApprox`).}
+#' }
+#'
+#' Both run the same optimiser over the item-side parameters with every person
+#' mode solved inside each evaluation, so the optimiser controls
+#' (`laplaceOptimizer`, `laplaceTol`, `laplaceOuterIter`, `laplacePersonTol`,
+#' `laplaceCertify`, ...) apply to either; the `laplace` prefix is historical.
 #'
 #' @param dat A data frame containing the data to be analyzed.
 #' @param score Character. The name of the column in \code{dat} representing the response. Default is 'score'.
@@ -1537,7 +1302,7 @@ bigIRT_validate_fit_inputs <- function(dat, score, id, item, scale, pl, controls
 #'   loadings and applies to those alone, and empirical Bayes leaves signed
 #'   loadings out of its discrimination update. It starts at zero. Item
 #'   covariates on discrimination (`AitemPreds`) add to the parameter under
-#'   either link. Requires `marginalApprox = "laplace"` and `pl >= 2`.
+#'   either link. Requires `pl >= 2`.
 #'
 #'   Signs do not identify a rotation: with cross-loadings free in both
 #'   directions the dimensions can rotate into each other unless `loadings`
@@ -1587,17 +1352,26 @@ bigIRT_validate_fit_inputs <- function(dat, score, id, item, scale, pl, controls
 #' @param logitCMeanSD Numeric. Standard deviation for the prior distribution of the guessing parameters (on logit scale). Default is \code{logitCSD}.
 #' @param logitDMeanSD Numeric. Standard deviation for the prior distribution of the upper asymptote parameters (on logit scale). Default is \code{logitDSD}.
 #' @param AbilityMeanSD Numeric array. Standard deviation for the prior distribution of the ability parameters. Default is 1 for each scale.
-#' @param iter Integer. Maximum number of iterations for the fitting algorithm. Default is 2000.
-#' @param cores Integer. Number of cores to use for parallel computation. Default is 6.
-#' @param carefulfit Logical. Whether to use a slower, careful fitting procedure. Default is FALSE. Experimental.
+#' @param ... Accepted only for arguments of earlier versions, so that old
+#'   code keeps running. \code{plot} and \code{noptimsteps}, which never
+#'   changed a result, are ignored in silence. \code{iter}, \code{tol},
+#'   \code{init}, \code{carefulfit} and \code{stochastic} configured the Stan
+#'   joint-MAP path removed in 0.2.0 (the optimiser's own controls are
+#'   \code{laplaceOuterIter} and \code{laplaceTol}), and \code{laplaceItemIter}
+#'   and \code{ebayesFromFixed} had no effect; these are ignored with a
+#'   warning. Any other argument is an error.
+#' @param cores Integer. Threads for the person-level kernels. Default is 6.
+#' @param verbose Integer. 0 is silent; 1 reports the start and end of the
+#'   fit and each empirical-Bayes round; 2 adds a line per objective
+#'   evaluation and the optimiser's timing summary. Default is 0.
 #' @param ebayes Logical. Whether to use empirical Bayes estimation: the
 #'   priors are adapted from a first-pass estimate. Default FALSE since 0.1.9
 #'   (TRUE before). On simulated 3PL and 4PL data, empirical-Bayes priors
 #'   narrowed toward the first pass left item intervals covering .004 to .84
 #'   of the time against a nominal .95, where the fixed default priors were
 #'   conservative.
-#' @param ebayesmultiplier Numeric. Multiplier for the widths of the empirical Bayes priors. Default is 2, as this appears to work better in practice.
-#' @param ebayesFromFixed Logical. Whether to initialize empirical Bayes from any specifed fixed values Default is FALSE.
+#' @param ebayesmultiplier Numeric. Multiplier on the prior SDs estimated by
+#'   \code{ebayesMethod = "moment"}. Default is 2.
 #' @param estMeans Character vector. Which means to estimate, from 'ability',
 #'   'A', 'B', 'C', 'D'. Default is \code{c('A','B','C','D')}: the item means
 #'   are estimated and the ability mean is held at \code{AbilityMeandat}, which
@@ -1614,13 +1388,13 @@ bigIRT_validate_fit_inputs <- function(dat, score, id, item, scale, pl, controls
 #'   person has no likelihood, so their ability is the prior mean, which under
 #'   the default is 0 plus whatever their \code{personPreds} imply.
 #' @param priors Logical. Whether to use prior distributions. Default is TRUE.
-#' @param marginalApprox Character. Marginal approximation backend.
-#'   \code{"laplace"} (the default since 0.1.9; \code{"none"} before) for the
-#'   Laplace backend, or \code{"none"} for the legacy Stan/JML path. The
-#'   Laplace backend is a single-stage optimizer over the item block that
-#'   re-solves the person modes inside every objective evaluation and
-#'   differentiates through them, so the gradient carries the adjoint term
-#'   rather than treating the modes as fixed. It accepts item predictors,
+#' @param marginalApprox Character. The estimator.
+#'
+#'   \code{"laplace"} (default): marginal maximum likelihood, the abilities
+#'   integrated out. The optimiser works over the item-side parameters and
+#'   re-solves every person mode inside each objective evaluation,
+#'   differentiating through them, so the gradient carries the mode-adjoint
+#'   term rather than treating the modes as fixed. It accepts item predictors,
 #'   person predictors, estimated ability means and estimated latent
 #'   correlations, and its gradient agrees with central finite differences in
 #'   every one of those blocks.
@@ -1638,22 +1412,42 @@ bigIRT_validate_fit_inputs <- function(dat, score, id, item, scale, pl, controls
 #'   two curvatures are then the same number -- which is why it went unnoticed
 #'   for so long. Fisher information is still used for the Newton step, where
 #'   its guaranteed positive definiteness is what makes the mode solve robust.
-#'
 #'   Where the data's own contribution to the curvature is not positive
 #'   semidefinite, it is clipped to the nearest matrix that is, rather than
 #'   swapped for Fisher: swapping is discontinuous in the item parameters and
 #'   a line search cannot cope with it. A consequence worth knowing is that
 #'   the reported person posterior SD can never exceed the ability prior SD.
-#'   Predictor columns are response-row aligned and
-#'   can vary within a person or item; the likelihood retains their exact row
-#'   values while reported person/item summaries use within-entity predictor
-#'   means. \code{"laplace_fast"} and \code{"laplace_direct"} are accepted as
-#'   names for this same backend: they were once two implementations, an
-#'   alternating one that froze the modes during an item step and this one, and
-#'   the alternating one was withdrawn after it proved slower for the same
-#'   answer. Default is \code{"none"}.
+#'
+#'   \code{"map"}: the joint posterior mode over item parameters and abilities.
+#'   The persons are profiled out -- each evaluation solves every person's mode
+#'   and differentiates the joint log posterior at it, which needs no adjoint
+#'   because the abilities are at their maximum (src/map_backend.cpp) -- and the
+#'   result is optimised, certified and reported exactly as a Laplace fit is.
+#'   It takes every argument the Laplace estimator takes except
+#'   \code{estimateAbilityCorr}, and ignores \code{laplaceRefine} except to
+#'   choose how its marginal likelihood is evaluated for \code{logLik()}.
+#'   Two properties to know before using it. Its latent scale comes from the
+#'   priors, not the data: the likelihood is unchanged by scaling every loading
+#'   up and every ability down together, and the joint mode trades the
+#'   persons' ability prior against the items' loading prior, so loadings come
+#'   out inflated and abilities shrunk, more so the more persons there are per
+#'   item (on simulated 2PL data with loadings near 1.2, joint-mode loadings
+#'   averaged 2.3 to 3.8). Compare it with other fits only after linking or
+#'   normalising (\code{normalise}, \code{\link{normaliseIRT}}). And it
+#'   cannot estimate the latent correlation; see \code{estimateAbilityCorr}.
+#'   This replaces, in 0.2.0, a Stan implementation of the same estimator
+#'   that optimised every ability and item parameter jointly by L-BFGS; on the
+#'   same data the two agree to the optimiser's tolerance, and the joint
+#'   posterior at this implementation's solution was the higher.
+#'
+#'   Predictor columns are response-row aligned and can vary within a person
+#'   or item, under either estimator; the likelihood retains their exact row
+#'   values while reported person and item summaries use within-entity
+#'   predictor means. \code{"none"} is accepted as the former name of
+#'   \code{"map"}, and \code{"laplace_fast"} and \code{"laplace_direct"} as
+#'   former names of \code{"laplace"}.
 #' @param ebayesCoarse Numeric. Tolerance multiplier for the intermediate
-#'   empirical-Bayes refits on the Laplace backend. Those rounds exist only to
+#'   empirical-Bayes refits. Those rounds exist only to
 #'   produce estimates to update the hyperparameters from, so they are run at
 #'   \code{laplaceTol * ebayesCoarse}; the final fit always uses
 #'   \code{laplaceTol}. Default is 1000, so that with the default
@@ -1664,25 +1458,29 @@ bigIRT_validate_fit_inputs <- function(dat, score, id, item, scale, pl, controls
 #'   and reaches zero whenever the data cannot support item-level variation, so
 #'   the floor decides how hard those blocks pool. It does not apply to
 #'   \code{"laplace"}, which is bounded by its own objective. Default is 0.05.
-#' @param ebayesMethod Character. How the Laplace backend estimates prior
+#' @param ebayesMethod Character. How prior
 #'   hyperparameters when \code{ebayes = TRUE}. \code{"laplace"} (default)
 #'   approximates the integral over the item parameters and maximises the
 #'   resulting profile marginal, which is bounded and needs no floor or
 #'   multiplier. \code{"moment"} keeps the earlier variance-components rule,
-#'   which is faster but relies on a floor. Ignored on the JML path.
-#' @param ebayesIter Integer. Maximum empirical-Bayes rounds on the Laplace
-#'   backend. Each round refits, updates the prior hyperparameters from the fit
-#'   by the EM M-step for a normal-normal hierarchy, and stops early once every
-#'   hyperparameter moves by less than a thousandth. Ignored when
-#'   \code{ebayes = FALSE} or on the JML path, which runs its own single
-#'   empirical-Bayes step. Default is 5.
+#'   which is faster but relies on a floor.
+#' @param ebayesIter Integer. Maximum empirical-Bayes rounds. Each round
+#'   refits, updates the prior hyperparameters from the fit by the EM M-step
+#'   for a normal-normal hierarchy, and stops early once every hyperparameter
+#'   moves by less than a thousandth. Ignored when \code{ebayes = FALSE}.
+#'   Default is 5.
 #' @param estimateAbilityCorr Logical. If \code{TRUE}, estimate the latent
 #'   ability correlation matrix while keeping \code{AbilitySD} fixed, so that
 #'   only the correlation is free (the latent scale is not identified
-#'   separately from the loadings). Supported by \code{marginalApprox =
-#'   "laplace"}, which optimises
-#'   it as part of the parameter vector. Ignored for other backends and for
-#'   unidimensional fits. It forces \code{laplaceKeepCovariance}, because the
+#'   separately from the loadings). The Laplace estimator optimises it as
+#'   part of the parameter vector. Under \code{marginalApprox = "map"} it is an
+#'   error: as a parameter of the joint posterior the correlation runs to the
+#'   boundary (the prior's normalising constant grows without bound as a
+#'   correlation goes to one, while the likelihood need not fall), and set by
+#'   EM from the person posteriors it was measured biased towards zero (.39 to
+#'   .50 for a true .6), because the joint mode's latent scale is not the
+#'   prior's. Ignored for unidimensional fits. It forces
+#'   \code{laplaceKeepCovariance}, because the
 #'   person posterior covariances are required: modes are shrunk towards zero
 #'   by the prior, so their cross-product alone understates the correlation.
 #'   The result is returned in \code{fit$abilityPrior$corr}, with
@@ -1691,11 +1489,11 @@ bigIRT_validate_fit_inputs <- function(dat, score, id, item, scale, pl, controls
 #'   correlation among fitted ability point estimates is biased, downwards
 #'   under an independent prior and upwards under a correlated one.
 #'   Default is FALSE.
-#' @param laplaceOuterIter Integer. Maximum number of outer iterations for a
-#'   Laplace backend. This is a fallback limit rather than
-#'   the primary convergence criterion. Default is 500.
-#' @param laplaceTol Numeric. Outer tolerance for
-#'   \code{marginalApprox="laplace"}. Under \code{laplaceOptimizer = "fisher"}
+#' @param laplaceOuterIter Integer. Maximum optimiser iterations, under
+#'   either estimator. This is a fallback limit rather than the primary
+#'   convergence criterion. Default is 500.
+#' @param laplaceTol Numeric. Optimiser tolerance, under either estimator.
+#'   Under \code{laplaceOptimizer = "fisher"}
 #'   it is the predicted remaining gain in log-likelihood, in nats, at which
 #'   the optimiser stops; under \code{"mize"} it is mize's absolute tolerance
 #'   on the change in objective and on the gradient norm. Default is 1e-4
@@ -1735,7 +1533,7 @@ bigIRT_validate_fit_inputs <- function(dat, score, id, item, scale, pl, controls
 #'   own choice: 8 under \code{"mize"}, none under \code{"fisher"}. Set to 0 to
 #'   disable under \code{"mize"}; an explicit nonzero value under
 #'   \code{"fisher"} is refused rather than silently ignored.
-#' @param laplaceOptimizer Character. Optimiser for the Laplace backend.
+#' @param laplaceOptimizer Character. Optimiser, under either estimator.
 #'   \code{"fisher"} (default) is L-BFGS whose initial inverse Hessian is
 #'   shaped by the Fisher information of the marginal likelihood, including
 #'   the coupling between items that runs through the persons, and which stops
@@ -1746,7 +1544,9 @@ bigIRT_validate_fit_inputs <- function(dat, score, id, item, scale, pl, controls
 #'   objective evaluations and half the time, and ended closer to the optimum.
 #'   It builds the information as a sparse matrix, and falls back to
 #'   \code{"mize"} when that would exceed about 5e7 nonzeros.
-#' @param laplaceRefine Character. Whether to finish a \code{"laplace"} fit on
+#' @param laplaceRefine Character. Laplace estimator only (for
+#'   \code{"map"} it picks only how \code{logLik()}'s marginal likelihood is
+#'   evaluated). Whether to finish a \code{"laplace"} fit on
 #'   the marginal likelihood with each person's integral done by adaptive
 #'   Gauss-Hermite quadrature, centred at the Laplace mode, instead of by the
 #'   Laplace approximation. The refinement starts from the Laplace optimum and
@@ -1853,7 +1653,8 @@ bigIRT_validate_fit_inputs <- function(dat, score, id, item, scale, pl, controls
 #'   \code{summary()} and \code{tidyIRT()} come from its curvature.
 #'
 #'   \code{TRUE} or \code{"fast"} (the default): each item's block of the
-#'   Hessian in one quadrature pass, the parameters shared across items by
+#'   Hessian in one quadrature pass, its own covariate coefficients
+#'   (\code{itemSpecificBetas}) included, the parameters shared across items by
 #'   differencing, items coupled through those, which drops only the coupling
 #'   between two items through the persons who answered both. It takes the
 #'   time of about five to seven evaluations whatever the number of items or
@@ -1899,19 +1700,19 @@ bigIRT_validate_fit_inputs <- function(dat, score, id, item, scale, pl, controls
 #'   at 40,000 -- above the optimiser's own stopping tolerance
 #'   (\code{laplaceTol}). At 1e-6 it is about 1e-5 and 1e-4, for 3 to 5 per
 #'   cent more time per fit. Default is 1e-6 (1e-4 before September 2026).
-#' @param laplaceKeepCovariance Logical. Whether to keep full person covariance
-#'   matrices on the Laplace path. Covariances are otherwise retained only when
-#'   needed to estimate ability correlations. Default is FALSE.
-#' @param laplaceDiagnostics Logical. Whether to store outer-loop diagnostics for
-#'   \code{"laplace"}. Default is FALSE.
-#' @param laplacePlot Logical. Whether to draw the Laplace diagnostic plot during
-#'   fitting when \code{marginalApprox="laplace"}. Default is FALSE.
+#' @param laplaceKeepCovariance Logical. Whether to keep each person's
+#'   posterior covariance matrix (\code{fit$personPosterior$covariance}), which
+#'   \code{\link{reliability}} and \code{\link{looIRT}} need. The precision is
+#'   always kept. Covariances are otherwise retained only when the fit needs
+#'   them (estimated correlations, empirical Bayes). Default is FALSE.
+#' @param laplaceDiagnostics Logical. Whether to store per-evaluation
+#'   optimiser diagnostics in \code{fit$laplaceDiagnostics}. Default is FALSE.
+#' @param laplacePlot Logical. Whether to draw the optimiser diagnostic plot
+#'   during fitting. Default is FALSE.
 #' @param laplacePlotEvery Integer. Plot every N outer iterations when
 #'   \code{laplacePlot=TRUE}. Default is 1.
-#' @param laplaceJitter Numeric. Small jitter added to stabilize Laplace
-#'   covariance calculations. Default is 1e-6.
-#' @param noptimsteps Integer. Number of optimizer iterations used inside each
-#'   Laplace item step. Default is 10.
+#' @param laplaceJitter Numeric. Small jitter added to stabilise the person
+#'   precision factorisations. Default is 1e-6.
 #' @param normalise Logical. Whether to normalize the output estimates. Default is FALSE.
 #' @param normaliseScale Numeric. Scale for normalization. Default is 1.
 #' @param normaliseMean Numeric. Mean for normalization. Default is 0.
@@ -1928,24 +1729,43 @@ bigIRT_validate_fit_inputs <- function(dat, score, id, item, scale, pl, controls
 #'   whether person covariates say anything about somebody the model has never
 #'   seen -- excluding only some of a person's responses cannot, because their
 #'   own ability parameter is still estimated from the rest.
-#' @param init Initial values for the fitting algorithm. Default is NA.
-#' @param tol Numeric. Tolerance for convergence. Default attempts to sensibly adjust for amount of data.
-#' @param ... Additional arguments passed to the fitting function.
-#'
-#' @return An object of class \code{bigIRT_fit}. All fits retain the legacy
-#'   fields. Laplace fits additionally provide \code{laplaceStatus}: strict
-#'   convergence, stable plateau, iteration-limit, person-mode-failure,
-#'   numerical-failure, frozen-effect, approximate-gradient, and covariance
-#'   retention flags; and, when requested, \code{laplaceDiagnostics}. Its
-#'   rows describe outer iteration, objective, relative improvement, item and
-#'   person RMS steps, item gradient, posterior SD, person convergence, timings,
-#'   optimizer work, and strict/stability criteria. Direct-Laplace-specific
-#'   stability fields are unavailable (\code{NA}).
+#' @return An object of class \code{bigIRT_fit}, the same under either
+#'   estimator. Its main parts:
+#'   \describe{
+#'   \item{\code{itemPars}, \code{personPars}}{Item parameters (one row per
+#'     item, with a column per loading in more than one dimension) and person
+#'     abilities with their posterior SDs (\code{_SD} columns).}
+#'   \item{\code{pars}}{Everything estimated, including the free parameters on
+#'     their unconstrained scales and the row-level effective parameters.}
+#'   \item{\code{personPosterior}}{Each person's mode and the precision (and,
+#'     with \code{laplaceKeepCovariance}, the covariance) of their posterior,
+#'     conditional on the item parameters.}
+#'   \item{\code{abilityPrior}}{The ability prior's SDs, correlation (estimated
+#'     or fixed; see \code{estimated_corr}) and precision.}
+#'   \item{\code{optim}}{The optimiser's result: \code{logLik} is the fitted
+#'     objective -- the penalised Laplace (or refined) marginal, or the joint
+#'     log posterior for \code{"map"} -- and \code{grad} and \code{layout} its
+#'     gradient by parameter block. Use \code{logLik()} for a likelihood.}
+#'   \item{\code{laplaceStatus}}{Convergence and its diagnosis, for either
+#'     estimator (the name is historical): \code{converged} and \code{reason},
+#'     the convergence certificate, run-off items, and iteration-limit,
+#'     person-mode-failure, numerical-failure, frozen-effect,
+#'     approximate-gradient and covariance-retention flags. \code{estimator} and
+#'     \code{marginal} say which objective was fitted; for \code{"map"},
+#'     \code{marginal_logLik} is the marginal likelihood at the MAP estimates.}
+#'   \item{\code{laplaceDiagnostics}}{When requested, one row per objective
+#'     evaluation: objective, relative improvement, item and person RMS steps,
+#'     item gradient, posterior SD, person convergence, timings, optimiser
+#'     work and the strict criterion.}
+#'   \item{\code{prepared}}{The prepared data the backend consumed: indices,
+#'     response vectors, fixed-value maps and prior hyperparameters.}
+#'   \item{\code{backend}}{\code{"laplace"} or \code{"map"}.}
+#'   }
 #'
 #'   The frozen-effect flags, \code{beta_frozen} and its alias
 #'   \code{frozen_effects}, are TRUE only when \code{personPreds} were supplied
 #'   \emph{and} their ability coefficients were held out of the optimised
-#'   parameter vector. The current backend always estimates them, so these read
+#'   parameter vector. Both estimators always estimate them, so these read
 #'   FALSE on any fit that has person predictors; a fit with none reports FALSE
 #'   too, because there is nothing that could be frozen. (Before this was
 #'   corrected the flag was set from the presence of person predictors alone,
@@ -1975,13 +1795,17 @@ bigIRT_validate_fit_inputs <- function(dat, score, id, item, scale, pl, controls
 #'   BMean=0,BSD = .5,
 #'   AbilityMean = 0,AbilitySD = 1)
 #'
-#' #fit using bigIRT. marginalApprox = 'laplace' integrates the abilities out;
-#' #the "none" default is the older joint MAP estimator.
+#' #Fit by marginal maximum likelihood (the default), which integrates the
+#' #abilities out by a Laplace approximation.
 #' fit <- fitIRT(dat$dat,cores=2,score = 'score',id = 'id',
-#'   scale = 'Scale',item = 'Item', pl=2, marginalApprox = 'laplace')
+#'   scale = 'Scale',item = 'Item', pl=2)
 #'
 #'   print(fit$personPars)
 #'   print(fit$itemPars)
+#'
+#' #The same model by the joint posterior mode: same arguments, same output.
+#' fit_map <- fitIRT(dat$dat, cores = 2, pl = 2, marginalApprox = 'map')
+#' logLik(fit_map)   # the model's marginal likelihood at the MAP estimates
 #'
 #' #Explicit multidimensional loading specification (2D example)
 #' #Rows/cols are aligned by names to item ids and scale ids.
@@ -1991,90 +1815,52 @@ bigIRT_validate_fit_inputs <- function(dat, score, id, item, scale, pl, controls
 #'   dimnames = list(item_ids, scale_ids))
 #' L[1, ] <- c(0.8, 0.2) #fixed cross-loading
 #' L[2, 2] <- 0          #fixed zero loading
-#' fit_mirt <- fitIRT(dat$dat, pl = 2, cores = 1, loadings = L,
-#'   marginalApprox = 'laplace')
+#' fit_mirt <- fitIRT(dat$dat, pl = 2, cores = 1, loadings = L)
 #' head(fit_mirt$itemPars[, grep("^A(_|$)", names(fit_mirt$itemPars)), drop = FALSE])
-fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
-  personDat=NA, personPreds=character(),
-  itemDat=NA,
-  loadings=NA, loadingsFixed=NA, signedLoadings=NULL,
-  AitemPreds=character(),
-  BitemPreds=character(),
-  CitemPreds=character(),
-  DitemPreds=character(),
-  itemSpecificBetas=FALSE,
-  betaScale=10,
-  invspAMeandat=.542,invspASD=1,BMeandat=0,BSD=2.5, logitCMeandat=0,logitCSD=1,
-  logitDMeandat=0,logitDSD=1,
-  AbilityMeandat=array(0,dim=c(length(unique(dat[[scale]])))),
-  AbilitySD=array(1,dim=c(length(unique(dat[[scale]])))),
-  AbilityCorr=diag(1,c(length(unique(dat[[scale]])))),
-  AMeanSD=1,BMeanSD=BSD,logitCMeanSD=logitCSD,logitDMeanSD=logitDSD,
-  AbilityMeanSD=array(1,dim=c(length(unique(dat[[scale]])))),
-  iter=2000,cores=6,carefulfit=FALSE,
-  ebayes=FALSE,ebayesmultiplier=2,ebayesFromFixed=FALSE,ebayesIter=5L,ebayesMethod=c("laplace","moment"),ebayesMinSD=0.05,ebayesCoarse=1000,
-  estMeans=c('A','B','C','D'),priors=TRUE,
-  marginalApprox=c("laplace","none","laplace_fast","laplace_direct"),
-  estimateAbilityCorr=FALSE,
-  laplaceCorrParam=c("stan_corsqrt","normalized_chol"),
-  keepInternals=FALSE,laplaceOuterIter=500,laplaceTol=1e-4,laplaceTolScale=c("relative","per_obs"),laplaceGradTol=1e-4,laplacePolish=NA,laplacePersonTol=1e-6,laplaceOptimizer=c("fisher","mize"),
-  laplaceRefine=c("auto","agq","laplace2","none"),agqNodes=NULL,agqPoints=NULL,
-  laplaceCertify=TRUE,
-  laplaceKeepCovariance=FALSE,laplaceDiagnostics=FALSE,laplacePlot=FALSE,laplacePlotEvery=1L,
-  laplaceJitter=1e-6,noptimsteps=10,
-  normalise=FALSE,normaliseScale=1,normaliseMean=0,
-  dropPerfectScores=TRUE,trainingRows=1:nrow(dat),
-  init=NA,tol=1e-8 * 10^(log(nrow(dat), 10)),...){
+fitIRT <- function(dat, score = 'score', id = 'id', item = 'Item', scale = 'Scale', pl = 1,
+  marginalApprox = c("laplace", "map", "none", "laplace_fast", "laplace_direct"),
+  personDat = NA, personPreds = character(),
+  itemDat = NA,
+  loadings = NA, loadingsFixed = NA, signedLoadings = NULL,
+  AitemPreds = character(),
+  BitemPreds = character(),
+  CitemPreds = character(),
+  DitemPreds = character(),
+  itemSpecificBetas = FALSE,
+  betaScale = 10,
+  priors = TRUE,
+  invspAMeandat = .542, invspASD = 1, BMeandat = 0, BSD = 2.5, logitCMeandat = 0, logitCSD = 1,
+  logitDMeandat = 0, logitDSD = 1,
+  AbilityMeandat = array(0, dim = c(length(unique(dat[[scale]])))),
+  AbilitySD = array(1, dim = c(length(unique(dat[[scale]])))),
+  AbilityCorr = diag(1, c(length(unique(dat[[scale]])))),
+  AMeanSD = 1, BMeanSD = BSD, logitCMeanSD = logitCSD, logitDMeanSD = logitDSD,
+  AbilityMeanSD = array(1, dim = c(length(unique(dat[[scale]])))),
+  estMeans = c('A', 'B', 'C', 'D'),
+  estimateAbilityCorr = FALSE,
+  laplaceCorrParam = c("stan_corsqrt", "normalized_chol"),
+  ebayes = FALSE, ebayesMethod = c("laplace", "moment"), ebayesIter = 5L, ebayesCoarse = 1000,
+  ebayesMinSD = 0.05, ebayesmultiplier = 2,
+  laplaceRefine = c("auto", "agq", "laplace2", "none"), agqNodes = NULL, agqPoints = NULL,
+  laplaceOptimizer = c("fisher", "mize"), laplaceOuterIter = 500, laplaceTol = 1e-4,
+  laplaceGradTol = 1e-4, laplaceTolScale = c("relative", "per_obs"), laplacePolish = NA,
+  laplacePersonTol = 1e-6, laplaceCertify = TRUE, laplaceJitter = 1e-6,
+  laplaceKeepCovariance = FALSE, laplaceDiagnostics = FALSE, laplacePlot = FALSE,
+  laplacePlotEvery = 1L,
+  normalise = FALSE, normaliseScale = 1, normaliseMean = 0,
+  dropPerfectScores = TRUE, trainingRows = 1:nrow(dat),
+  cores = 6, verbose = 0L, keepInternals = FALSE, ...){
 
-  supplied <- names(match.call(expand.dots = FALSE))
+  bigIRT_check_dots(list(...))
   trainingRows <- bigIRT_validate_fit_inputs(
     dat, score, id, item, scale, pl,
-    controls = list(iter = iter, cores = cores, laplaceOuterIter = laplaceOuterIter,
+    controls = list(cores = cores, laplaceOuterIter = laplaceOuterIter,
       laplaceTol = laplaceTol, laplaceGradTol = laplaceGradTol,
       laplacePersonTol = laplacePersonTol,
       laplacePlotEvery = laplacePlotEvery,
-      laplaceJitter = laplaceJitter, noptimsteps = noptimsteps, tol = tol),
+      laplaceJitter = laplaceJitter),
     trainingRows = trainingRows,
     predictors = unique(c(personPreds, AitemPreds, BitemPreds, CitemPreds, DitemPreds)))
-  if("estimateAbilityCorr" %in% supplied && isTRUE(estimateAbilityCorr) &&
-      !marginalApprox[1] %in% c("laplace", "laplace_direct", "laplace_fast"))
-    warning("estimateAbilityCorr is ignored unless marginalApprox is 'laplace'.",
-      call. = FALSE)
-  ## Estimating the latent correlation needs the person posterior covariances:
-  ## the M-step is an average second moment, and without the covariance term it
-  ## would use shrunken modes alone and understate the correlation.  Force
-  ## retention here so that it applies to whichever backend runs.
-  if(isTRUE(estimateAbilityCorr) && length(unique(dat[[scale]])) > 1L) laplaceKeepCovariance <- TRUE
-  ## Anything in ... that no downstream consumer accepts is silently discarded.
-  ## That turned a stale install into 1,500 fits which ignored the argument they
-  ## were varying and looked entirely healthy, so unknown names are reported
-  ## rather than dropped. ... is still forwarded to optimIRT, so its formals are
-  ## legitimate and only names matching neither function are flagged.
-  local({
-    dn <- names(list(...))
-    dn <- dn[nzchar(dn)]
-    if(length(dn)){
-      optimFormals <- names(formals(optimIRT))
-      ## A downstream function taking ... could accept anything, so there is
-      ## nothing to report. The real optimIRT names every argument and has no
-      ## dots, so the check still does its job; this only stands down when the
-      ## binding is a shim, as under local_mocked_bindings in the tests, where
-      ## the mock's sole ... argument would otherwise empty the allowlist and
-      ## have us blame the user's install for arguments that are perfectly fine.
-      if(!("..." %in% optimFormals)){
-        known <- unique(c(names(formals(fitIRT)), optimFormals))
-        unknown <- setdiff(dn, known)
-        if(length(unknown)){
-          warning("fitIRT ignored unrecognised argument(s): ",
-            paste(unknown, collapse = ", "),
-            ". Arguments in `...` are forwarded to optimIRT and anything it does ",
-            "not accept has no effect. Check the spelling, and check that the ",
-            "installed bigIRT is recent enough to have the argument.",
-            call. = FALSE)
-        }
-      }
-    }
-  })
 
   ## Partial eigenvalue clipping is the one place where the log-determinant
   ## gradient is zeroed without log|H| being exactly flat. It needs K > 1,
@@ -2091,31 +1877,18 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   ## final evaluation only; see laplaceStatus$clipped_partial and the warning
   ## after the fit. bigIRT_laplace_clip_counts() still has running totals.
   bigIRT_laplace_clip_counts(reset = TRUE)
-  sdat <-list() #initialize standata object
-  basetol=tol
   marginalApprox <- match.arg(marginalApprox)
-  ## One Laplace backend. "laplace_fast" and "laplace_direct" both name it now.
-  ## The two used to be separate: laplace_fast alternated between a person step
-  ## and an item step with the modes frozen, laplace_direct optimised the item
-  ## block directly and re-solved the modes inside every objective evaluation.
-  ## Head to head the alternating scheme needed about 85 item evaluations where
-  ## the direct one needed 32, because it restarted its inner optimiser each
-  ## outer iteration and threw away the curvature, and it spent those extra
-  ## evaluations against a frozen posterior. Its one apparent advantage --
-  ## better parameter recovery on weakly identified 3PL and sparse designs --
-  ## turned out to be early stopping rather than a better estimator: driving it
-  ## to converge harder moved its likelihood up to the direct one's and its
-  ## recovery down to match, monotonically and across seeds. Regularisation
-  ## belongs in the priors, not in where an optimiser happens to stall.
-  if(marginalApprox %in% c("laplace_fast", "laplace_direct")) marginalApprox <- "laplace"
-  ## Signed loadings exist on the Laplace path only: the Stan model behind
-  ## "none" has softplus loadings and nothing else. An all-FALSE matrix asks
-  ## for nothing and is allowed anywhere.
+  ## Two estimators. "none" is the historical name for the joint mode (no
+  ## marginalisation), kept so existing calls keep working. "laplace_fast" and
+  ## "laplace_direct" are historical names for the one Laplace backend: they
+  ## were once two implementations, an alternating one that froze the modes
+  ## during an item step and the direct one, and the alternating one was
+  ## withdrawn after it proved slower for the same answer -- its apparent edge
+  ## in recovery on weakly identified designs turned out to be early stopping.
+  ## Regularisation belongs in the priors, not in where an optimiser stalls.
+  estimator <- switch(marginalApprox, map = , none = "map", "laplace")
   signedAsked <- !is.null(signedLoadings) && !isFALSE(signedLoadings) &&
     (is.character(signedLoadings) || isTRUE(any(as.logical(signedLoadings))))
-  if(signedAsked && !identical(marginalApprox, "laplace"))
-    stop("signedLoadings needs marginalApprox = \"laplace\": the Stan path (\"none\") ",
-      "has positive (softplus) loadings only.", call. = FALSE)
   if(signedAsked && pl < 2)
     stop("signedLoadings needs pl >= 2: a 1PL has no free loadings.", call. = FALSE)
   ebayesMethod <- match.arg(ebayesMethod)
@@ -2154,7 +1927,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   #sort data by subject
   dat <- dat[order(get(idref.)),]
 
-  #setup indices to map user specified categories to sequential integers for stan
+  #setup indices to map user specified categories to sequential integers
   itemIndex <- data.table(original=as.character(dat[[itemref.]][!duplicated(dat[[itemref.]])]))
   scaleIndex <- data.table(original=as.character(dat[[scaleref.]][!duplicated(dat[[scaleref.]])]))
   idIndex <- data.table(original=as.character(dat[[idref.]][!duplicated(dat[[idref.]])]))
@@ -2184,34 +1957,6 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   Nitems <- length(unique(dat[[itemref.]]))
   Nsubs=length(unique(dat[[idref.]]))
   Nscales=length(unique(dat[[scaleref.]]))
-
-  #if getting priors from fixed pars, do this before dropping unnecessary items from itemSetup / AbilitySetup
-  if(ebayesFromFixed){
-    if(length(personDat)==1 && !is.na(personDat)){
-      personDat <- as.data.table(personDat)
-      sdat$dopriors <- 1L
-
-      sdat$AbilityMeandat <- array(apply(personDat[,c(scaleIndex$original),with=FALSE],2,mean,na.rm=TRUE))
-      sdat$AbilitySD <- array(apply(personDat[,c(scaleIndex$original),with=FALSE],2,sd,na.rm=TRUE))*ebayesmultiplier+1e-5 #maybe need to better account for multiple scales here, but not that important...
-      sdat$AbilityCorr <- cor(personDat[,c(scaleIndex$original),with=FALSE],use='pairwise.complete.obs')
-    }
-    if(length(itemDat)==1 && !is.na(itemDat)){
-      itemDat <- as.data.table(itemDat)
-      sdat$dopriors <- 1L
-
-      sdat$invspAMeandat <- mean(afunci(itemDat$A),na.rm=TRUE)
-      sdat$invspASD <- sd(afunci(itemDat$A),na.rm=TRUE)*ebayesmultiplier+1e-5
-
-      sdat$BMeandat <- mean(itemDat$B,na.rm=TRUE)
-      sdat$BSDx <- sd(itemDat$B,na.rm=TRUE)*ebayesmultiplier+1e-5
-
-      sdat$logitCMeandat <- mean(logit(itemDat$C+1e-8),na.rm=TRUE)
-      sdat$logitCSD <- sd(logit(itemDat$C+1e-8),na.rm=TRUE)*ebayesmultiplier+1e-5
-
-      sdat$logitDMeandat <- mean(logit(itemDat$D+1e-8),na.rm=TRUE)
-      sdat$logitDSD <- sd(logit(itemDat$D+1e-8),na.rm=TRUE)*ebayesmultiplier+1e-5
-    }
-  }
 
   # setup item structure to define fixed / free pars
   itemSetup <- data.table(itemIndex, A=as.numeric(NA), B=as.numeric(NA),
@@ -2293,7 +2038,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
 
   itemSetup$A <- loadingValues[cbind(seq_len(Nitems), itemSetup$scale)]
   itemSetup[,paste0(c('B','C','D'),'data'):= .SD, .SDcols=c('B','C','D')] #create data columns
-  setnafill(itemSetup,fill = -99,cols = paste0(c('B','C','D'),'data')) #and fill with arbitrary value to avoid NA in stan
+  setnafill(itemSetup,fill = -99,cols = paste0(c('B','C','D'),'data')) #placeholder; read only where the parameter is fixed
   Adata <- a_matrix_to_vector(loadingValues)
   Adata[is.na(Adata)] <- -99
   fixedAlog <- as.integer(a_matrix_to_vector(loadingFixedFromValues))
@@ -2309,34 +2054,11 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     AbilitySetup[setupRows,c(scaleIndex$original):=personDat[,c(scaleIndex$original),with=FALSE]]
   }
   AbilitySetup[,paste0(c(scaleIndex$original),'data'):= .SD, .SDcols=c(scaleIndex$original)] #create data columns
-  setnafill(AbilitySetup,fill = -99,cols = paste0(c(scaleIndex$original),'data')) #and fill with arbitrary value to avoid NA in stan
+  setnafill(AbilitySetup,fill = -99,cols = paste0(c(scaleIndex$original),'data')) #placeholder; read only where the ability is fixed
 
   #which abilities are fixed
   fixedAbilityLogical <- AbilitySetup[order(new),c(scaleIndex$original),with=FALSE]
   fixedAbilityLogical<-fixedAbilityLogical[,lapply(.SD,function(x) as.integer(!is.na(x)))]
-
-  #which parameters do the unfixed Ability matrix slots need to refer to
-  Abilityparsindex <- matrix(cumsum(1-unlist(fixedAbilityLogical)),Nsubs,Nscales)
-  Abilityparsindex[fixedAbilityLogical==1] <- 0
-
-  #which scale is each Ability par for
-  Abilityparsscaleindex <- c(col(Abilityparsindex)[Abilityparsindex>0])
-
-  # #include short predictors:
-  #
-  # if(length(itemPredsref.)==0){
-  #   itemPreds <- array(0,dim = c(Nitems,0))
-  # } else{
-  #   itemPreds <- dat[!duplicated(get(itemref.)),itemPredsref.,with=FALSE]
-  #   itemPreds <- itemPreds[order(unique(dat[[itemref.]])),]
-  # }
-  #
-  # if(length(personPredsref.)==0){
-  #   personPreds <- array(0,dim = c(Nsubs,0))
-  # } else{
-  #   personPreds <- dat[!duplicated(get(idref.)),personPredsref.,with=FALSE]
-  #   personPreds <- personPreds[order(unique(dat[[idref.]])),]
-  # }
 
   #include long predictors:
 
@@ -2351,10 +2073,6 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   } else{
     personPreds <- dat[,personPredsref.,with=FALSE]
   }
-
-  # sdat$NstatePreds <- length(statePreds)
-  # sdat$statePreds <- matrix(0, nrow(dat), sdat$NstatePreds)
-  # if(sdat$NstatePreds > 0) sdat$statePreds <- as.matrix(dat[,statePredsref.,with=FALSE])
 
   trainingLogical <- array(as.integer(dat[["__bigIRT_training__"]]))
   if(!any(trainingLogical)) stop("No selected `trainingRows` remain after filtering.")
@@ -2374,7 +2092,10 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   ## that can measure whether person covariates carry information about
   ## somebody the model has not seen.
 
-  sdat <- c(sdat,list(
+  ## The prepared data: indices, response vectors, fixed-value maps and prior
+  ## hyperparameters, in the person-sorted internal order. Returned as
+  ## fit$prepared.
+  sdat <- list(
     Nobs=nrow(dat),
     Nsubs=Nsubs,
     Nitems=Nitems,
@@ -2382,36 +2103,18 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     NitemScales=as.integer(Nitems * Nscales),
     id=array(dat[[idref.]]),
     dopriors=as.integer(priors),
-    outlierfix=0L,
-    outlierscale=2,
     NfixedA=as.integer(sum(fixedAlog)),
     NfixedB=as.integer(sum(!is.na(itemSetup$B))),
     NfixedC=as.integer(sum(!is.na(itemSetup$C))),
     NfixedD=as.integer(sum(!is.na(itemSetup$D))),
-    NfixedAbility=as.integer(sum(!is.na(unlist(AbilitySetup[,scaleIndex$original,with=FALSE])))),
-    whichfixedA=array(as.integer(which(fixedAlog == 1L))),
-    whichfixedB=array(as.integer(which(!is.na(itemSetup$B)))),
-    whichfixedC=array(as.integer(which(!is.na(itemSetup$C)))),
-    whichfixedD=array(as.integer(which(!is.na(itemSetup$D)))),
     fixedAlog=array(as.integer(fixedAlog)),
     fixedB=array(as.integer((!is.na(itemSetup$B)))),
     fixedClogit=array(as.integer((!is.na(itemSetup$C)))),
     fixedDlogit=array(as.integer((!is.na(itemSetup$D)))),
-    whichnotfixedA=array(as.integer(which(fixedAlog == 0L))),
-    whichnotfixedB=array(as.integer(which(is.na(itemSetup$B)))),
-    whichnotfixedC=array(as.integer(which(is.na(itemSetup$C)))),
-    whichnotfixedD=array(as.integer(which(is.na(itemSetup$D)))),
-    Abilityparsindex=array(as.integer(unlist(Abilityparsindex)),c(Nsubs,Nscales)),
     fixedAbilityLogical=array(unlist(fixedAbilityLogical),c(Nsubs,Nscales)),
-    Abilityparsscaleindex=array(as.integer(Abilityparsscaleindex)),
-    start=1L,
-    end=as.integer(nrow(dat)),
     trainingLogical=trainingLogical,
     score=array(as.integer(dat[[scoreref.]])),
-    incorrect=array(as.integer(which(dat[[scoreref.]]==0))),
     item = array(dat[[itemref.]]),
-    itemMean = dat$itemMean[!duplicated(dat[[itemref.]])],
-    personMean = dat$personMean[!duplicated(dat[[idref.]])],
     scale=array(dat[[scaleref.]]),
     Adata=Adata,
     Bdata=array(itemSetup$Bdata),
@@ -2459,11 +2162,8 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     fixedCMean=as.integer(!'C' %in% estMeans || pl < 3 || !any(is.na(itemSetup$C))),
     fixedDMean=as.integer(!'D' %in% estMeans || pl < 4 || !any(is.na(itemSetup$D))),
     fixedAbilityMean=as.integer(!'Ability' %in% estMeans & !'ability' %in% estMeans),
-    rowIndexPar=0L,
-    originalRow=array(as.integer(dat[["__bigIRT_input_row__"]])),
-    doGenQuant=0L,
-    doRowEff=as.integer(identical(marginalApprox, "laplace"))
-  ))
+    originalRow=array(as.integer(dat[["__bigIRT_input_row__"]]))
+  )
 
   sdat$freeAref=array(as.integer(cumsum(1-as.numeric(sdat$fixedAlog))))
   sdat$freeBref=array(as.integer(cumsum(1-as.numeric(sdat$fixedB))))
@@ -2519,635 +2219,563 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     fit
   }
 
-  JMLfit <- function(est, sdat, ebayes=FALSE, fit=NA,narrowPriors=FALSE,...){
-    skipebayes <- FALSE
-
-    message(paste0(ifelse(narrowPriors,'Narrow priors ', ifelse(ebayes,'Empirical Bayes ','Free estimation ')),'step...'))
-
-    if(!all(is.na(fit))){
-      sdat$Adata = if(!is.null(dim(fit$pars$A)) && length(dim(fit$pars$A)) == 2){
-        a_matrix_to_vector(fit$pars$A)
-      } else {
-        fit$pars$A
-      }
-      sdat$Bdata = fit$pars$B
-      sdat$Cdata = fit$pars$C
-      sdat$Ddata = fit$pars$D
-      sdat$Abilitydata = fit$pars$Ability
-      if(!ebayes) init = fit$optim$par
-    }
-
-    if(ebayes){
-      sdat$dopriors <- 1L
-
-      if(pl > 1 &&  length(fit$pars$invspApars) > 2){
-        if(sdat$fixedAMean ==0) sdat$invspAMeandat <- mean(fit$pars$invspApars[!fit$pars$invspApars %in% boxplot.stats(fit$pars$invspApars)$out] ) #mean(afunci(fit$pars$A))
-        sdat$invspASD <- sd(fit$pars$invspApars[!fit$pars$invspApars %in% boxplot.stats(fit$pars$invspApars)$out])*ebayesmultiplier+1e-5 #afunci(fit$pars$A)
-      }
-
-      if(length(fit$pars$Bpars) > 2){
-        if(sdat$fixedBMean ==0) sdat$BMeandat <- mean(fit$pars$Bpars[!fit$pars$Bpars %in% boxplot.stats(fit$pars$Bpars)$out])
-        sdat$BSDx <- sd(fit$pars$Bpars[!fit$pars$Bpars %in% boxplot.stats(fit$pars$Bpars)$out])*ebayesmultiplier+1e-5
-      }
-
-      if(pl > 2 && length(fit$pars$logitCpars) > 2){
-        if(sdat$fixedCMean ==0) sdat$logitCMeandat <- mean(fit$pars$logitCpars[!fit$pars$logitCpars %in% boxplot.stats(fit$pars$logitCpars)$out]) #mean(cfunci(fit$pars$C+1e-8))
-        sdat$logitCSD <- sd(fit$pars$logitCpars[!fit$pars$logitCpars %in% boxplot.stats(fit$pars$logitCpars)$out],na.rm=TRUE) * ebayesmultiplier+1e-5 #sd(cfunci(fit$pars$C+1e-8),na.rm=TRUE)*ebayesmultiplier+1e-5
-      }
-
-      if(pl > 3 && length(fit$pars$logitDpars) > 2){
-        if(sdat$fixedDMean ==0)  sdat$logitDMeandat <- mean(fit$pars$logitDpars[!fit$pars$logitDpars %in% boxplot.stats(fit$pars$logitDpars)$out]) #mean(cfunci(fit$pars$C+1e-8))
-        sdat$logitDSD <- sd(fit$pars$logitDpars[!fit$pars$logitDpars %in% boxplot.stats(fit$pars$logitDpars)$out],na.rm=TRUE) * ebayesmultiplier+1e-5 #sd(cfunci(fit$pars$C+1e-8),na.rm=TRUE)*ebayesmultiplier+1e-5
-      }
-
-      # sdat$fixedAMean <- 1L
-      # init=NA
-
-      if(length(fit$pars$Abilitypars) > 2){
-
-        sdat$AbilityMeandat <- array(sapply(1:Nscales,function(x){
-          mean(fit$pars$Abilitypars[sdat$Abilityparsscaleindex %in% x][
-            !fit$pars$Abilitypars[sdat$Abilityparsscaleindex %in% x] %in%
-              boxplot.stats(fit$pars$Abilitypars[sdat$Abilityparsscaleindex %in% x])$out])
-        }))
-
-        sdat$AbilitySD <- array(sapply(1:Nscales,function(x){
-          sd(fit$pars$Abilitypars[sdat$Abilityparsscaleindex %in% x][
-            !fit$pars$Abilitypars[sdat$Abilityparsscaleindex %in% x] %in%
-              boxplot.stats(fit$pars$Abilitypars[sdat$Abilityparsscaleindex %in% x])$out],na.rm=TRUE)
-        })) * ebayesmultiplier + 1e-5
-
-        sdat$AbilityCorr= cor(fit$pars$Ability) #inconsistency here -- based on overall ability, rather than conditional ability as for sd / mean.
-      }
-      if(any(is.na(c(sdat$BSDx,sdat$invspASD,sdat$logitCSD,sdat$AbilitySD)))){
-        skipebayes <- TRUE
-        warning('NA when computing item sd parameters, ebayes set to FALSE')
-      }
-    }
-
-    if(narrowPriors){
-      sdat$dopriors <- 1L
-      sdat$ASD <- .1
-      # sdat$BSDx <- 1
-      sdat$logitCSD <- .01
-      sdat$logitDSD <- .01
-      # sdat$AbilitySD <- array(1,sdat$Nscales)
-    }
-    if(!skipebayes) fit <- optimIRT(standata=sdat,Niter=iter,cores=cores,init = init,...)
-    fit <- apply_fit_dimnames(fit)
-
-    return(list(fit=fit,sdat=sdat))
-  }
-
   rm(dat)
 
-  JMLseq <- list()
-  if(carefulfit) JMLseq[[1]] <- list(est=c('A','B','C','D','Ability'),ebayes=FALSE,narrowPriors=TRUE)
-  JMLseq[[length(JMLseq)+1]] <- list(est=c('A','B','C','D','Ability'),ebayes=FALSE,narrowPriors=FALSE)
-  if(ebayes) JMLseq[[length(JMLseq)+1]] <- list(est=c('A','B','C',',D','Ability'),ebayes=TRUE,narrowPriors=FALSE)
-
-  fit <- NA
-  if(!identical(marginalApprox, "laplace")){
-    for(i in 1:length(JMLseq)){
-      if(i < length(JMLseq)) tol= basetol*ifelse(JMLseq[[i]]$narrowPriors,100,10) else tol = basetol
-      fit <- JMLfit(est = JMLseq[[i]]$est,sdat = sdat, ebayes=JMLseq[[i]]$ebayes,
-        fit = fit,
-        narrowPriors = JMLseq[[i]]$narrowPriors,
-        tol=tol,...)
-      sdat <- fit$sdat
-      fit <- fit$fit
-    }
+  ## ---- Estimation -------------------------------------------------------
+  ## Both estimators optimise the item-side parameters -- item parameters,
+  ## their covariate coefficients and means, the person-covariate
+  ## coefficients and the ability mean -- with every person's mode solved
+  ## inside each evaluation (bigIRT_laplace_optimize_direct). They differ only
+  ## in the objective: the Laplace marginal, or the joint posterior profiled
+  ## over the persons (R/mapBackend.R). Everything else -- the optimiser, the
+  ## empirical-Bayes rounds, the certificate, the output -- is shared.
+  ##
+  ## With every ability fixed there is nothing to integrate over: the two
+  ## objectives are then the same function up to a constant, and the joint one
+  ## is the cheaper to evaluate.
+  if(identical(estimator, "laplace") && !any(sdat$fixedAbilityLogical == 0L)){
+    warning("marginalApprox = \"laplace\" found no free ability parameters, so there is ",
+      "nothing to integrate over; fitting the joint mode (marginalApprox = \"map\") instead.",
+      call. = FALSE)
+    estimator <- "map"
   }
+  isMAP <- identical(estimator, "map")
+  verbose <- as.integer(verbose)
+  collectDirectDiag <- isTRUE(laplaceDiagnostics) || isTRUE(laplacePlot)
+  RcppParallel::setThreadOptions(numThreads = max(1L, as.integer(cores)))
+  laplace_trace <- function(level, ...){
+    if(verbose >= level) message(...)
+  }
+  direct_plot_callback <- if(isTRUE(laplacePlot)) {
+    function(history){
+      diagdf <- data.table::rbindlist(history, fill = TRUE)
+      bigIRT_plot_laplace_diag_df(diagdf)
+      bigIRT_refresh_plot_device()
+    }
+  } else NULL
+  wall_time_sec <- function() as.numeric(proc.time()[["elapsed"]])
+  if(isTRUE(estimateAbilityCorr) && sdat$Nscales <= 1L){
+    warning("estimateAbilityCorr ignored for unidimensional fits.", call. = FALSE)
+    estimateAbilityCorr <- FALSE
+  }
+  estimateAbilityCorr <- isTRUE(estimateAbilityCorr)
+  ## The joint mode cannot estimate it; see the note at the end of
+  ## R/mapBackend.R for what was tried and how each attempt failed.
+  if(estimateAbilityCorr && isMAP)
+    stop("estimateAbilityCorr = TRUE needs marginalApprox = \"laplace\". Joint MAP sets the ",
+      "latent scale from the priors rather than the data -- its loadings come out inflated and ",
+      "its abilities shrunk -- and no correlation estimated alongside it is consistent: as a ",
+      "parameter of the joint objective it runs to the boundary, and by EM it is biased ",
+      "towards zero. Fix AbilityCorr instead, or fit with the Laplace estimator.", call. = FALSE)
+  ## Estimating the latent correlation needs the person posterior covariances:
+  ## the gradient's M-step-like term is an average second moment, and the modes
+  ## alone are shrunk and would understate (or, under a correlated prior,
+  ## overstate) it.
+  if(estimateAbilityCorr) laplaceKeepCovariance <- TRUE
 
-  if(identical(marginalApprox, "laplace") && length(which(sdat$Abilityparsindex > 0)) > 0){
-    ## Item and person predictors are both fine here. A guard here used to
-    ## refuse both: item beta gradients agree with finite differences to about
-    ## 2e-9, so refusing them only pushed item-covariate models onto the
-    ## slower path for no reason, and the ability_beta gradient -- which
-    ## really was wrong, its ratio against finite differences wandering
-    ## between .04 and 3.1 rather than sitting at any constant -- has since
-    ## been fixed (see CLAUDE.md, "Plausible output is not evidence", and
-    ## test-personPreds.R / test-within-person-covariates.R).
-    optimdots <- list(...)
-    laplaceVerbose <- if("verbose" %in% names(optimdots)) as.integer(optimdots$verbose) else 0L
-    collectDirectDiag <- isTRUE(laplaceDiagnostics) || isTRUE(laplacePlot)
-    if(requireNamespace("RcppParallel", quietly = TRUE)) RcppParallel::setThreadOptions(numThreads = max(1L, as.integer(cores)))
-    laplace_trace <- function(level, ...){
-      if(laplaceVerbose >= level) message(...)
-    }
-    direct_plot_callback <- if(isTRUE(laplacePlot)) {
-      function(history){
-        diagdf <- data.table::rbindlist(history, fill = TRUE)
-        bigIRT_plot_laplace_diag_df(diagdf)
-        bigIRT_refresh_plot_device()
-      }
-    } else NULL
-    wall_time_sec <- function() as.numeric(proc.time()[["elapsed"]])
-    estimateAbilityCorrRequested <- isTRUE(estimateAbilityCorr)
-    estimateAbilityCorr <- estimateAbilityCorrRequested && sdat$Nscales > 1L
-    if(isTRUE(estimateAbilityCorr) && !isTRUE(laplaceKeepCovariance)){
-      laplaceKeepCovariance <- TRUE
-    }
-    if(isTRUE(estimateAbilityCorrRequested) && sdat$Nscales <= 1L){
-      warning("estimateAbilityCorr ignored for unidimensional fits.")
-      estimateAbilityCorr <- FALSE
-    }
+  state <- bigIRT_laplace_initial_state(sdat, eps = laplaceJitter, corr_paramization = laplaceCorrParam)
+  priorPrecision <- bigIRT_laplace_prior_mats(sdat, jitter = laplaceJitter)$precision_array
+  laplace_trace(1, sprintf(
+    "%s: starting prior-anchored fit with %d persons, %d items, %d dimensions, max_iter=%d.",
+    if(isMAP) "Joint MAP" else "Laplace", sdat$Nsubs, sdat$Nitems, sdat$Nscales, laplaceOuterIter
+  ))
+  t_direct <- wall_time_sec()
+  ## Quadrature refinement of the final pass; see laplaceRefine.
+  free_asymptotes <- (sdat$Nitems - sdat$NfixedC) > 0 || (sdat$Nitems - sdat$NfixedD) > 0
+  ## "auto": with free asymptotes, quadrature at every dimension (the
+  ## anchored-ANOVA rule beyond three); without, nothing at one dimension,
+  ## quadrature at two and three, second-order Laplace beyond. Not
+  ## quasi-Monte Carlo: at 256 points in nine dimensions a
+  ## refinement held on fixed points was measured running away (693
+  ## evaluations, correlations 100 SE off) -- the optimiser finds parameters
+  ## a few points favour -- and 1,024 points still sat up to 1.6 SE from
+  ## 4,096. The second-order correction is deterministic and cannot be
+  ## exploited that way.
+  ## Measured against 9^K product-rule optima (dev/optim/mdim_lowk.R,
+  ## mdim_refine.R), in standard errors of the loadings:
+  ##   2PL  K = 1: Laplace 0.03 off -- nothing to refine.
+  ##   2PL  K = 2..9: Laplace -0.12 to -0.22 on average; second-order
+  ##        Laplace within 0.02, stable (the curvature is always positive),
+  ##        at about Laplace's own cost.
+  ##   3PL  K = 1: Laplace +0.5; K = 2 and 3: -1.1 to -1.4 on average, up
+  ##        to 4. The product rule with 7 (K = 2) or 5 (K = 3) nodes a
+  ##        dimension is within 0.1; second-order Laplace diverged on one of
+  ##        two such fits, its correction unbounded where the 3PL curvature
+  ##        is not positive.
+  ##   3PL  K = 5 and 9: Laplace -1.1 to -1.6 on average, up to 7 (loadings
+  ##        16% low at K = 9). Second-order Laplace and fixed QMC points
+  ##        were exploited (49 and 145 SE off); the anchored-ANOVA expansion
+  ##        in low-dimensional quadrature rules (bigIRT_anova_rule,
+  ##        dev/optim/pairs_fit.R) was not: at K = 9 within 0.5 SE, at 10
+  ##        times Laplace's time and a twelfth of the reference's.
+  ##   4PL  K = 5: Laplace up to 13 SE off; the same rule within 2.
+  ## The 2PL figures above had every person answer many items. With two or
+  ## three responses per person and dimension (the paper's Study 2, K = 3,
+  ## priors on) second-order Laplace sat off the quadrature optimum in every
+  ## fit -- primary loadings RMSE .283 against .235, all of 40 replications
+  ## -- and at 1,350 persons 2 to 4 per cent of fits certified a spurious
+  ## optimum with one item at a discrimination of 4 to 10, where quadrature
+  ## put it at 1.6 and an EM fit at under 2; plain Laplace did the same. So
+  ## up to K = 3, where product rules are cheap (four to five times the
+  ## default's former cost there), the 2PL is finished by quadrature as well.
+  ## Beyond three the anchored-ANOVA rule costs about four times
+  ## second-order Laplace at K = 9, which stays the default there.
+  ##
+  ## The same choice gives the marginal likelihood reported for a joint-MAP
+  ## fit (below), which has no marginal of its own to refine.
+  auto_kind <- if(free_asymptotes) "agq" else if(sdat$Nscales == 1L) "none" else
+    if(sdat$Nscales <= 3L) "agq" else "laplace2"
+  marginal_kind <- switch(laplaceRefine, none = "none", agq = "agq", laplace2 = "laplace2",
+    auto = auto_kind)
+  marginal_rule <- switch(marginal_kind, none = NULL,
+    agq = bigIRT_agq_rules(sdat$Nscales, nodes = agqNodes, points = agqPoints),
+    laplace2 = structure(list(desc = "laplace2"), class = "bigIRT_laplace2"))
+  agq_rule <- if(isMAP) NULL else marginal_rule
+  ## The ability-mean, ability-beta and correlation gradients of the Laplace
+  ## objective all carry an adjoint term built from H_i^-1, so each of them
+  ## needs the posterior covariances retained whether or not the caller asked
+  ## for them; the joint objective's gradients need none. The empirical-Bayes
+  ## update reads them under either.
+  keepCovariance <- isTRUE(laplaceKeepCovariance) ||
+    (!isMAP && (sdat$NpersonPreds > 0L || sdat$fixedAbilityMean == 0L)) ||
+    (isTRUE(ebayes) && identical(ebayesMethod, "laplace"))
+  certifySpec <- if(isFALSE(laplaceCertify) || is.null(laplaceCertify)) NULL else
+    list(route = if(isTRUE(laplaceCertify) || identical(laplaceCertify, "fast")) "fast" else "exact",
+      budget = if(is.numeric(laplaceCertify))
+        max(0, as.numeric(laplaceCertify)[1], na.rm = TRUE) else Inf,
+      tolerance = 10 * laplaceTol,
+      ## So that a verdict naming items names them as the data did.
+      item_labels = bigIRT_index_labels(itemIndex),
+      scale_labels = bigIRT_index_labels(scaleIndex))
 
-    state <- bigIRT_laplace_initial_state(sdat, eps = laplaceJitter, corr_paramization = laplaceCorrParam)
-    priorInfo <- bigIRT_laplace_prior_mats(sdat, jitter = laplaceJitter)
-    priorPrecision <- priorInfo$precision_array
-    laplace_trace(1, sprintf(
-      "Direct Laplace: starting prior-anchored fit with %d persons, %d items, %d dimensions, max_iter=%d.",
-      sdat$Nsubs, sdat$Nitems, sdat$Nscales, laplaceOuterIter
-    ))
-    t_direct <- wall_time_sec()
-    ## Empirical Bayes: refit, update the prior hyperparameters from the fit,
-    ## repeat until they stop moving. ebayes was previously accepted and then
-    ## ignored on this backend -- it appears only in JMLfit and the
-    ## ebayesFromFixed block -- so a fit asking for it silently got fixed priors.
-    eb_rounds <- if(isTRUE(ebayes)) max(1L, as.integer(ebayesIter)) else 0L
-    eb_trace <- list()
-    ## Quadrature refinement of the final pass; see laplaceRefine.
-    free_asymptotes <- (sdat$Nitems - sdat$NfixedC) > 0 || (sdat$Nitems - sdat$NfixedD) > 0
-    ## "auto": with free asymptotes, quadrature at every dimension (the
-    ## anchored-ANOVA rule beyond three); without, nothing at one dimension,
-    ## quadrature at two and three, second-order Laplace beyond. Not
-    ## quasi-Monte Carlo: at 256 points in nine dimensions a
-    ## refinement held on fixed points was measured running away (693
-    ## evaluations, correlations 100 SE off) -- the optimiser finds parameters
-    ## a few points favour -- and 1,024 points still sat up to 1.6 SE from
-    ## 4,096. The second-order correction is deterministic and cannot be
-    ## exploited that way.
-    ## Measured against 9^K product-rule optima (dev/optim/mdim_lowk.R,
-    ## mdim_refine.R), in standard errors of the loadings:
-    ##   2PL  K = 1: Laplace 0.03 off -- nothing to refine.
-    ##   2PL  K = 2..9: Laplace -0.12 to -0.22 on average; second-order
-    ##        Laplace within 0.02, stable (the curvature is always positive),
-    ##        at about Laplace's own cost.
-    ##   3PL  K = 1: Laplace +0.5; K = 2 and 3: -1.1 to -1.4 on average, up
-    ##        to 4. The product rule with 7 (K = 2) or 5 (K = 3) nodes a
-    ##        dimension is within 0.1; second-order Laplace diverged on one of
-    ##        two such fits, its correction unbounded where the 3PL curvature
-    ##        is not positive.
-    ##   3PL  K = 5 and 9: Laplace -1.1 to -1.6 on average, up to 7 (loadings
-    ##        16% low at K = 9). Second-order Laplace and fixed QMC points
-    ##        were exploited (49 and 145 SE off); the anchored-ANOVA expansion
-    ##        in low-dimensional quadrature rules (bigIRT_anova_rule,
-    ##        dev/optim/pairs_fit.R) was not: at K = 9 within 0.5 SE, at 10
-    ##        times Laplace's time and a twelfth of the reference's.
-    ##   4PL  K = 5: Laplace up to 13 SE off; the same rule within 2.
-    ## The 2PL figures above had every person answer many items. With two or
-    ## three responses per person and dimension (the paper's Study 2, K = 3,
-    ## priors on) second-order Laplace sat off the quadrature optimum in every
-    ## fit -- primary loadings RMSE .283 against .235, all of 40 replications
-    ## -- and at 1,350 persons 2 to 4 per cent of fits certified a spurious
-    ## optimum with one item at a discrimination of 4 to 10, where quadrature
-    ## put it at 1.6 and an EM fit at under 2; plain Laplace did the same. So
-    ## up to K = 3, where product rules are cheap (four to five times the
-    ## default's former cost there), the 2PL is finished by quadrature as well.
-    ## Beyond three the anchored-ANOVA rule costs about four times
-    ## second-order Laplace at K = 9, which stays the default there.
-    auto_kind <- if(free_asymptotes) "agq" else if(sdat$Nscales == 1L) "none" else
-      if(sdat$Nscales <= 3L) "agq" else "laplace2"
-    refine_kind <- switch(laplaceRefine, none = "none", agq = "agq", laplace2 = "laplace2",
-      auto = auto_kind)
-    agq_rule <- switch(refine_kind, none = NULL,
-      agq = bigIRT_agq_rules(sdat$Nscales, nodes = agqNodes, points = agqPoints),
-      laplace2 = structure(list(desc = "laplace2"), class = "bigIRT_laplace2"))
-    eb_prev_delta <- setNames(rep(NA_real_, 4L), c("B", "C", "D", "A"))
-    eb_prev_sdat <- sdat
-    eb_frozen <- character(0)
-    for(eb_round in seq_len(eb_rounds + 1L)){
-    directFit <- bigIRT_laplace_optimize_direct(
-      state = state,
-      sdat = sdat,
-      prior_precision = priorPrecision,
-      ## Intermediate empirical-Bayes rounds only need a fit good enough to
-      ## estimate the hyperparameters from, so they run at a coarse tolerance;
-      ## the last pass through the loop updates nothing and is the one whose
-      ## estimates are returned, so it runs at the requested tolerance. Fitting
-      ## is 96 per cent of an ebayes run -- the hyperparameter step itself is
-      ## under 1 -- so this is where the time is.
+  ## One pass: a fit at the current hyperparameters, from `state`. `final` is
+  ## the pass whose estimates are returned. Intermediate empirical-Bayes rounds
+  ## only need a fit good enough to estimate the hyperparameters from, so they
+  ## run at a coarse tolerance and unpolished; fitting is 96 per cent of an
+  ## ebayes run -- the hyperparameter step itself is under 1 -- so this is where
+  ## the time is. The certificate belongs to the final pass. Every
+  ## empirical-Bayes round is refined too, at its coarse tolerance: the
+  ## hyperparameter update reads the item estimates, and Laplace-biased ones
+  ## bias it (on a 2,000-item 3PL, Laplace-only rounds took the guessing SD to
+  ## 1.83 on one dataset, refined rounds to 0.46). options(bigIRT.agq_eb_rounds
+  ## = FALSE) refines the final pass only.
+  fit_pass <- function(state, sdat, final){
+    pp <- bigIRT_laplace_prior_mats(sdat, jitter = laplaceJitter)$precision_array
+    fit <- bigIRT_laplace_optimize_direct(
+      state = state, sdat = sdat, prior_precision = pp,
       niter = max(2L, as.integer(laplaceOuterIter)),
-      ## Intermediate empirical-Bayes rounds are thrown away, so only the final
-      ## pass is worth polishing.
-      polish_steps = if(eb_rounds > 0L && eb_round <= eb_rounds) 0L else as.integer(laplacePolish),
-      tol = if(eb_rounds > 0L && eb_round <= eb_rounds) laplaceTol * ebayesCoarse else laplaceTol,
-      jitter = laplaceJitter,
-      person_tol = laplacePersonTol,
-      ## The ability-mean, ability-beta and correlation gradients all carry an
-      ## adjoint term built from H_i^-1, so each of them needs the posterior
-      ## covariances retained whether or not the caller asked for them.
-      keep_covariance = isTRUE(laplaceKeepCovariance) || isTRUE(estimateAbilityCorr) ||
-        sdat$NpersonPreds > 0L || sdat$fixedAbilityMean == 0L ||
-        (isTRUE(ebayes) && identical(ebayesMethod, "laplace")),
-      cores = cores,
-      estimateAbilityCorr = estimateAbilityCorr,
-      corr_paramization = laplaceCorrParam,
-      collect_history = collectDirectDiag,
-      plot_callback = direct_plot_callback,
-      plot_every = laplacePlotEvery,
-      verbose = laplaceVerbose,
+      polish_steps = if(final) as.integer(laplacePolish) else 0L,
+      tol = if(final) laplaceTol else laplaceTol * ebayesCoarse,
+      jitter = laplaceJitter, person_tol = laplacePersonTol,
+      keep_covariance = keepCovariance, cores = cores,
+      estimateAbilityCorr = estimateAbilityCorr, corr_paramization = laplaceCorrParam,
+      collect_history = collectDirectDiag, plot_callback = direct_plot_callback,
+      plot_every = laplacePlotEvery, verbose = verbose,
       trace_fn = function(msg) laplace_trace(2, msg),
-      stochastic = isTRUE(optimdots$stochastic),
       optimizer = laplaceOptimizer,
-      ## Every empirical-Bayes round is refined too, at its coarse tolerance.
-      ## The hyperparameter update reads the item estimates, and Laplace-biased
-      ## ones bias it: on a 2,000-item 3PL, Laplace-only rounds took the
-      ## guessing SD to 1.83 on one dataset (0.55 and 0.64 on two others, by
-      ## way of the spurious optimum above), and refined rounds to 0.46, 0.44
-      ## and 0.46. Costs 15 to 25 per cent there. options(bigIRT.agq_eb_rounds
-      ## = FALSE) refines the final pass only.
-      refine = if(eb_rounds > 0L && eb_round <= eb_rounds &&
-        !isTRUE(getOption("bigIRT.agq_eb_rounds", TRUE))) NULL else agq_rule,
-      ## The certificate belongs to the pass whose estimates are returned.
-      certify = if((eb_rounds > 0L && eb_round <= eb_rounds) || isFALSE(laplaceCertify) ||
-        is.null(laplaceCertify)) NULL else
-        list(route = if(isTRUE(laplaceCertify) || identical(laplaceCertify, "fast")) "fast" else "exact",
-          budget = if(is.numeric(laplaceCertify))
-            max(0, as.numeric(laplaceCertify)[1], na.rm = TRUE) else Inf,
-          tolerance = 10 * laplaceTol,
-          ## So that a verdict naming items names them as the data did.
-          item_labels = bigIRT_index_labels(itemIndex),
-          scale_labels = bigIRT_index_labels(scaleIndex))
-    )
+      refine = if(!final && !isTRUE(getOption("bigIRT.agq_eb_rounds", TRUE))) NULL else agq_rule,
+      certify = if(final) certifySpec, objective = estimator)
+    list(fit = fit, prior_precision = pp)
+  }
 
-      if(eb_round > eb_rounds) break
-      eb_rows <- bigIRT_laplace_row_context(sdat, rows = seq_len(sdat$Nobs))
-      eb_ctx <- bigIRT_laplace_item_context(sdat, row_context = eb_rows)
-      eb_state <- directFit$state
-      eb_theta <- directFit$eval$posterior$theta_mode
-      eb_eff <- bigIRT_laplace_row_effective(state = eb_state, sdat = sdat,
-        thetaBase = eb_theta, rows = eb_rows$rows, context = eb_rows)
-      eb_before <- c(sdat$BSDx[1], sdat$logitCSD[1], sdat$logitDSD[1], sdat$invspASD[1])
-      eb_prev_sdat <- sdat
-      eb_upd <- if(identical(ebayesMethod, "laplace")){
-        ## Laplace over the item block: a real objective in the hyperparameters
-        ## rather than a moment rule, so it neither floors nor runs away.
-        bigIRT_laplace_hyper_update(state = eb_state, sdat = sdat, context = eb_ctx,
-          row_effective = eb_eff, row_context = eb_rows,
-          posterior = directFit$eval$posterior, thetaBase = eb_theta,
-          fixed = eb_frozen)
-      } else {
-        bigIRT_laplace_eb_update(state = eb_state, sdat = sdat, context = eb_ctx,
-          row_effective = eb_eff, row_context = eb_rows, thetaBase = eb_theta,
-          multiplier = ebayesmultiplier, min_sd = ebayesMinSD)
+  ## Empirical Bayes: refit, update the prior hyperparameters from the fit,
+  ## repeat until they stop moving.
+  eb_rounds <- if(isTRUE(ebayes)) max(1L, as.integer(ebayesIter)) else 0L
+  eb_trace <- list()
+  eb_prev_delta <- setNames(rep(NA_real_, 4L), c("B", "C", "D", "A"))
+  eb_prev_sdat <- sdat
+  eb_frozen <- character(0)
+  for(eb_round in seq_len(eb_rounds + 1L)){
+    pass <- fit_pass(state, sdat, final = !(eb_rounds > 0L && eb_round <= eb_rounds))
+    directFit <- pass$fit
+    priorPrecision <- pass$prior_precision
+
+    if(eb_round > eb_rounds) break
+    eb_rows <- bigIRT_laplace_row_context(sdat, rows = seq_len(sdat$Nobs))
+    eb_ctx <- bigIRT_laplace_item_context(sdat, row_context = eb_rows)
+    eb_state <- directFit$state
+    eb_theta <- directFit$eval$posterior$theta_mode
+    eb_eff <- bigIRT_laplace_row_effective(state = eb_state, sdat = sdat,
+      thetaBase = eb_theta, rows = eb_rows$rows, context = eb_rows)
+    eb_before <- c(sdat$BSDx[1], sdat$logitCSD[1], sdat$logitDSD[1], sdat$invspASD[1])
+    eb_prev_sdat <- sdat
+    eb_upd <- if(identical(ebayesMethod, "laplace")){
+      ## Laplace over the item block: a real objective in the hyperparameters
+      ## rather than a moment rule, so it neither floors nor runs away.
+      bigIRT_laplace_hyper_update(state = eb_state, sdat = sdat, context = eb_ctx,
+        row_effective = eb_eff, row_context = eb_rows,
+        posterior = directFit$eval$posterior, thetaBase = eb_theta,
+        fixed = eb_frozen)
+    } else {
+      bigIRT_laplace_eb_update(state = eb_state, sdat = sdat, context = eb_ctx,
+        row_effective = eb_eff, row_context = eb_rows, thetaBase = eb_theta,
+        multiplier = ebayesmultiplier, min_sd = ebayesMinSD)
+    }
+    sdat <- eb_upd$sdat
+    eb_after <- c(sdat$BSDx[1], sdat$logitCSD[1], sdat$logitDSD[1], sdat$invspASD[1])
+    eb_trace[[eb_round]] <- list(round = eb_round, before = eb_before, after = eb_after,
+      iters = as.integer(directFit$optim$iter %||% NA_integer_))
+    laplace_trace(1, sprintf("Empirical Bayes round %d: B %.3f->%.3f  logitC %.3f->%.3f  logitD %.3f->%.3f  invspA %.3f->%.3f",
+      eb_round, eb_before[1], eb_after[1], eb_before[2], eb_after[2],
+      eb_before[3], eb_after[3], eb_before[4], eb_after[4]))
+    ## The next round starts from this one's estimates, person modes included.
+    state <- eb_state
+    state$AbilityBase <- eb_theta
+    ## Each round maximises a proper objective, but against the fit from the
+    ## round before, so this is a fixed-point iteration and individual blocks
+    ## can stop contracting. A 4PL upper asymptote pinned by few responses
+    ## does exactly that: its SD descends, turns, and climbs away while
+    ## difficulty and discrimination are still converging nicely. Freeze only
+    ## the block that reverses and let the others carry on.
+    ## Reversal, not rate, is the signal. A converging block can take a bigger
+    ## step than the one before -- difficulty ran 10 -> 1.93 -> 1.25 -> 0.78,
+    ## converging the whole way -- so freezing on a grown step throws away
+    ## good rounds. A block that has been shrinking and turns around is the
+    ## one that is not going to settle.
+    delta <- eb_after - eb_before
+    rel_vec <- abs(delta) / pmax(abs(eb_before), 1e-8)
+    names(rel_vec) <- names(delta) <- c("B", "C", "D", "A")
+    reversed <- is.finite(eb_prev_delta) & sign(delta) != sign(eb_prev_delta) &
+      rel_vec > 1e-3
+    grew <- names(rel_vec)[reversed]
+    if(length(grew)){
+      laplace_trace(1, sprintf("Empirical Bayes: freezing %s at round %d (update reversed direction)",
+        paste(grew, collapse = ", "), eb_round))
+      for(nm in grew){
+        fld <- switch(nm, B = "BSDx", C = "logitCSD", D = "logitDSD", A = "invspASD")
+        sdat[[fld]] <- eb_prev_sdat[[fld]]
       }
-      sdat <- eb_upd$sdat
-      eb_after <- c(sdat$BSDx[1], sdat$logitCSD[1], sdat$logitDSD[1], sdat$invspASD[1])
-      eb_trace[[eb_round]] <- list(round = eb_round, before = eb_before, after = eb_after,
-        iters = as.integer(directFit$optim$iter %||% NA_integer_))
-      laplace_trace(1, sprintf("Empirical Bayes round %d: B %.3f->%.3f  logitC %.3f->%.3f  logitD %.3f->%.3f  invspA %.3f->%.3f",
-        eb_round, eb_before[1], eb_after[1], eb_before[2], eb_after[2],
-        eb_before[3], eb_after[3], eb_before[4], eb_after[4]))
-      ## Priors changed, so the person prior has to be rebuilt with them.
-      priorInfo <- bigIRT_laplace_prior_mats(sdat, jitter = laplaceJitter)
-      priorPrecision <- priorInfo$precision_array
-      state <- eb_state
-      ## Each round maximises a proper objective, but against the fit from the
-      ## round before, so this is a fixed-point iteration and individual blocks
-      ## can stop contracting. A 4PL upper asymptote pinned by few responses
-      ## does exactly that: its SD descends, turns, and climbs away while
-      ## difficulty and discrimination are still converging nicely. Freeze only
-      ## the block that reverses and let the others carry on.
-      ## Reversal, not rate, is the signal. A converging block can take a bigger
-      ## step than the one before -- difficulty ran 10 -> 1.93 -> 1.25 -> 0.78,
-      ## converging the whole way -- so freezing on a grown step throws away
-      ## good rounds. A block that has been shrinking and turns around is the
-      ## one that is not going to settle.
-      delta <- eb_after - eb_before
-      rel_vec <- abs(delta) / pmax(abs(eb_before), 1e-8)
-      names(rel_vec) <- names(delta) <- c("B", "C", "D", "A")
-      reversed <- is.finite(eb_prev_delta) & sign(delta) != sign(eb_prev_delta) &
-        rel_vec > 1e-3
-      grew <- names(rel_vec)[reversed]
-      if(length(grew)){
-        laplace_trace(1, sprintf("Empirical Bayes: freezing %s at round %d (update reversed direction)",
-          paste(grew, collapse = ", "), eb_round))
-        for(nm in grew){
-          fld <- switch(nm, B = "BSDx", C = "logitCSD", D = "logitDSD", A = "invspASD")
-          sdat[[fld]] <- eb_prev_sdat[[fld]]
+      eb_frozen <- union(eb_frozen, grew)
+    }
+    eb_prev_delta <- delta
+    ## Settling early must not skip the final pass. Every empirical-Bayes
+    ## round runs at a deliberately coarse tolerance -- `ebayesCoarse` times
+    ## the requested one, a thousandfold by default -- because its only job is
+    ## to give the hyperparameter step something to work from. The pass that
+    ## follows the last update is the one whose estimates are returned, and it
+    ## runs at the requested tolerance with the Newton polish. Breaking out
+    ## here returned a fit optimised a thousand times too loosely and never
+    ## polished, which left it just the wrong side of the gradient tolerance.
+    ## Retiring the budget instead makes the next iteration that final pass.
+    if(max(rel_vec[setdiff(names(rel_vec), eb_frozen)], 0) < 1e-3 ||
+       length(eb_frozen) >= length(rel_vec)) eb_rounds <- eb_round
+  }
+  directSec <- wall_time_sec() - t_direct
+  state <- directFit$state
+  sdat$AbilityCorr <- if(!is.null(state$AbilityCorr)) state$AbilityCorr else sdat$AbilityCorr
+  finalPosterior <- directFit$eval$posterior
+  state$AbilityBase <- finalPosterior$theta_mode
+
+  ## A joint-MAP fit has no marginal likelihood of its own, but the model it
+  ## estimates does: the same one the Laplace estimator fits. Its value at the
+  ## MAP estimates, by the approximation laplaceRefine would use, is what
+  ## logLik() and the information criteria report, so that fits by either
+  ## estimator are compared on one scale. The MAP estimates are not the ones
+  ## that maximise it, which is the honest comparison to make.
+  mapMarginal <- if(isMAP) tryCatch(bigIRT_map_marginal(state = state, sdat = sdat,
+    prior_precision = priorPrecision, theta_init = finalPosterior$theta_mode,
+    rule = marginal_rule, cores = cores, jitter = laplaceJitter,
+    person_tol = laplacePersonTol, corr_paramization = laplaceCorrParam),
+    error = function(e){
+      warning("The marginal likelihood at the MAP estimates could not be evaluated (",
+        conditionMessage(e), "); logLik() and the information criteria are unavailable ",
+        "for this fit.", call. = FALSE)
+      list(value = NA_real_, item_prior = NA_real_, approx = NA_character_)
+    }) else NULL
+
+  fit <- list(pars = list(), optim = list(), prepared = sdat)
+  fit$pars <- bigIRT_laplace_constrained_pars(state, sdat, posterior = finalPosterior)
+  fit$optim <- list(
+    method = estimator,
+    logLik = directFit$eval$value,
+    par = directFit$optim$par,
+    target_evals = directFit$optim$target_evals,
+    masked_grad_norm = directFit$optim$masked_grad_norm,
+    grad = directFit$optim$grad,
+    layout = directFit$optim$layout,
+    iter = directFit$optim$iter,
+    terminate = directFit$optim$terminate
+  )
+  fit$prepared <- sdat
+  fit <- apply_fit_dimnames(fit)
+  if(isTRUE(keepInternals)){
+    ## What the information and certificate code need to rebuild the
+    ## objective at the fitted point (bigIRT_direct_eval_from_fit).
+    fit$internals <- list(sdat = sdat, state = state,
+      priorPrecision = priorPrecision, thetaBase = state$AbilityBase)
+  }
+  fit$personPosterior <- list(
+    mode = finalPosterior$theta_mode,
+    precision = finalPosterior$precision,
+    precision_chol = finalPosterior$precision_chol,
+    logdet_precision = finalPosterior$logdet_precision,
+    covariance = if("covariance" %in% names(finalPosterior)) finalPosterior$covariance else NULL,
+    niter = finalPosterior$niter,
+    converged = finalPosterior$converged
+  )
+  direct_terminate <- if(!is.null(directFit$optim$terminate$what)) as.character(directFit$optim$terminate$what) else "unknown"
+  directDiag <- if(length(directFit$history)) data.table::rbindlist(directFit$history, fill = TRUE) else NULL
+  ## The tolerance applies to a gradient measured against the objective, not
+  ## to a raw norm whose size tracks the number of items and responses.
+  directTolScale <- match.arg(laplaceTolScale, c("relative", "per_obs"))
+  directGradDenom <- switch(directTolScale,
+    relative = max(1, abs(if(!is.null(directFit$optim$logLik)) directFit$optim$logLik else 1)),
+    per_obs  = max(1, as.numeric(sdat$Nobs)))
+  directGradScaled <- directFit$optim$masked_grad_norm / max(1, directGradDenom)
+  ## The Fisher-shaped optimiser stops on the predicted gain, in nats, which
+  ## is the scale-free criterion; a scaled gradient norm is not, and can sit
+  ## just above laplaceGradTol at a point with 1e-4 nats left to gain.
+  ## "noise_floor" is the same verdict reached when the line search can no
+  ## longer resolve the objective's own warm-start noise.
+  gain_converged <- identical(laplaceOptimizer, "fisher") &&
+    direct_terminate %in% c("gain", "noise_floor")
+  strict_direct <- isTRUE(directGradScaled < laplaceGradTol) || gain_converged
+  ## Where the curvature certificate reached a verdict (R/certify.R), it
+  ## decides `converged`: the rules above are estimates of the same quantity
+  ## and cannot see a transform that has gone flat. NA keeps them.
+  certificate <- directFit$optim$certificate
+  cert_converged <- if(is.null(certificate)) NA else bigIRT_certificate_converged(certificate$status)
+  ## Item parameters that have run off along their item's own ray
+  ## (R/certify.R): the certificate's table, which also says what pulling
+  ## each item back gained, or the backend's screen where no certificate
+  ## reached one. NULL when nothing ran off.
+  diverged <- certificate$diverged
+  if(is.null(diverged) && length(directFit$optim$runaway$item))
+    diverged <- cbind(bigIRT_runaway_named(directFit$optim$runaway, sdat$Nscales,
+      bigIRT_index_labels(itemIndex), bigIRT_index_labels(scaleIndex))[,
+      c("item", "parameter", "value")], pullback_gain = NA_real_)
+  ## A single scaled norm sums over every parameter, so it cannot say which
+  ## block is responsible and it hides one stuck parameter among thousands.
+  ## It also lets a small block with a naturally larger gradient dominate the
+  ## whole criterion.  The gate stays as it is -- changing it would move every
+  ## existing fit -- but the shape of the gradient is recorded, and the case
+  ## that actually caused trouble is flagged: a handful of parameters holding
+  ## most of the norm.
+  dgrad <- directFit$optim$grad
+  dlay <- directFit$optim$layout
+  block_tab <- NULL; block_imbalance <- FALSE
+  if(length(dgrad) && !is.null(dlay)){
+    sl <- dlay[vapply(dlay, length, integer(1)) > 0L]
+    if(length(sl)){
+      bn <- vapply(sl, function(i) sum(dgrad[i]^2), numeric(1))
+      block_tab <- data.frame(block = names(sl),
+        n = vapply(sl, length, integer(1)),
+        norm = sqrt(bn),
+        max_abs = vapply(sl, function(i) max(abs(dgrad[i])), numeric(1)),
+        share = if(sum(bn) > 0) bn / sum(bn) else bn * 0,
+        row.names = NULL, stringsAsFactors = FALSE)
+      ## Share alone is not the diagnosis. Once the fit is at its optimum the
+      ## polish has driven the item blocks to nearly zero, so whatever it does
+      ## not touch holds most of a negligible total -- true, and meaningless.
+      ## Imbalance is only worth flagging when it is what stopped the fit.
+      block_imbalance <- !isTRUE(strict_direct) &&
+        any(block_tab$share > 0.5 & block_tab$n < 0.05 * length(dgrad))
+    }
+  }
+  fit$laplaceStatus <- list(
+    estimator = estimator,
+    ## The certificate's verdict when it reached one (R/certify.R), the
+    ## optimiser's own labels otherwise.
+    converged = if(is.na(cert_converged)) strict_direct && is.null(diverged) else cert_converged,
+    reason = if(!is.na(cert_converged)) certificate$status else
+      if(!is.null(diverged)) "diverged" else
+      if(gain_converged) "predicted_gain" else
+      if(isTRUE(strict_direct)) "approx_gradient" else
+      if(direct_terminate %in% c("linesearch_failed", "not_descent")) "linesearch_failed" else
+      "max_iter",
+    certificate = certificate,
+    diverged = diverged,
+    outer_iters = if(!is.null(directFit$optim$iter)) directFit$optim$iter else max(2L, as.integer(laplaceOuterIter)),
+    beta_frozen = bigIRT_laplace_beta_frozen(sdat, directFit$optim$layout),
+    initialized_from = "prior_anchored",
+    direct_objective = TRUE,
+    gradient_type = if(isMAP) "map_envelope" else
+      if(!is.null(directFit$optim$refine)) "agq_fisher_identity" else
+      "mode_adjusted_laplace_item_gradient",
+    estimated_corr = estimateAbilityCorr,
+    last_item_grad_norm = directFit$optim$masked_grad_norm,
+    last_item_grad_scaled = directGradScaled,
+    max_abs_grad = if(length(dgrad)) max(abs(dgrad)) else NA_real_,
+    rms_grad = if(length(dgrad)) sqrt(mean(dgrad^2)) else NA_real_,
+    gradient_blocks = block_tab,
+    block_imbalance = block_imbalance,
+    polish_steps = if(!is.null(directFit$optim$polish$steps)) directFit$optim$polish$steps else 0L,
+    polish_gain = if(!is.null(directFit$optim$polish$gain)) directFit$optim$polish$gain else 0,
+    item_prior_value = if(!is.null(directFit$eval$prior$value))
+      as.numeric(directFit$eval$prior$value) else NA_real_,
+    ## log|P0| of the ability prior the objective was evaluated with, for
+    ## logLik()'s normalising constant: normalise = TRUE rewrites
+    ## abilityPrior$precision for the new metric, and reading the constant
+    ## from there moved logLik() under a pure reparameterisation.
+    ability_prior_logdet = as.numeric(determinant(as.matrix(directFit$eval$prior_mats$precision),
+      logarithm = TRUE)$modulus),
+    ## The objective `logLik` (and fit$optim$logLik) is the value of: "map"
+    ## for the joint posterior, "agq" or "laplace2" when a Laplace fit was
+    ## refined (laplaceRefine), "laplace" otherwise. For a refined fit
+    ## laplace_logLik is the Laplace objective at the Laplace optimum the
+    ## refinement started from.
+    marginal = if(isMAP) "map" else
+      if(!is.null(directFit$optim$refine) && !isTRUE(directFit$optim$refine$reverted))
+      directFit$optim$refine$approx else "laplace",
+    ## MAP only: the marginal log-likelihood at the MAP estimates (see
+    ## above), the item prior density it includes, and the approximation.
+    marginal_logLik = mapMarginal$value,
+    marginal_item_prior = mapMarginal$item_prior,
+    marginal_approx = mapMarginal$approx,
+    ## Persons whose curvature was clipped to positive semidefinite at the
+    ## fitted point (each is counted by the mode solve, and by the Laplace
+    ## item kernel when that runs).
+    clipped_partial = if(isMAP) NA_integer_ else
+      as.integer(directFit$optim$clip_final[["partial"]] %||% NA_integer_),
+    clipped_full = if(isMAP) NA_integer_ else
+      as.integer(directFit$optim$clip_final[["full"]] %||% NA_integer_),
+    agq_rule = if(!is.null(directFit$optim$refine)) directFit$optim$refine$rule else NULL,
+    ## Persons where the second-order correction itself (not the mode
+    ## solve) was skipped, e.g. for a numerically unusable local expansion.
+    ## NA when laplace2 did not run at all (no refinement, or agq instead).
+    laplace2_skipped = directFit$eval$laplace2_skipped,
+    laplace_logLik = if(isMAP) NA_real_ else
+      if(!is.null(directFit$optim$refine)) directFit$optim$refine$laplace_value else directFit$eval$value,
+    refine = directFit$optim$refine,
+    item_grad_denominator = directGradDenom,
+    last_outer_seconds = directSec,
+    ebayes_rounds = length(eb_trace),
+    ebayes_iters = sum(vapply(eb_trace, function(z) z$iters, integer(1)), na.rm = TRUE) +
+      as.integer(directFit$optim$iter %||% 0L),
+    optimizer_terminate = direct_terminate,
+    optimizer_terminate_value = if(!is.null(directFit$optim$terminate$val)) directFit$optim$terminate$val else NA_real_,
+    ## Which curvature shaped the Fisher optimiser: "dense", "blockdiag", or
+    ## NA when the mize path ran.
+    optimizer_metric = if(!is.null(directFit$optim$metric)) as.character(directFit$optim$metric) else NA_character_
+  )
+  ## Warn when partial clipping is pervasive at the fitted point of a
+  ## Laplace fit, where it zeroes part of the log-determinant gradient. A
+  ## Laplace evaluation clips each such person twice (mode solve, item
+  ## kernel), hence the halving. Quadrature and MAP fits do not use that
+  ## gradient.
+  clip_persons <- fit$laplaceStatus$clipped_partial / 2
+  if(identical(fit$laplaceStatus$marginal, "laplace") && isTRUE(clip_persons > max(10, 0.01 * sdat$Nsubs)))
+    warning(sprintf(paste0("Laplace curvature is partially clipped for %d of %d persons at the ",
+      "fitted point, where the log-determinant gradient is then approximate; treat item ",
+      "standard errors and convergence diagnostics with care, or refit with ",
+      "laplaceRefine = \"agq\"."), as.integer(clip_persons), as.integer(sdat$Nsubs)), call. = FALSE)
+  ## The certificate's verdict, in its own words: a gradient means nothing
+  ## to anyone reading it, the objective still available does.
+  if(isFALSE(cert_converged))
+    warning(sprintf("The fit is not certified as converged (%s): %s. See laplaceStatus$certificate.",
+      certificate$status, certificate$reason), call. = FALSE)
+  ## Without a certificate's verdict the run-off items still say so.
+  if(is.na(cert_converged) && !is.null(diverged))
+    warning(sprintf(paste0("Item parameters have run off, beyond %s logits per ability SD: %s. ",
+      "Their values are arbitrary points on a ray to infinity; item priors (priors = TRUE) ",
+      "would bound them. See laplaceStatus$diverged."), format(bigIRT_runaway_slope()),
+      bigIRT_name_list(paste0("item ", diverged$item, " ", diverged$parameter, " = ",
+        bigIRT_format_each(diverged$value)))), call. = FALSE)
+  if(identical(certificate$status, "saturated"))
+    message("Boundary estimate: ", certificate$reason, ".")
+  if((identical(certificate$status, "skipped") && isTRUE(certificate$budget > 0)) ||
+     identical(certificate$status, "unknown"))
+    message("Convergence was not certified: ", certificate$reason, ".")
+  fit$abilityPrior <- list(
+    sd = as.numeric(sdat$AbilitySD),
+    corr = as.matrix(if(!is.null(state$AbilityCorr)) state$AbilityCorr else sdat$AbilityCorr),
+    precision = as.matrix(directFit$eval$prior_mats$precision),
+    estimated_corr = estimateAbilityCorr
+  )
+  if(isTRUE(collectDirectDiag)){
+    if(length(directFit$history)){
+      fit$laplaceDiagnostics <- directDiag
+      fit$laplaceDiagnostics[, strictCriterion :=
+        itemGradNorm / max(1, directGradDenom) < laplaceGradTol]
+      fit$laplaceDiagnostics[, strictStreak := {
+        out <- integer(.N)
+        streak <- 0L
+        for(ii in seq_len(.N)){
+          streak <- if(isTRUE(strictCriterion[ii])) streak + 1L else 0L
+          out[ii] <- streak
         }
-        eb_frozen <- union(eb_frozen, grew)
-        priorInfo <- bigIRT_laplace_prior_mats(sdat, jitter = laplaceJitter)
-        priorPrecision <- priorInfo$precision_array
-      }
-      eb_prev_delta <- delta
-      ## Settling early must not skip the final pass. Every empirical-Bayes
-      ## round runs at a deliberately coarse tolerance -- `ebayesCoarse` times
-      ## the requested one, a thousandfold by default -- because its only job is
-      ## to give the hyperparameter step something to work from. The pass that
-      ## follows the last update is the one whose estimates are returned, and it
-      ## runs at the requested tolerance with the Newton polish. Breaking out
-      ## here returned a fit optimised a thousand times too loosely and never
-      ## polished, which left it just the wrong side of the gradient tolerance.
-      ## Retiring the budget instead makes the next iteration that final pass.
-      if(max(rel_vec[setdiff(names(rel_vec), eb_frozen)], 0) < 1e-3 ||
-         length(eb_frozen) >= length(rel_vec)) eb_rounds <- eb_round
+        out
+      }]
+      fit$laplaceDiagnostics[, `:=`(
+        stabilityCriterion = NA,
+        recentObjectiveRange = NA_real_,
+        recentGradRelChange = NA_real_,
+        recentItemStepMean = NA_real_,
+        recentPersonStepMean = NA_real_,
+        stabilityStreak = NA_integer_
+      )]
+    } else {
+      fit$laplaceDiagnostics <- data.table::data.table(
+        outerIter = 1L,
+        objective = directFit$eval$value,
+        relativeImprove = NA_real_,
+        itemStepRms = NA_real_,
+        personStepRms = NA_real_,
+        itemGradNorm = directFit$optim$masked_grad_norm,
+        meanPosteriorSD = if("covariance" %in% names(finalPosterior)) mean(bigIRT_posterior_sd_vector(finalPosterior$covariance), na.rm = TRUE) else NA_real_,
+        maxPosteriorSD = if("covariance" %in% names(finalPosterior)) max(unlist(lapply(seq_len(dim(finalPosterior$covariance)[3]), function(ii) sqrt(pmax(diag(finalPosterior$covariance[,,ii]), 0)))), na.rm = TRUE) else NA_real_,
+        personConverged = all(finalPosterior$converged),
+        personStepSec = NA_real_,
+        itemStepSec = directSec,
+        refreshStepSec = NA_real_,
+        objectiveEvalSec = NA_real_,
+        outerIterSec = directSec,
+        itemTargetEvals = directFit$optim$target_evals,
+        itemMaskedGradNorm = directFit$optim$masked_grad_norm,
+        optimizerIter = if(!is.null(directFit$optim$iter)) directFit$optim$iter else NA_integer_,
+        optimizerTerminate = direct_terminate,
+        optimizerTerminateValue = if(!is.null(directFit$optim$terminate$val)) directFit$optim$terminate$val else NA_real_,
+        personMeanNiter = mean(finalPosterior$niter, na.rm = TRUE),
+        personMaxNiter = max(finalPosterior$niter, na.rm = TRUE),
+        strictCriterion = fit$laplaceStatus$converged,
+        stabilityCriterion = NA,
+        recentObjectiveRange = NA_real_,
+        recentGradRelChange = NA_real_,
+        recentItemStepMean = NA_real_,
+        recentPersonStepMean = NA_real_,
+        strictStreak = if(fit$laplaceStatus$converged) 1L else 0L,
+        stabilityStreak = NA_integer_
+      )
     }
-    directSec <- wall_time_sec() - t_direct
-    state <- directFit$state
-    sdat$AbilityCorr <- if(!is.null(state$AbilityCorr)) state$AbilityCorr else sdat$AbilityCorr
-    finalPosterior <- directFit$eval$posterior
-    state$AbilityBase <- finalPosterior$theta_mode
-
-    fit <- list(pars = list(), optim = list(), prepared = sdat)
-    fit$pars <- bigIRT_laplace_constrained_pars(state, sdat, posterior = finalPosterior)
-    fit$optim <- list(
-      method = "laplace",
-      logLik = directFit$eval$value,
-      par = directFit$optim$par,
-      target_evals = directFit$optim$target_evals,
-      masked_grad_norm = directFit$optim$masked_grad_norm,
-      grad = directFit$optim$grad,
-      layout = directFit$optim$layout,
-      iter = directFit$optim$iter,
-      terminate = directFit$optim$terminate
-    )
-    fit$prepared <- sdat
-    fit <- apply_fit_dimnames(fit)
-    if(isTRUE(keepInternals)){
-      ## Same payload the alternating backend used to expose, so callers that
-      ## reach in for sdat/state to drive the backend directly keep working.
-      fit$internals <- list(sdat = sdat, state = state,
-        priorPrecision = priorPrecision, thetaBase = state$AbilityBase)
+    if(isTRUE(laplacePlot)){
+      try({
+        bigIRT_plot_laplace_diag_df(fit$laplaceDiagnostics)
+        bigIRT_refresh_plot_device()
+      }, silent = TRUE)
     }
-    fit$personPosterior <- list(
-      mode = finalPosterior$theta_mode,
-      precision = finalPosterior$precision,
-      precision_chol = finalPosterior$precision_chol,
-      logdet_precision = finalPosterior$logdet_precision,
-      covariance = if("covariance" %in% names(finalPosterior)) finalPosterior$covariance else NULL,
-      niter = finalPosterior$niter,
-      converged = finalPosterior$converged
-    )
-    direct_terminate <- if(!is.null(directFit$optim$terminate$what)) as.character(directFit$optim$terminate$what) else "unknown"
-    directDiag <- if(length(directFit$history)) data.table::rbindlist(directFit$history, fill = TRUE) else NULL
-    ## Same rescaling as the blockwise path: the tolerance applies to a
-    ## gradient measured against the objective, not to a raw norm whose size
-    ## tracks the number of items and responses.
-    ## laplaceTolScale is only match.arg'd further down, inside the blockwise
-    ## branch; the direct path runs first and would otherwise switch on the
-    ## whole default vector.
-    directTolScale <- match.arg(laplaceTolScale, c("relative", "per_obs"))
-    directGradDenom <- switch(directTolScale,
-      relative = max(1, abs(if(!is.null(directFit$optim$logLik)) directFit$optim$logLik else 1)),
-      per_obs  = max(1, as.numeric(sdat$Nobs)))
-    directGradScaled <- directFit$optim$masked_grad_norm / max(1, directGradDenom)
-    ## The Fisher-shaped optimiser stops on the predicted gain, in nats, which
-    ## is the scale-free criterion; a scaled gradient norm is not, and can sit
-    ## just above laplaceGradTol at a point with 1e-4 nats left to gain.
-    ## "noise_floor" is the same verdict reached when the line search can no
-    ## longer resolve the objective's own warm-start noise.
-    gain_converged <- identical(laplaceOptimizer, "fisher") &&
-      direct_terminate %in% c("gain", "noise_floor")
-    strict_direct <- isTRUE(directGradScaled < laplaceGradTol) || gain_converged
-    ## Where the curvature certificate reached a verdict (R/certify.R), it
-    ## decides `converged`: the rules above are estimates of the same quantity
-    ## and cannot see a transform that has gone flat. NA keeps them.
-    certificate <- directFit$optim$certificate
-    cert_converged <- if(is.null(certificate)) NA else bigIRT_certificate_converged(certificate$status)
-    ## Item parameters that have run off along their item's own ray
-    ## (R/certify.R): the certificate's table, which also says what pulling
-    ## each item back gained, or the backend's screen where no certificate
-    ## reached one. NULL when nothing ran off.
-    diverged <- certificate$diverged
-    if(is.null(diverged) && length(directFit$optim$runaway$item))
-      diverged <- cbind(bigIRT_runaway_named(directFit$optim$runaway, sdat$Nscales,
-        bigIRT_index_labels(itemIndex), bigIRT_index_labels(scaleIndex))[,
-        c("item", "parameter", "value")], pullback_gain = NA_real_)
-    ## A single scaled norm sums over every parameter, so it cannot say which
-    ## block is responsible and it hides one stuck parameter among thousands.
-    ## It also lets a small block with a naturally larger gradient dominate the
-    ## whole criterion.  The gate stays as it is -- changing it would move every
-    ## existing fit -- but the shape of the gradient is recorded, and the case
-    ## that actually caused trouble is flagged: a handful of parameters holding
-    ## most of the norm.
-    dgrad <- directFit$optim$grad
-    dlay <- directFit$optim$layout
-    block_tab <- NULL; block_imbalance <- FALSE
-    if(length(dgrad) && !is.null(dlay)){
-      sl <- dlay[vapply(dlay, length, integer(1)) > 0L]
-      if(length(sl)){
-        bn <- vapply(sl, function(i) sum(dgrad[i]^2), numeric(1))
-        block_tab <- data.frame(block = names(sl),
-          n = vapply(sl, length, integer(1)),
-          norm = sqrt(bn),
-          max_abs = vapply(sl, function(i) max(abs(dgrad[i])), numeric(1)),
-          share = if(sum(bn) > 0) bn / sum(bn) else bn * 0,
-          row.names = NULL, stringsAsFactors = FALSE)
-        ## Share alone is not the diagnosis. Once the fit is at its optimum the
-        ## polish has driven the item blocks to nearly zero, so whatever it does
-        ## not touch holds most of a negligible total -- true, and meaningless.
-        ## Imbalance is only worth flagging when it is what stopped the fit.
-        block_imbalance <- !isTRUE(strict_direct) &&
-          any(block_tab$share > 0.5 & block_tab$n < 0.05 * length(dgrad))
-      }
-    }
-    fit$laplaceStatus <- list(
-      ## The certificate's verdict when it reached one (R/certify.R), the
-      ## optimiser's own labels otherwise.
-      converged = if(is.na(cert_converged)) strict_direct && is.null(diverged) else cert_converged,
-      reason = if(!is.na(cert_converged)) certificate$status else
-        if(!is.null(diverged)) "diverged" else
-        if(gain_converged) "predicted_gain" else
-        if(isTRUE(strict_direct)) "approx_gradient" else
-        if(direct_terminate %in% c("linesearch_failed", "not_descent")) "linesearch_failed" else
-        "max_iter",
-      certificate = certificate,
-      diverged = diverged,
-      outer_iters = if(!is.null(directFit$optim$iter)) directFit$optim$iter else max(2L, as.integer(laplaceOuterIter)),
-      beta_frozen = bigIRT_laplace_beta_frozen(sdat, directFit$optim$layout),
-      initialized_from = "prior_anchored",
-      direct_objective = TRUE,
-      gradient_type = if(!is.null(directFit$optim$refine)) "agq_fisher_identity" else
-        "mode_adjusted_laplace_item_gradient",
-      estimated_corr = estimateAbilityCorr,
-      last_item_grad_norm = directFit$optim$masked_grad_norm,
-      last_item_grad_scaled = directGradScaled,
-      max_abs_grad = if(length(dgrad)) max(abs(dgrad)) else NA_real_,
-      rms_grad = if(length(dgrad)) sqrt(mean(dgrad^2)) else NA_real_,
-      gradient_blocks = block_tab,
-      block_imbalance = block_imbalance,
-      polish_steps = if(!is.null(directFit$optim$polish$steps)) directFit$optim$polish$steps else 0L,
-      polish_gain = if(!is.null(directFit$optim$polish$gain)) directFit$optim$polish$gain else 0,
-      item_prior_value = if(!is.null(directFit$eval$prior$value))
-        as.numeric(directFit$eval$prior$value) else NA_real_,
-      ## "agq" when the final pass was refined by quadrature (laplaceRefine);
-      ## logLik is then the quadrature marginal, and laplace_logLik the Laplace
-      ## objective at the Laplace optimum the refinement started from.
-      marginal = if(!is.null(directFit$optim$refine) && !isTRUE(directFit$optim$refine$reverted))
-        directFit$optim$refine$approx else "laplace",
-      ## Persons whose curvature was clipped to positive semidefinite at the
-      ## fitted point (each is counted by the mode solve, and by the Laplace
-      ## item kernel when that runs).
-      clipped_partial = as.integer(directFit$optim$clip_final[["partial"]] %||% NA_integer_),
-      clipped_full = as.integer(directFit$optim$clip_final[["full"]] %||% NA_integer_),
-      agq_rule = if(!is.null(directFit$optim$refine)) directFit$optim$refine$rule else NULL,
-      ## Persons where the second-order correction itself (not the mode
-      ## solve) was skipped, e.g. for a numerically unusable local expansion.
-      ## NA when laplace2 did not run at all (no refinement, or agq instead).
-      laplace2_skipped = directFit$eval$laplace2_skipped,
-      laplace_logLik = if(!is.null(directFit$optim$refine)) directFit$optim$refine$laplace_value else directFit$eval$value,
-      refine = directFit$optim$refine,
-      item_grad_denominator = directGradDenom,
-      last_outer_seconds = directSec,
-      ebayes_rounds = length(eb_trace),
-      ebayes_iters = sum(vapply(eb_trace, function(z) z$iters, integer(1)), na.rm = TRUE) +
-        as.integer(directFit$optim$iter %||% 0L),
-      optimizer_terminate = direct_terminate,
-      optimizer_terminate_value = if(!is.null(directFit$optim$terminate$val)) directFit$optim$terminate$val else NA_real_,
-      ## Which curvature shaped the Fisher optimiser: "dense", "blockdiag", or
-      ## NA when the mize path ran.
-      optimizer_metric = if(!is.null(directFit$optim$metric)) as.character(directFit$optim$metric) else NA_character_
-    )
-    ## Warn when partial clipping is pervasive at the fitted point of a
-    ## Laplace fit, where it zeroes part of the log-determinant gradient. A
-    ## Laplace evaluation clips each such person twice (mode solve, item
-    ## kernel), hence the halving. Quadrature fits do not use that gradient.
-    clip_persons <- fit$laplaceStatus$clipped_partial / 2
-    if(identical(fit$laplaceStatus$marginal, "laplace") && isTRUE(clip_persons > max(10, 0.01 * sdat$Nsubs)))
-      warning(sprintf(paste0("Laplace curvature is partially clipped for %d of %d persons at the ",
-        "fitted point, where the log-determinant gradient is then approximate; treat item ",
-        "standard errors and convergence diagnostics with care, or refit with ",
-        "laplaceRefine = \"agq\"."), as.integer(clip_persons), as.integer(sdat$Nsubs)), call. = FALSE)
-    ## The certificate's verdict, in its own words: a gradient means nothing
-    ## to anyone reading it, the objective still available does.
-    if(isFALSE(cert_converged))
-      warning(sprintf("The fit is not certified as converged (%s): %s. See laplaceStatus$certificate.",
-        certificate$status, certificate$reason), call. = FALSE)
-    ## Without a certificate's verdict the run-off items still say so.
-    if(is.na(cert_converged) && !is.null(diverged))
-      warning(sprintf(paste0("Item parameters have run off, beyond %s logits per ability SD: %s. ",
-        "Their values are arbitrary points on a ray to infinity; item priors (priors = TRUE) ",
-        "would bound them. See laplaceStatus$diverged."), format(bigIRT_runaway_slope()),
-        bigIRT_name_list(paste0("item ", diverged$item, " ", diverged$parameter, " = ",
-          bigIRT_format_each(diverged$value)))), call. = FALSE)
-    if(identical(certificate$status, "saturated"))
-      message("Boundary estimate: ", certificate$reason, ".")
-    if((identical(certificate$status, "skipped") && isTRUE(certificate$budget > 0)) ||
-       identical(certificate$status, "unknown"))
-      message("Convergence was not certified: ", certificate$reason, ".")
-    fit$abilityPrior <- list(
-      sd = as.numeric(sdat$AbilitySD),
-      corr = as.matrix(if(!is.null(state$AbilityCorr)) state$AbilityCorr else sdat$AbilityCorr),
-      precision = as.matrix(directFit$eval$prior_mats$precision),
-      estimated_corr = estimateAbilityCorr
-    )
-    if(isTRUE(collectDirectDiag)){
-      if(length(directFit$history)){
-        fit$laplaceDiagnostics <- directDiag
-        fit$laplaceDiagnostics[, strictCriterion :=
-          itemGradNorm / max(1, directGradDenom) < laplaceGradTol]
-        fit$laplaceDiagnostics[, strictStreak := {
-          out <- integer(.N)
-          streak <- 0L
-          for(ii in seq_len(.N)){
-            streak <- if(isTRUE(strictCriterion[ii])) streak + 1L else 0L
-            out[ii] <- streak
-          }
-          out
-        }]
-        fit$laplaceDiagnostics[, `:=`(
-          stabilityCriterion = NA,
-          recentObjectiveRange = NA_real_,
-          recentGradRelChange = NA_real_,
-          recentItemStepMean = NA_real_,
-          recentPersonStepMean = NA_real_,
-          stabilityStreak = NA_integer_
-        )]
-      } else {
-        fit$laplaceDiagnostics <- data.table::data.table(
-          outerIter = 1L,
-          objective = directFit$eval$value,
-          relativeImprove = NA_real_,
-          itemStepRms = NA_real_,
-          personStepRms = NA_real_,
-          itemGradNorm = directFit$optim$masked_grad_norm,
-          meanPosteriorSD = if("covariance" %in% names(finalPosterior)) mean(bigIRT_posterior_sd_vector(finalPosterior$covariance), na.rm = TRUE) else NA_real_,
-          maxPosteriorSD = if("covariance" %in% names(finalPosterior)) max(unlist(lapply(seq_len(dim(finalPosterior$covariance)[3]), function(ii) sqrt(pmax(diag(finalPosterior$covariance[,,ii]), 0)))), na.rm = TRUE) else NA_real_,
-          personConverged = all(finalPosterior$converged),
-          personStepSec = NA_real_,
-          itemStepSec = directSec,
-          refreshStepSec = NA_real_,
-          objectiveEvalSec = NA_real_,
-          outerIterSec = directSec,
-          itemTargetEvals = directFit$optim$target_evals,
-          itemMaskedGradNorm = directFit$optim$masked_grad_norm,
-          optimizerIter = if(!is.null(directFit$optim$iter)) directFit$optim$iter else NA_integer_,
-          optimizerTerminate = direct_terminate,
-          optimizerTerminateValue = if(!is.null(directFit$optim$terminate$val)) directFit$optim$terminate$val else NA_real_,
-          personMeanNiter = mean(finalPosterior$niter, na.rm = TRUE),
-          personMaxNiter = max(finalPosterior$niter, na.rm = TRUE),
-          strictCriterion = fit$laplaceStatus$converged,
-          stabilityCriterion = NA,
-          recentObjectiveRange = NA_real_,
-          recentGradRelChange = NA_real_,
-          recentItemStepMean = NA_real_,
-          recentPersonStepMean = NA_real_,
-          strictStreak = if(fit$laplaceStatus$converged) 1L else 0L,
-          stabilityStreak = NA_integer_
-        )
-      }
-      if(isTRUE(laplacePlot)){
-        try({
-          bigIRT_plot_laplace_diag_df(fit$laplaceDiagnostics)
-          bigIRT_refresh_plot_device()
-        }, silent = TRUE)
-      }
-    }
-    if(laplaceVerbose >= 2L){
-      final_t <- directFit$optim$timings
-      laplace_trace(2, sprintf(
-        paste0(
-          "Direct Laplace optimizer summary: iter=%s | terminate=%s | target_evals=%d | ",
-          "person=%.2fs | row=%.2fs | item=%.2fs | post=%.2fs | setup=%.2fs | prior=%.2fs | item_grad=%.2fs | ",
-          "mean_grad=%.2fs | corr_grad=%.2fs | total_eval=%.2fs"
-        ),
-        if(!is.null(directFit$optim$iter)) as.character(directFit$optim$iter) else "NA",
-        direct_terminate,
-        directFit$optim$target_evals,
-        if(!is.null(final_t$personKernelSec)) final_t$personKernelSec else NA_real_,
-        if(!is.null(final_t$rowAssemblySec)) final_t$rowAssemblySec else NA_real_,
-        if(!is.null(final_t$itemKernelSec)) final_t$itemKernelSec else if(!is.null(final_t$kernelSec)) final_t$kernelSec else NA_real_,
-        if(!is.null(final_t$postKernelSec)) final_t$postKernelSec else NA_real_,
-        if(!is.null(final_t$setupSec)) final_t$setupSec else NA_real_,
-        if(!is.null(final_t$priorSec)) final_t$priorSec else NA_real_,
-        if(!is.null(final_t$itemGradSec)) final_t$itemGradSec else NA_real_,
-        if(!is.null(final_t$abilityMeanSec)) final_t$abilityMeanSec else 0,
-        if(!is.null(final_t$corrGradSec)) final_t$corrGradSec else 0,
-        if(!is.null(final_t$totalSec)) final_t$totalSec else NA_real_
-      ))
-    }
-    laplace_trace(1, sprintf(
-      "Direct Laplace: obj=%.6f | approx_grad=%.3g | target_evals=%d | person_conv=%s | t(total)=%.2fs",
-      directFit$eval$value,
-      directFit$optim$masked_grad_norm,
+  }
+  if(verbose >= 2L){
+    final_t <- directFit$optim$timings
+    laplace_trace(2, sprintf(
+      paste0(
+        "Optimizer summary: iter=%s | terminate=%s | target_evals=%d | ",
+        "person=%.2fs | row=%.2fs | item=%.2fs | post=%.2fs | setup=%.2fs | prior=%.2fs | item_grad=%.2fs | ",
+        "mean_grad=%.2fs | corr_grad=%.2fs | total_eval=%.2fs"
+      ),
+      if(!is.null(directFit$optim$iter)) as.character(directFit$optim$iter) else "NA",
+      direct_terminate,
       directFit$optim$target_evals,
-      if(all(finalPosterior$converged)) "yes" else "no",
-      directSec
+      final_t$personKernelSec %||% NA_real_,
+      final_t$rowAssemblySec %||% NA_real_,
+      final_t$itemKernelSec %||% final_t$kernelSec %||% NA_real_,
+      final_t$postKernelSec %||% NA_real_,
+      final_t$setupSec %||% NA_real_,
+      final_t$priorSec %||% NA_real_,
+      final_t$itemGradSec %||% NA_real_,
+      final_t$abilityMeanSec %||% 0,
+      final_t$corrGradSec %||% 0,
+      final_t$totalSec %||% NA_real_
     ))
   }
-
-  # If laplace_direct is requested but there are no free ability parameters,
-  # skip the Laplace optimization and fall back to the legacy JML
-  # parameterization so output construction does not crash.
-  if(all(is.na(fit)) && identical(marginalApprox, "laplace")){
-    if(!is.null(sdat$signedA))
-      stop("marginalApprox='laplace' found no free ability parameters, and the JML path it ",
-        "would fall back to has no signed loadings (signedLoadings).", call. = FALSE)
-    warning("marginalApprox='laplace' requested but no free ability parameters were found; falling back to marginalApprox='none' (JML).")
-    marginalApprox <- "none"
-    for(i in 1:length(JMLseq)){
-      if(i < length(JMLseq)) tol= basetol*ifelse(JMLseq[[i]]$narrowPriors,100,10) else tol = basetol
-      fit <- JMLfit(est = JMLseq[[i]]$est, sdat = sdat, ebayes = JMLseq[[i]]$ebayes,
-        fit = fit,
-        narrowPriors = JMLseq[[i]]$narrowPriors,
-        tol = tol, ...)
-      sdat <- fit$sdat
-      fit <- fit$fit
-    }
-  }
+  laplace_trace(1, sprintf(
+    "%s: obj=%.6f | approx_grad=%.3g | target_evals=%d | person_conv=%s | t(total)=%.2fs",
+    if(isMAP) "Joint MAP" else "Laplace",
+    directFit$eval$value,
+    directFit$optim$masked_grad_norm,
+    directFit$optim$target_evals,
+    if(all(finalPosterior$converged)) "yes" else "no",
+    directSec
+  ))
 
   if(normalise){   #normalise pars
     ## Standardise by the latent distribution of the fitted metric (posterior
@@ -3174,36 +2802,12 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
       fit$pars$B <- normpars$B
       fit$pars$A <- normpars$A
 
-      if(!is.null(fit$personPosterior$mode)){
-        fit$personPosterior$mode <- sweep(fit$personPosterior$mode, 2, normpars$center, "-") %*%
-          normpars$inv_chol / normpars$global_scale
-        fit$personPosterior$mode <- sweep(fit$personPosterior$mode, 2, normpars$latent_shift, "-")
-      }
-      if(!is.null(fit$personPosterior$covariance)){
-        K <- ncol(fit$pars$Ability)
-        U <- normpars$chol_cov
-        Uinv <- normpars$inv_chol
-        scale2 <- normpars$global_scale^2
-        for(ii in seq_len(dim(fit$personPosterior$covariance)[3])){
-          cov_old <- fit$personPosterior$covariance[,,ii]
-          fit$personPosterior$covariance[,,ii] <- t(Uinv) %*% cov_old %*% Uinv / scale2
-        }
-      }
-      if(!is.null(fit$personPosterior$precision)){
-        U <- normpars$chol_cov
-        scale2 <- normpars$global_scale^2
-        for(ii in seq_len(dim(fit$personPosterior$precision)[3])){
-          prec_old <- fit$personPosterior$precision[,,ii]
-          fit$personPosterior$precision[,,ii] <- scale2 * U %*% prec_old %*% t(U)
-        }
-      }
-      if(!is.null(fit$personPosterior$precision_chol) && !is.null(fit$personPosterior$precision)){
-        for(ii in seq_len(dim(fit$personPosterior$precision)[3])){
-          llt <- chol(fit$personPosterior$precision[,,ii])
-          fit$personPosterior$precision_chol[,,ii] <- t(llt)
-          fit$personPosterior$logdet_precision[ii] <- 2 * sum(log(diag(llt)))
-        }
-      }
+      ## The abilities moved as theta' = ((theta - center) inv_chol + shift)
+      ## sign rotation (normaliseMIRT); the rest of the person side follows.
+      SR <- diag(normpars$sign, ncol(fit$pars$Ability)) %*% normpars$rotation
+      fit <- bigIRT_normalise_person_side(fit, center = normpars$center,
+        M = normpars$inv_chol %*% SR / normpars$global_scale,
+        shift = as.numeric(normpars$latent_shift %*% SR))
       if(!is.null(fit$abilityPrior)){
         ## The normalised metric's latent SDs are normaliseScale by
         ## construction; the spread of the transformed point estimates is
@@ -3229,27 +2833,20 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
         )
       }
     } else {
-      for(i in 1:ncol(fit$pars$Ability)){
-        selector <- rownames(fit$pars$B) %in% itemSetup$original[itemSetup$scale %in% i]
-        a_for_scale <- if(!is.null(dim(fit$pars$A)) && length(dim(fit$pars$A)) == 2){
-          fit$pars$A[selector,i]
-        } else {
-          fit$pars$A[selector]
-        }
-
-        normpars <- normaliseIRT(B = fit$pars$B[selector],
-          Ability = fit$pars$Ability[,i],
-          A=a_for_scale,normaliseScale = normaliseScale, normaliseMean = normaliseMean,
-          AbilitySD = latentMoments$sd[i], AbilityMean = latentMoments$mean[i])
-
-        fit$pars$Ability[,i] <- normpars$Ability
-
-        fit$pars$B[selector]  <- normpars$B
-        if(!is.null(dim(fit$pars$A)) && length(dim(fit$pars$A)) == 2){
-          fit$pars$A[selector,i] <-  normpars$A
-        } else {
-          fit$pars$A[selector] <-  normpars$A
-        }
+      ## One dimension (the branch above takes every fit with more).
+      a_scale <- as.numeric(fit$pars$A[, 1])
+      normpars <- normaliseIRT(B = as.numeric(fit$pars$B), Ability = fit$pars$Ability[, 1],
+        A = a_scale, normaliseScale = normaliseScale, normaliseMean = normaliseMean,
+        AbilitySD = latentMoments$sd[1], AbilityMean = latentMoments$mean[1])
+      fit$pars$Ability[, 1] <- normpars$Ability
+      fit$pars$B[] <- normpars$B
+      fit$pars$A[, 1] <- normpars$A
+      fit <- bigIRT_normalise_person_side(fit, center = normpars$center,
+        M = 1 / normpars$scale, shift = normaliseMean)
+      if(!is.null(fit$abilityPrior)){
+        ## As in more dimensions: the normalised latent SD is normaliseScale.
+        fit$abilityPrior$sd <- normaliseScale
+        fit$abilityPrior$precision <- matrix(1 / normaliseScale^2, 1, 1)
       }
     }
   }
@@ -3282,14 +2879,14 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   }
 
   ## Person posterior SDs from the per-person posterior precision, which every
-  ## Laplace fit keeps. They used to come only from the covariance, kept with
-  ## laplaceKeepCovariance = TRUE (or set by the empirical-Bayes rounds), so a
-  ## fit with ebayes = FALSE -- what the paper recommends -- returned no _SD
-  ## columns at all. Not under normalise = TRUE in one dimension, whose
-  ## transform leaves the posterior on the unnormalised metric.
-  if(identical(marginalApprox, "laplace") && is.null(fit$pars$sAbilitySD) &&
-     !is.null(fit$personPosterior$precision) &&
-     (!normalise || ncol(as.matrix(fit$pars$Ability)) > 1L)){
+  ## fit keeps (the curvature at the person's mode, conditional on the item
+  ## parameters, by either estimator). They used to come only from the
+  ## covariance, kept with laplaceKeepCovariance = TRUE (or set by the
+  ## empirical-Bayes rounds), so a fit with ebayes = FALSE -- what the paper
+  ## recommends -- returned no _SD columns at all. Under normalise = TRUE
+  ## they are on the normalised metric (bigIRT_normalise_person_side).
+  if(is.null(fit$pars$sAbilitySD) &&
+     !is.null(fit$personPosterior$precision)){
     P <- fit$personPosterior$precision; K <- ncol(as.matrix(fit$pars$Ability))
     if(length(dim(P)) == 3L && dim(P)[1] == K && dim(P)[3] == nrow(as.matrix(fit$pars$Ability)))
       fit$pars$sAbilitySD <- t(matrix(vapply(seq_len(dim(P)[3]), function(i)
@@ -3297,7 +2894,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   }
   fit$personPars <- data.frame(id=rownames(fit$pars$Ability),fit$pars$Ability)
   colnames(fit$personPars)[1] = id
-  if(identical(marginalApprox, "laplace") && !is.null(fit$pars$sAbilitySD)){
+  if(!is.null(fit$pars$sAbilitySD)){
     abilitySD <- fit$pars$sAbilitySD
     if(is.null(dim(abilitySD))) abilitySD <- matrix(abilitySD, ncol = ncol(fit$pars$Ability))
     colnames(abilitySD) <- paste0(colnames(fit$pars$Ability), "_SD")
@@ -3348,12 +2945,12 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
       c = fit$pars$c_row,
       d = fit$pars$d_row,
       loadings = fit$pars$row_loadings,
-      source = "stan_gq"
+      source = "fit"
     )
   }
 
   fit$call <- match.call()
-  fit$backend <- marginalApprox
+  fit$backend <- estimator
   if(!is.null(fit$laplaceStatus)){
     status <- fit$laplaceStatus
     status$strict_convergence <- isTRUE(status$converged)
@@ -3374,7 +2971,6 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     if(isTRUE(status$numerical_failure)) status$reason <- "numerical_failure"
     status$covariance_retained <- !is.null(fit$personPosterior$covariance)
     status$frozen_effects <- isTRUE(status$beta_frozen)
-    fit$laplaceStatus <- status
     ## A tolerance stop short of the gradient target used to pass in silence:
     ## it is not the iteration limit, not a plateau, and not a numerical
     ## failure, so no branch below claimed it. That is the loudest case there
@@ -3385,6 +2981,7 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
       ## terms, in nats rather than a gradient, and so have run-off items.
       is.na(bigIRT_certificate_converged(status$certificate$status)) &&
       is.null(status$diverged)
+    fit$laplaceStatus <- status
     intolerable_modes <- isTRUE(status$person_mode_failures > 0L)
     if(isTRUE(status$iteration_limit) || intolerable_modes ||
        isTRUE(status$numerical_failure) || isTRUE(status$stalled)){

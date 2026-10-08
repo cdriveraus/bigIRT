@@ -91,8 +91,7 @@ test_that("laplace updates supported person-predictor effects", {
   fit <- fitIRT(
     sim$dat, pl = 2, marginalApprox = "laplace_fast",
     personPreds = c("P1", "P2"), dropPerfectScores = FALSE,
-    normalise = FALSE, cores = 1, laplaceOuterIter = 16,
-    laplaceItemIter = 3, noptimsteps = 6, verbose = 0
+    normalise = FALSE, cores = 1, laplaceOuterIter = 16, verbose = 0
   )
 
   ## The coefficients are optimised jointly with the item block now, so there
@@ -119,8 +118,7 @@ test_that("laplace uses correctly expanded joint covariate rows", {
     dat = sim$dat, pl = 2, marginalApprox = "laplace_fast",
     BitemPreds = "item_x", personPreds = "person_x",
     dropPerfectScores = FALSE, normalise = FALSE, priors = TRUE,
-    ebayes = FALSE, laplaceOuterIter = 12, laplaceItemIter = 3,
-    noptimsteps = 6, verbose = 0, plot = FALSE
+    ebayes = FALSE, laplaceOuterIter = 12, verbose = 0
   )
   fit_one <- do.call(fitIRT, c(fit_args, list(cores = 1L)))
   context <- bigIRT:::bigIRT_laplace_row_context(fit_one$prepared)
@@ -150,7 +148,7 @@ test_that("laplace gradient differentiates through resolved person modes", {
   fit <- fitIRT(sim$dat, pl = 2, cores = 1, priors = TRUE, ebayes = FALSE,
     dropPerfectScores = FALSE, normalise = FALSE,
     marginalApprox = "laplace_direct", estimateAbilityCorr = FALSE,
-    laplaceOuterIter = 2, noptimsteps = 3, verbose = 0, plot = FALSE)
+    laplaceOuterIter = 2, verbose = 0)
   sdat <- fit$prepared
   state <- bigIRT:::bigIRT_laplace_initial_state(sdat)
   layout <- bigIRT:::bigIRT_laplace_direct_layout(sdat, estimateAbilityCorr = FALSE)
@@ -198,9 +196,7 @@ test_that("laplace returns posterior outputs and finite MIRT parameters", {
     normalise = FALSE,
     marginalApprox = "laplace_fast",
     laplaceOuterIter = 3,
-    noptimsteps = 10,
-    verbose = 0,
-    plot = FALSE
+    verbose = 0
   ), "iteration limit")
 
   expect_true(is.list(fit$personPosterior))
@@ -225,12 +221,7 @@ test_that("laplace returns posterior outputs and finite MIRT parameters", {
   expect_false("samples" %in% names(fit$personPosterior))
 })
 
-test_that("laplace does not call the legacy JML optimizer", {
-  local_mocked_bindings(
-    optimIRT = function(...) stop("legacy optimIRT/JML path should not run for laplace_fast"),
-    .package = "bigIRT"
-  )
-
+test_that("laplace reports the iteration limit it stopped at", {
   set.seed(456)
   sim <- bigIRT::simIRT(
     Nsubs = 40,
@@ -251,9 +242,7 @@ test_that("laplace does not call the legacy JML optimizer", {
     normalise = FALSE,
     marginalApprox = "laplace_fast",
     laplaceOuterIter = 1,
-    noptimsteps = 3,
-    verbose = 0,
-    plot = FALSE
+    verbose = 0
   ), "iteration limit")
 
   expect_true(is.list(fit$personPosterior))
@@ -261,12 +250,7 @@ test_that("laplace does not call the legacy JML optimizer", {
   expect_true(isTRUE(fit$laplaceStatus$iteration_limit))
 })
 
-test_that("laplace returns posterior outputs and avoids legacy JML", {
-  local_mocked_bindings(
-    optimIRT = function(...) stop("legacy optimIRT/JML path should not run for laplace_direct"),
-    .package = "bigIRT"
-  )
-
+test_that("laplace returns posterior outputs", {
   set.seed(789)
   sim <- bigIRT::simIRT(
     Nsubs = 40,
@@ -287,9 +271,7 @@ test_that("laplace returns posterior outputs and avoids legacy JML", {
     normalise = FALSE,
     marginalApprox = "laplace_direct",
     laplaceOuterIter = 4,
-    noptimsteps = 4,
-    verbose = 0,
-    plot = FALSE
+    verbose = 0
   )
 
   expect_true(is.list(fit$personPosterior))
@@ -326,8 +308,7 @@ test_that("laplace final person parameters use the resolved posterior modes", {
     marginalApprox = "laplace_direct",
     laplaceOuterIter = 12,
     laplaceGradTol = 1e-3,
-    verbose = 0,
-    plot = FALSE
+    verbose = 0
   )
 
   expect_equal(unname(as.matrix(fit$pars$Ability)), unname(as.matrix(fit$personPosterior$mode)), tolerance = 1e-8)
@@ -358,8 +339,7 @@ test_that("laplace can estimate positive 2D AbilityCorr", {
     estimateAbilityCorr = TRUE,
     laplaceOuterIter = 20,
     laplaceGradTol = 5e-2,
-    verbose = 0,
-    plot = FALSE
+    verbose = 0
   )
 
   expect_true(isTRUE(fit$laplaceStatus$estimated_corr))
@@ -396,8 +376,7 @@ test_that("laplace estimated AbilityCorr is SPD in 3D", {
     estimateAbilityCorr = TRUE,
     laplaceOuterIter = 20,
     laplaceGradTol = 5e-2,
-    verbose = 0,
-    plot = FALSE
+    verbose = 0
   )
 
   eig <- eigen(fit$abilityPrior$corr, symmetric = TRUE, only.values = TRUE)$values
@@ -425,8 +404,7 @@ test_that("laplace ignores AbilityCorr estimation in 1D and FALSE reproduces def
     normalise = TRUE,
     marginalApprox = "laplace_direct",
     laplaceOuterIter = 12,
-    verbose = 0,
-    plot = FALSE
+    verbose = 0
   )
   fit_false <- fitIRT(
     sim$dat,
@@ -439,8 +417,7 @@ test_that("laplace ignores AbilityCorr estimation in 1D and FALSE reproduces def
     marginalApprox = "laplace_direct",
     estimateAbilityCorr = FALSE,
     laplaceOuterIter = 12,
-    verbose = 0,
-    plot = FALSE
+    verbose = 0
   )
   expect_equal(unname(as.matrix(fit_default$pars$A)), unname(as.matrix(fit_false$pars$A)), tolerance = 1e-8)
   expect_equal(unname(as.matrix(fit_default$pars$Ability)), unname(as.matrix(fit_false$pars$Ability)), tolerance = 1e-8)
@@ -457,8 +434,7 @@ test_that("laplace ignores AbilityCorr estimation in 1D and FALSE reproduces def
       marginalApprox = "laplace_direct",
       estimateAbilityCorr = TRUE,
       laplaceOuterIter = 6,
-      verbose = 0,
-      plot = FALSE
+      verbose = 0
     ),
     "ignored for unidimensional fits"
   )

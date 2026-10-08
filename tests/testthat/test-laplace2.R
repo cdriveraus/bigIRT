@@ -10,7 +10,7 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
   l2_evaluator <- function(dat, pl, fit_args = list(), ecorr = FALSE) {
     f <- suppressWarnings(do.call(fitIRT, c(list(dat = dat, pl = pl, cores = 1,
       priors = TRUE, ebayes = FALSE, dropPerfectScores = FALSE, normalise = FALSE,
-      marginalApprox = "laplace", laplaceOuterIter = 2, verbose = 0, plot = FALSE,
+      marginalApprox = "laplace", laplaceOuterIter = 2, verbose = 0,
       keepInternals = TRUE, laplaceRefine = "none"), fit_args)))
     sdat <- f$internals$sdat
     st <- bigIRT:::bigIRT_laplace_initial_state(sdat, eps = 1e-6, corr_paramization = "normalized_chol")

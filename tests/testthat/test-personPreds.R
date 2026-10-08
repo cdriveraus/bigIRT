@@ -39,7 +39,7 @@ if(identical(Sys.getenv("NOT_CRAN"), "true")& .Machine$sizeof.pointer != 4){
 
     # dat$dat[,c('V1','V2')] <- dat$dat[,c('V1','V2')] * 10
 
-    fit <- fitIRT(dat$dat,cores=cores,pl=2,plot=F,verbose=1,priors=T,
+    fit <- fitIRT(dat$dat,cores=cores,pl=2,verbose=1,priors=T,
       personPreds = c('V1','V2'),dropPerfectScores = T,
       # integrateAbility = T,integrateWidth = .5,
       # itemDat = itemdat,

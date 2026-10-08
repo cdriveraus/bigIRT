@@ -19,7 +19,7 @@ What is implemented:
 | | |
 |---|---|
 | **Models** | 1PL, 2PL, 3PL, 4PL |
-| **Estimation** | Marginal ML, Laplace approximation (`marginalApprox = "laplace"`) |
+| **Estimation** | Marginal ML with a Laplace approximation (`marginalApprox = "laplace"`, the default), or the joint posterior mode (`"map"`), with the same arguments and output |
 | **Person covariates** | On ability, varying between *or within* a person |
 | **Item covariates** | On any of the four item parameters, shared or item-specific |
 | **Multiple dimensions** | Several scales at once, confirmatory loading patterns, estimated latent correlation |
@@ -80,7 +80,7 @@ tm <- system.time(
     keepInternals = TRUE,         # keep what standard errors need
     laplaceDiagnostics = TRUE,    # keep the optimiser trace for plotting
     cores = 2, dropPerfectScores = FALSE, normalise = FALSE,
-    verbose = 0, plot = FALSE)
+    verbose = 0)
 )
 
 fit
@@ -155,7 +155,7 @@ the internal person-sorted order. `fit$pars$originalRow` maps between the two.
 | | |
 |---|---|
 | `pl` | 1 to 4. Number of item parameters |
-| `marginalApprox` | `"laplace"`. `"laplace_fast"` and `"laplace_direct"` are accepted names for the same thing |
+| `marginalApprox` | `"laplace"` (default) or `"map"`; see [Joint MAP](#joint-map-marginalapprox--map). `"none"`, `"laplace_fast"` and `"laplace_direct"` are former names |
 | `cores` | Threads used for fitting |
 | `trainingRows` | Rows used for estimation. See [Validation](#validation) |
 | `personPreds` | Column names of ability covariates |
@@ -292,7 +292,7 @@ d[, score := rbinom(.N, 1, 1 / (1 + exp(-A[Item] * (ability - B[Item]))))]
 
 fitcov <- fitIRT(d, pl = 2, cores = 2, marginalApprox = "laplace",
   personPreds = c("ses", "t_dev"),
-  dropPerfectScores = FALSE, normalise = FALSE, verbose = 0, plot = FALSE)
+  dropPerfectScores = FALSE, normalise = FALSE, verbose = 0)
 
 rbind(estimated = drop(fitcov$covariateEffects$Ability), true = c(0.3, 0.4))
 ```
@@ -330,7 +330,7 @@ test_people <- sample(unique(d$id), 300)
 fit_ho <- fitIRT(d, pl = 2, cores = 2, marginalApprox = "laplace",
   personPreds = c("ses", "t_dev"),
   trainingRows = which(!d$id %in% test_people),
-  dropPerfectScores = FALSE, normalise = FALSE, verbose = 0, plot = FALSE)
+  dropPerfectScores = FALSE, normalise = FALSE, verbose = 0)
 
 pmean <- d[, .(ses = mean(ses), t_dev = mean(t_dev)), by = id]
 pmean <- pmean[match(as.integer(fit_ho$personPars$id), pmean$id)]
@@ -351,7 +351,7 @@ compare against:
 ```{r wholeperson-contrast}
 fit_nocov <- fitIRT(d, pl = 2, cores = 2, marginalApprox = "laplace",
   trainingRows = which(!d$id %in% test_people),
-  dropPerfectScores = FALSE, normalise = FALSE, verbose = 0, plot = FALSE)
+  dropPerfectScores = FALSE, normalise = FALSE, verbose = 0)
 
 rbind(
   `with covariates` = unlist(heldoutMetrics(fit_ho))[c("log_loss", "auc")],
@@ -375,7 +375,7 @@ simm <- simIRT(Nsubs = 2500, Nitems = 60, Nscales = 3,
 
 fitm <- fitIRT(simm$dat, pl = 2, cores = 2, marginalApprox = "laplace",
   estimateAbilityCorr = TRUE, ebayes = FALSE,
-  dropPerfectScores = FALSE, normalise = FALSE, verbose = 0, plot = FALSE)
+  dropPerfectScores = FALSE, normalise = FALSE, verbose = 0)
 
 round(fitm$abilityPrior$corr, 2)
 ```
@@ -456,20 +456,33 @@ bigIRT.
 | `tidyIRT()`, `glanceIRT()`, `augmentIRT()`, `reportIRT()` | Reporting |
 | `as.mirt()`, `extractMIRTpars()`, `compareIRTmodels()`, `checkMirtBridge()` | mirt |
 
-## The joint MAP path (now outdated)
+## Joint MAP (`marginalApprox = "map"`)
 
-`marginalApprox = "none"` selects the original estimator: penalised joint MAP,
-which treats every ability as a parameter and maximises over all of them
-alongside the item parameters instead of integrating them out. It is still the
-**default value** of `marginalApprox`, for backwards compatibility, which is
-why every example here passes `marginalApprox = "laplace"` explicitly.
+`marginalApprox = "map"` fits the joint posterior mode over item parameters
+and abilities together, instead of integrating the abilities out. It takes the
+same arguments as the Laplace estimator, apart from `estimateAbilityCorr`, and
+returns the same object, so everything above -- standard errors, the
+convergence certificate, information criteria, held-out scoring, the tidiers --
+works on it. Each evaluation solves every person's mode and differentiates the
+joint posterior there, which needs no adjoint because the abilities are at
+their maximum, so a fit is cheaper than a Laplace one and much cheaper than one
+refined by quadrature.
 
-Use it only to reproduce an old result. It is slower once there are covariates
-on ability, `estimateAbilityCorr` and the Laplace diagnostics do not apply to
-it, and `itemInformation()`, `checkConvergence()`, `IRTic()`, `reliability()`
-and `looIRT()` all require a marginal fit and will refuse. The two estimators
-also do not identify the latent metric the same way, so use `normaliseIRT()`
-before comparing any parameters across them.
+Two things to know before using it. Its latent scale comes from the priors,
+not the data: the likelihood is unchanged when every loading is scaled up and
+every ability down, and the joint mode trades the persons' ability prior
+against the items' loading prior, so loadings come out inflated and abilities
+shrunk, the more so the more persons there are per item. Compare it with other
+fits only after linking or normalising (`normaliseIRT()`). For the same reason
+it cannot estimate the latent correlation, and `estimateAbilityCorr = TRUE` is
+an error under it. `logLik()` reports the same model's marginal likelihood at
+the MAP estimates, so information criteria compare the two estimators on one
+scale.
+
+`"none"` is accepted as its former name. Until 0.2.0 this estimator was a Stan
+model optimised over every person and item coordinate at once; it is now C++
+and runs through the same optimiser as the Laplace path. On the same data the
+two implementations agree to the optimiser's tolerance.
 
 ## Notes
 

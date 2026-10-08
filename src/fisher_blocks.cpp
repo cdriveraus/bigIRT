@@ -12,8 +12,11 @@
 // The metric keeps F's blocks for each item's own parameters and the exact
 // block for the parameters shared across items (G: shared covariate
 // coefficients, person covariates, mean hyperparameters, the ability mean),
-// and drops the coupling between blocks. Both are principal submatrices of a
-// positive semidefinite matrix, so the metric is too.
+// and drops the data's coupling between blocks. Both are principal
+// submatrices of a positive semidefinite matrix, so the metric is too. The
+// prior's coupling of item parameters to shared ones (each to its mean
+// hyperparameter) is added back in R, as a border applied through the shared
+// block's Schur complement (bigIRT_laplace_blockdiag_solver_cpp).
 //
 // This used to be assembled in R: sparse V and W, a CHOLMOD factorisation of
 // the N x N person block, and one Fisher-vector product per shared column.
@@ -333,9 +336,23 @@ struct FbDenseWorker : public RcppParallel::Worker {
           for (const auto& ey : r.v) F(ex.first, ey.first) += ex.second * ey.second;
         }
       }
-      const MatrixXd B = llt.matrixL().solve(c);
-      const MatrixXd BB = B.transpose() * B;
-      for (int j = 0; j < m; ++j) for (int i = 0; i < m; ++i) F(touched[i], touched[j]) -= BB(i, j);
+      // Only over the columns where the coupling is nonzero: the term is
+      // B'B, and a zero column of c gives a zero row and column of it. A
+      // person whose every ability is fixed has c = 0 (unless the ability mean
+      // is estimated), so the whole m x m product was zeros, formed and
+      // scattered anyway -- at 500 items a person, 2,000 such persons cost 26 s
+      // a metric build, against 2 s for the whole of the optimisation.
+      std::vector<int> nz;
+      nz.reserve(static_cast<std::size_t>(m));
+      for (int j = 0; j < m; ++j) if (c.col(j).squaredNorm() > 0.0) nz.push_back(j);
+      if (!nz.empty()) {
+        MatrixXd cz(K, static_cast<int>(nz.size()));
+        for (std::size_t j = 0; j < nz.size(); ++j) cz.col(static_cast<int>(j)) = c.col(nz[j]);
+        const MatrixXd B = llt.matrixL().solve(cz);
+        const MatrixXd BB = B.transpose() * B;
+        for (std::size_t j = 0; j < nz.size(); ++j) for (std::size_t i = 0; i < nz.size(); ++i)
+          F(touched[nz[i]], touched[nz[j]]) -= BB(static_cast<int>(i), static_cast<int>(j));
+      }
       for (int p : touched) loc[p] = -1;
     }
   }

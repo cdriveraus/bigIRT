@@ -31,8 +31,7 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
       ebayes = FALSE,
       dropPerfectScores = FALSE,
       normalise = FALSE,
-      verbose = 0,
-      plot = FALSE
+      verbose = 0
     )
 
     out <- wleIRT(fit)
