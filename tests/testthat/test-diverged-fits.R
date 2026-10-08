@@ -187,3 +187,17 @@ test_that("an item pushed onto a step is pulled back with a gain, and named", {
   expect_true(all(is.finite(m$pcorrect)))
   expect_true(all(m$pcorrect >= 0 & m$pcorrect <= 1))
 })
+
+test_that("the run-off verdict points to item priors only when they are off", {
+  ## With item priors in force it used to say "item priors (priors = TRUE)
+  ## would bound" the run-off items anyway, which pointed at a setting already
+  ## in place: joint MAP with empirical Bayes ran loadings off with priors on.
+  ra <- data.frame(item = 3L, scale = 1L, parameter = c("A", "B"), value = c(25, 5))
+  rest <- list(status = "certified", certified = TRUE, reason = NA_character_)
+  v_off <- bigIRT:::bigIRT_runaway_verdict(rest, ra, NULL, tolerance = 1e-3, nscales = 1, priors = FALSE)
+  v_on <- bigIRT:::bigIRT_runaway_verdict(rest, ra, NULL, tolerance = 1e-3, nscales = 1, priors = TRUE)
+  expect_equal(v_on$status, "diverged")
+  expect_match(v_off$reason, "priors = TRUE", fixed = TRUE)
+  expect_false(grepl("priors = TRUE", v_on$reason, fixed = TRUE))
+  expect_match(v_on$reason, "item priors in force", fixed = TRUE)
+})

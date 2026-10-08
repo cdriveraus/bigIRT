@@ -2667,8 +2667,10 @@ fitIRT <- function(dat, score = 'score', id = 'id', item = 'Item', scale = 'Scal
   ## Without a certificate's verdict the run-off items still say so.
   if(is.na(cert_converged) && !is.null(diverged))
     warning(sprintf(paste0("Item parameters have run off, beyond %s logits per ability SD: %s. ",
-      "Their values are arbitrary points on a ray to infinity; item priors (priors = TRUE) ",
-      "would bound them. See laplaceStatus$diverged."), format(bigIRT_runaway_slope()),
+      "Their values are arbitrary points on a ray to infinity; ",
+      if(isTRUE(as.logical(sdat$dopriors))) "the item priors in force did not prevent it. " else
+        "item priors (priors = TRUE) would bound them. ",
+      "See laplaceStatus$diverged."), format(bigIRT_runaway_slope()),
       bigIRT_name_list(paste0("item ", diverged$item, " ", diverged$parameter, " = ",
         bigIRT_format_each(diverged$value)))), call. = FALSE)
   if(identical(certificate$status, "saturated"))

@@ -2860,7 +2860,20 @@ bigIRT_laplace_hyper_pieces <- function(state, sdat, context, row_effective,
     Sbase[b1, b2, ] <- v
     if(b2 > b1) Sbase[b2, b1, ] <- v
   }
-  out <- list(Sbase = Sbase, est = est, active = active, P = P, ni = ni,
+  ## The centre each block's spread is measured from: where estMeans leaves a
+  ## centre fixed, that fixed value, which is the centre the fit's prior uses;
+  ## otherwise NA, and the objective profiles it out as the estimates' mean,
+  ## which is what the update then sets it to. It used the estimates' mean in
+  ## both cases, so with a fixed centre tau was the spread about a point the
+  ## prior was not centred on: joint-MAP loadings averaging 2-3 on the raw
+  ## scale, against a fixed centre of .542, got a tight tau about their own
+  ## mean that the fit then applied about .542.
+  fixed_mean <- c(B = "fixedBMean", A = "fixedAMean", C = "fixedCMean", D = "fixedDMean")
+  mean_names <- c(B = "BMeandat", A = "invspAMeandat", C = "logitCMeandat", D = "logitDMeandat")
+  centre <- vapply(active, function(b)
+    if(identical(as.integer(sdat[[fixed_mean[[b]]]])[1], 1L)) as.numeric(sdat[[mean_names[[b]]]])[1]
+    else NA_real_, numeric(1))
+  out <- list(Sbase = Sbase, est = est, active = active, P = P, ni = ni, centre = centre,
               fixed_item = if(any(fixed_item)) fixed_item else NULL)
   ## Items whose loading is signed are still integrated over, with the A
   ## prior precision held where it is, so that tau_A is fitted to the
@@ -2883,7 +2896,8 @@ bigIRT_laplace_hyper_objective <- function(logtau, pieces, fixed_tau = NULL){
   P <- pieces$P
   pen <- 0
   for(b in seq_len(P)){
-    e <- pieces$est[[b]]; mu <- mean(e)
+    e <- pieces$est[[b]]
+    mu <- if(length(pieces$centre) >= b && is.finite(pieces$centre[b])) pieces$centre[b] else mean(e)
     pen <- pen - sum((e - mu)^2) / (2 * tau[b]^2) - length(e) * log(tau[b])
   }
   add <- diag(1 / tau^2, P)
