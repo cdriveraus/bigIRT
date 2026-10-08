@@ -166,6 +166,9 @@ struct AgqWorker : public RcppParallel::Worker {
   AgqVec<double> fixed_ability_value;
   AgqVec<int> A_ref, A_beta_row;
   AgqVec<double> A_fixed_value, A_pred;
+  // 1 where a free loading takes the identity link rather than softplus
+  // (fitIRT's signedLoadings; see the note on the link in laplace_backend.cpp).
+  AgqVec<int> A_signed;
   AgqVec<int> B_ref, B_beta_row, C_ref, C_beta_row, D_ref, D_beta_row;
   AgqVec<double> B_fixed_value, B_pred, C_fixed_value, C_pred, D_fixed_value, D_pred;
   AgqVec<double> Abilitybeta, invspApars, invspAbeta, Bpars, Bbeta, logitCpars, logitCbeta, logitDpars, logitDbeta;
@@ -199,6 +202,7 @@ struct AgqWorker : public RcppParallel::Worker {
     : obs_by_subj(o.obs_by_subj), score(o.score), theta_mode(o.theta_mode), precision(o.precision),
       person_pred(o.person_pred), fixed_ability(o.fixed_ability), fixed_ability_value(o.fixed_ability_value),
       A_ref(o.A_ref), A_beta_row(o.A_beta_row), A_fixed_value(o.A_fixed_value), A_pred(o.A_pred),
+      A_signed(o.A_signed),
       B_ref(o.B_ref), B_beta_row(o.B_beta_row), C_ref(o.C_ref), C_beta_row(o.C_beta_row),
       D_ref(o.D_ref), D_beta_row(o.D_beta_row), B_fixed_value(o.B_fixed_value), B_pred(o.B_pred),
       C_fixed_value(o.C_fixed_value), C_pred(o.C_pred), D_fixed_value(o.D_fixed_value), D_pred(o.D_pred),
@@ -274,7 +278,8 @@ struct AgqWorker : public RcppParallel::Worker {
           if (A_ref(o, k) > 0) {
             const int ab = invspAbeta.nr == 1 ? 1 : A_ref(o, k);
             const double raw = invspApars[A_ref(o, k) - 1] + beta_term(o, A_pred, invspAbeta, ab);
-            a = agq_softplus(raw); am = agq_inv_logit(raw);
+            if (A_signed[A_ref(o, k) - 1] != 0) { a = raw; am = 1.0; }
+            else { a = agq_softplus(raw); am = agq_inv_logit(raw); }
           }
           arow(oi, k) = a; amul(oi, k) = am;
           double of = 0.0;
@@ -444,14 +449,16 @@ struct AgqWorker : public RcppParallel::Worker {
     const double lcc = lpp * pc * pc, lcd = lpp * pc * pd, ldd = lpp * pd * pd;
     // The links' chain-rule factors: eta = sum_k softplus(raw_k) ab_k - b,
     // c = logistic(x)/2, d = logistic(z)/2 + 1/2. A slot the row does not
-    // free has factor zero, so its score and Hessian rows are zero.
+    // free has factor zero, so its score and Hessian rows are zero. A signed
+    // loading is raw_k itself: slope one, second derivative zero.
     const double eb = B_ref[o] > 0 ? -1.0 : 0.0;
     double ea[64], eaa[64];
     for (int k = 0; k < K; ++k) {
       ea[k] = 0.0; eaa[k] = 0.0;
       if (A_ref(o, k) > 0) {
         const double ab = fixed_ability(o, k) != 0 ? fixed_ability_value(o, k) : thq(k) + off(oi, k);
-        ea[k] = ab * amul(oi, k); eaa[k] = ab * amul(oi, k) * (1.0 - amul(oi, k));
+        ea[k] = ab * amul(oi, k);
+        eaa[k] = A_signed[A_ref(o, k) - 1] != 0 ? 0.0 : ab * amul(oi, k) * (1.0 - amul(oi, k));
       }
     }
     const double cx = cmul[oi], cxx = cmul[oi] * (1.0 - 4.0 * c);
@@ -556,7 +563,7 @@ static SEXP blocks_out(const AgqWorker& w) {
 extern "C" SEXP _bigIRT_agq_fg_cpp_impl(
     SEXP idSEXP, SEXP scoreSEXP, SEXP theta_modeSEXP, SEXP precisionSEXP,
     SEXP person_predSEXP, SEXP fixed_abilitySEXP, SEXP fixed_ability_valueSEXP,
-    SEXP A_refSEXP, SEXP A_fixed_valueSEXP, SEXP A_beta_rowSEXP, SEXP A_predSEXP,
+    SEXP A_refSEXP, SEXP A_fixed_valueSEXP, SEXP A_beta_rowSEXP, SEXP A_predSEXP, SEXP A_signedSEXP,
     SEXP B_refSEXP, SEXP B_fixed_valueSEXP, SEXP B_beta_rowSEXP, SEXP B_predSEXP,
     SEXP C_refSEXP, SEXP C_fixed_valueSEXP, SEXP C_beta_rowSEXP, SEXP C_predSEXP,
     SEXP D_refSEXP, SEXP D_fixed_valueSEXP, SEXP D_beta_rowSEXP, SEXP D_predSEXP,
@@ -624,6 +631,7 @@ extern "C" SEXP _bigIRT_agq_fg_cpp_impl(
   w.fixed_ability_value = cp_d(fixed_ability_valueSEXP);
   w.A_ref = cp_i(A_refSEXP); w.A_fixed_value = cp_d(A_fixed_valueSEXP);
   w.A_beta_row = cp_i(A_beta_rowSEXP); w.A_pred = cp_d(A_predSEXP);
+  w.A_signed = cp_i(A_signedSEXP);
   w.B_ref = cp_i(B_refSEXP); w.B_fixed_value = cp_d(B_fixed_valueSEXP);
   w.B_beta_row = cp_i(B_beta_rowSEXP); w.B_pred = cp_d(B_predSEXP);
   w.C_ref = cp_i(C_refSEXP); w.C_fixed_value = cp_d(C_fixed_valueSEXP);
@@ -637,6 +645,8 @@ extern "C" SEXP _bigIRT_agq_fg_cpp_impl(
   w.logitDpars = cp_d(logitDparsSEXP); w.logitDbeta = cp_d(logitDbetaSEXP);
   w.prior_mean = cp_d(prior_meanSEXP); w.prior_precision = cp_d(prior_precisionSEXP);
   w.free_mask = cp_i(free_maskSEXP);
+  if (w.A_signed.count() != w.invspApars.count())
+    Rcpp::stop("AGQ: A_signed must hold one entry per free loading.");
   // Item blocks: the item of each row, 1-based; empty asks for none.
   w.block_items = cp_i(block_itemsSEXP);
   if (w.block_items.count() > 0) {

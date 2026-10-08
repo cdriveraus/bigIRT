@@ -16,6 +16,7 @@ fitIRT(
   itemDat = NA,
   loadings = NA,
   loadingsFixed = NA,
+  signedLoadings = NULL,
   AitemPreds = character(),
   BitemPreds = character(),
   CitemPreds = character(),
@@ -41,7 +42,7 @@ fitIRT(
   iter = 2000,
   cores = 6,
   carefulfit = FALSE,
-  ebayes = TRUE,
+  ebayes = FALSE,
   ebayesmultiplier = 2,
   ebayesFromFixed = FALSE,
   ebayesIter = 5L,
@@ -50,7 +51,7 @@ fitIRT(
   ebayesCoarse = 1000,
   estMeans = c("A", "B", "C", "D"),
   priors = TRUE,
-  marginalApprox = c("none", "laplace", "laplace_fast", "laplace_direct"),
+  marginalApprox = c("laplace", "none", "laplace_fast", "laplace_direct"),
   estimateAbilityCorr = FALSE,
   laplaceCorrParam = c("stan_corsqrt", "normalized_chol"),
   keepInternals = FALSE,
@@ -115,6 +116,37 @@ when provided.}
 forces fixed/free status for each loading entry. \code{TRUE} means fixed,
 \code{FALSE} means free, \code{NA} defers to \code{loadings} values. If omitted, fixed/free
 status is inferred from whether \code{loadings} entries are \code{NA}.}
+
+\item{signedLoadings}{Which free loadings may take either sign. Every free
+loading is otherwise the softplus \eqn{\log(1 + e^x)} of an unconstrained
+parameter, so it is positive. That positivity is what fixes the sign of
+each latent dimension, and it is kept for primary loadings; but it makes a
+negative cross-loading impossible, so an item that truly loads negatively
+on a second dimension has its cross-loading pinned near zero instead. A
+signed loading takes the identity link: the loading is the parameter
+itself.
+\itemize{
+\item \code{NULL} or \code{FALSE} (default): none; exactly the behaviour without the
+argument.
+\item \code{"cross"}: every free loading off the item's own scale (its \code{scale}
+column) is signed; primary loadings stay positive.
+\item a logical \verb{Nitems x Nscales} matrix, aligned by row and column names
+as \code{loadings} is: \code{TRUE} marks a signed loading. Marking a fixed loading
+is an error.
+}
+A signed loading's prior is normal with mean zero and SD \code{invspASD}, on
+the loading itself. Its mean is fixed: the estimated discrimination mean
+(\code{estMeans} 'A') describes the softplus pre-images of the positive
+loadings and applies to those alone, and empirical Bayes leaves signed
+loadings out of its discrimination update. It starts at zero. Item
+covariates on discrimination (\code{AitemPreds}) add to the parameter under
+either link. Requires \code{marginalApprox = "laplace"} and \code{pl >= 2}.
+
+Signs do not identify a rotation: with cross-loadings free in both
+directions the dimensions can rotate into each other unless \code{loadings}
+fixes enough of them, at least \eqn{K(K-1)/2} zeros placed so that every
+pair of dimensions is pinned. \code{tidyIRT()} reports free cross-loadings as
+terms \verb{A_<scale>} on fits with signed loadings.}
 
 \item{AitemPreds}{Character vector. Names of predictors for item discrimination parameters. Default is an empty character vector.}
 
@@ -187,7 +219,12 @@ pinned by even fewer responses than the lower one.}
 
 \item{carefulfit}{Logical. Whether to use a slower, careful fitting procedure. Default is FALSE. Experimental.}
 
-\item{ebayes}{Logical. Whether to use empirical Bayes estimation. Default is TRUE. With ebayes, the priors are adapted based on a first pass estimate.}
+\item{ebayes}{Logical. Whether to use empirical Bayes estimation: the
+priors are adapted from a first-pass estimate. Default FALSE since 0.1.9
+(TRUE before). On simulated 3PL and 4PL data, empirical-Bayes priors
+narrowed toward the first pass left item intervals covering .004 to .84
+of the time against a nominal .95, where the fixed default priors were
+conservative.}
 
 \item{ebayesmultiplier}{Numeric. Multiplier for the widths of the empirical Bayes priors. Default is 2, as this appears to work better in practice.}
 
@@ -239,9 +276,10 @@ the default is 0 plus whatever their \code{personPreds} imply.}
 
 \item{priors}{Logical. Whether to use prior distributions. Default is TRUE.}
 
-\item{marginalApprox}{Character. Marginal approximation backend. Use
-\code{"none"} for the legacy Stan/JML path, or \code{"laplace"} for the
-Laplace backend: a single-stage optimizer over the item block that
+\item{marginalApprox}{Character. Marginal approximation backend.
+\code{"laplace"} (the default since 0.1.9; \code{"none"} before) for the
+Laplace backend, or \code{"none"} for the legacy Stan/JML path. The
+Laplace backend is a single-stage optimizer over the item block that
 re-solves the person modes inside every objective evaluation and
 differentiates through them, so the gradient carries the adjoint term
 rather than treating the modes as fixed. It accepts item predictors,
@@ -383,9 +421,12 @@ Gauss-Hermite quadrature, centred at the Laplace mode, instead of by the
 Laplace approximation. The refinement starts from the Laplace optimum and
 uses the same optimiser, so it is a short continuation, not a second fit.
 \code{"auto"} (default): with free asymptotes (3PL, 4PL), by quadrature
-at any dimension; without, by \code{"laplace2"} from two dimensions on,
-where Laplace put 2PL loadings 0.12 to 0.22 standard errors low on
-simulated data. \code{"agq"} always refines by quadrature: a product
+at any dimension; without, not at all in one dimension, by quadrature in
+two and three, and by \code{"laplace2"} beyond three, where Laplace put
+2PL loadings 0.12 to 0.22 standard errors low on simulated data and
+quadrature costs about four times as much (earlier versions used
+\code{"laplace2"} from two dimensions on; see below for why that
+changed). \code{"agq"} always refines by quadrature: a product
 Gauss-Hermite rule up to three dimensions, and beyond that an expansion
 of each person's log integral in product rules on every pair (and,
 coarsely, every triple) of dimensions, which on 3PL data at nine
@@ -404,9 +445,41 @@ a standard error above the Laplace one in every discrimination (loadings
 about 5 per cent larger), and on 4PL data nearly one standard error (8 to
 13 per cent); the bias is fixed per person while standard errors shrink
 with N, so intervals under-cover more as data grow. Laplace can also hold
-a fit at an optimum the exact marginal does not have. For the 2PL the
-shift was about 0.03 standard errors, which is why \code{"auto"} leaves
-it alone. The reported \code{logLik} is then the quadrature marginal;
+a fit at an optimum the exact marginal does not have. For the
+one-dimensional 2PL the shift was about 0.03 standard errors, which is
+why \code{"auto"} leaves it alone -- under the item priors. Without them (\code{priors = FALSE})
+the 2PL Laplace marginals reward a near-step curve for a weakly
+identified item: on sparse simulated data with 75 training responses per
+item, 75 per cent of one-dimensional Laplace fits had a discrimination
+above 10, against 10 per cent of the same fits finished by quadrature and
+5 per cent for an EM quadrature fit (paper/Submission2,
+unregularised_marginal_check.R). Set \code{"agq"} when the item priors
+are off. Without them an item can also run off along its own ray, its
+loading and intercept growing together towards a step, where the
+gradient along the ray vanishes. So the refinement judges each stretch
+of steps taken on held quadrature nodes against the objective with the
+nodes re-centred, and undoes one that lost more than re-centring alone
+moves it (held nodes are a discrete ability distribution, which a step
+between two of them fits better the steeper it is); and it restarts
+from run-off items pulled back along their rays, keeping whichever end
+is best on its own objective. \code{laplaceStatus$refine} records both
+(\code{held_nodes_lost}, \code{pulled_back}). The second-order finish
+also falls short, with the priors on,
+when each person has only a few responses per dimension. On sparse
+three-dimensional 2PL data with about eight fitted responses per person,
+its primary loadings had an RMSE of .283 against .235 for the same fits
+finished by quadrature, and sat higher (mean error +.045 against +.020),
+in every one of 20 replications; and with 1,350 persons, 2 to 4 per cent
+of its fits were certified at a spurious optimum with one item at a
+discrimination of 4 to 10, where quadrature put it at 1.6 and an EM fit
+below 2 (paper/Submission2, Study 2). That is why \code{"auto"} now
+finishes the 2PL by quadrature up to three dimensions, at four to five
+times the former cost there. At nine dimensions the same data showed
+the smaller, systematic part of the problem (curves recovered slightly
+less closely than by quadrature, no spurious optima in ten fits), and
+quadrature there costs about four times as much; set \code{"agq"} for
+sparse high-dimensional fits when accuracy matters more than speed.
+The reported \code{logLik} is then the quadrature marginal;
 \code{laplaceStatus} records both values and what the refinement did.}
 
 \item{agqNodes}{Integer. Gauss-Hermite nodes per dimension for
@@ -437,7 +510,16 @@ The fit is certified when the predicted gain
 no direction has negative curvature, and stepping along the directions
 with no curvature gains nothing; a discrimination, asymptote or latent
 correlation whose transform has gone flat is pulled back towards its
-live range, and a fit that gains from that is not a maximum.
+live range, and a fit that gains from that is not a maximum. An item
+whose response function has run off -- a loading steeper than
+\code{getOption("bigIRT.runaway_slope", 20)} logits per ability SD, or
+an intercept that many logits beyond every ability within four SDs,
+which unregularised fits (\code{priors = FALSE}) can reach -- makes the
+verdict \code{"diverged"}: its parameters are named in the reason and in
+\code{laplaceStatus$diverged} (item, parameter, value, and what pulling
+the item back along its own ray gained), and \code{converged} is
+\code{FALSE}. That table is filled, and the reason set to
+\code{"diverged"}, even when the certificate is off.
 \code{converged} follows the verdict, \code{laplaceStatus$certificate}
 holds it, and the default standard errors of \code{\link{itemInformation}},
 \code{summary()} and \code{tidyIRT()} come from its curvature.
@@ -453,7 +535,13 @@ persons, a few per cent of a fit. On a fit that was not refined
 modes rather than the Laplace objective's; the two agree near the
 optimum, and far from it a fit the exact route calls
 \code{"suboptimal"} may be called \code{"notmaximum"} here -- neither
-certifies it.
+certifies it. Because this route can also find negative curvature the
+exact one does not, along a direction only a prior identifies, a
+\code{"notmaximum"} from negative curvature is re-tested by the exact
+route whenever that projects within
+\code{getOption("bigIRT.certify_escalate", 60)} seconds; the exact
+verdict is then the one reported, and the fast one is kept in
+\code{laplaceStatus$certificate$fast}.
 
 \code{"exact"}: the whole Hessian by central differences of the
 gradient, two evaluations per free parameter, which roughly doubles a

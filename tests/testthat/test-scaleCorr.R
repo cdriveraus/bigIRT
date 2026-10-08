@@ -14,7 +14,7 @@ if(identical(Sys.getenv("NOT_CRAN"), "true")& .Machine$sizeof.pointer != 4){
       BMean=0,BSD = .5,personPreds = matrix(rnorm(Np)), AbilityPredEffects = matrix(c(1,-0.5,.5),6,1),
       AbilityMean = 0)
 
-    fit <- fitIRT(dat$dat,cores=1,pl=1,plot=F,verbose=0,priors=T,
+    fit <- fitIRT(dat$dat,cores=1,pl=1,plot=F,verbose=0,priors=T,marginalApprox="none",
       normalise = T,ebayes = T,ebayesmultiplier = 2)
 
     ## The correlation is not readable off personPars. normalise = TRUE whitens

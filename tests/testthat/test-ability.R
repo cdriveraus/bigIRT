@@ -14,7 +14,7 @@ if(identical(Sys.getenv("NOT_CRAN"), "true")& .Machine$sizeof.pointer != 4){
       # personPreds = matrix(rnorm(Np)), AbilityPredEffects = matrix(c(1,-0.5,.5),6,1),
       AbilityMean = 0)
 
-    fit <- fitIRT(dat$dat,cores=1,pl=1,plot=F,verbose=0,priors=T,
+    fit <- fitIRT(dat$dat,cores=1,pl=1,plot=F,verbose=0,priors=T,marginalApprox="none",
       itemDat = dat$dat[unique(Item) & id %in% '1',],stochastic=T,
       normalise = T,ebayes = T,ebayesmultiplier = 2)
 
@@ -22,7 +22,7 @@ if(identical(Sys.getenv("NOT_CRAN"), "true")& .Machine$sizeof.pointer != 4){
     ##single item test
     dat$dat$B[1]=-5
     dat$dat$score[1]=1
-    fit <- fitIRT(dat$dat[1,],cores=1,pl=1,plot=F,verbose=0,priors=T,dropPerfectScores = F,
+    fit <- fitIRT(dat$dat[1,],cores=1,pl=1,plot=F,verbose=0,priors=T,dropPerfectScores = F,marginalApprox="none",
       itemDat = dat$dat[1,],
       normalise = F,ebayes = F,ebayesmultiplier = 2,AbilitySD = array(10))
     fit$personPars

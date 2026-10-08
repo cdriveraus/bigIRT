@@ -9,7 +9,8 @@ dropPerfectScores(
   scoreref. = "score",
   itemref. = "Item",
   idref. = "id",
-  tol. = 0.001
+  tol. = 0.001,
+  trainref. = NULL
 )
 }
 \arguments{
@@ -22,6 +23,13 @@ dropPerfectScores(
 \item{idref.}{The column name of the id variable in \code{dat}}
 
 \item{tol.}{Tolerance level for checking perfect scores -- .01 would drop subjects with less than 1\% correct or incorrect}
+
+\item{trainref.}{Optional name of a 0/1 column marking training rows. When
+given, whether a person or item is perfect is decided from its training
+rows only, and all its rows (held-out ones too) are dropped; a person or
+item with no training rows is kept. \code{fitIRT} passes its
+\code{trainingRows} this way, so held-out responses never decide who is
+fitted.}
 }
 \value{
 The input data table (\code{dat}) without variables/items and subjects with all perfect scores.

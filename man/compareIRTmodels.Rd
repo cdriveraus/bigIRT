@@ -38,3 +38,15 @@ the reference model.
 Coerces simulated truth, \code{bigIRT} fits, and \code{mirt} fits onto a common raw
 and normalized parameter representation for direct comparison.
 }
+\details{
+Which form to read: when every model identifies its metric the way the
+reference does -- the same fixed latent distribution, a confirmatory
+loading pattern -- the \code{"raw"} form is already on the reference's metric and
+is the one to compare. The \code{"normalized"} form standardises each model by
+the spread of its own ability estimates, which for a fitted model are point
+estimates shrunk toward the prior mean: it flattens the fitted loadings by
+roughly the square root of the reliability (about a fifth at ten responses
+per person) while the reference, standardised by its true abilities, is
+left alone, and so favours models with steeper loadings. Use it only when
+the metrics genuinely differ, and treat its curve RMSE accordingly.
+}

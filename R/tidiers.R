@@ -13,8 +13,12 @@
 #' One row per item parameter, with a standard error and Wald interval when
 #' asked. Standard errors are carried onto the reported parameter scale by the
 #' delta method, since discrimination is estimated as a softplus pre-image and
-#' the asymptotes as logits. Registered against `broom::tidy()` when broom is
-#' installed.
+#' the asymptotes as logits; a signed loading (`signedLoadings` in [fitIRT()])
+#' is estimated as itself and needs none. On a fit with signed loadings every
+#' free cross-loading also gets a row, term `A_<scale>`, whose standard error
+#' comes from the exact covariance (`method = "exact"`). A parameter fixed
+#' through `itemDat` is not estimated, so its standard error and interval are
+#' `NA`. Registered against `broom::tidy()` when broom is installed.
 #'
 #' @param x A fitted object from [fitIRT()].
 #' @param conf.int Logical. Compute standard errors and intervals.
@@ -50,19 +54,52 @@ tidyIRT <- function(x, conf.int = FALSE, conf.level = 0.95,
   out <- do.call(rbind, lapply(blocks, function(b) data.frame(
     item = item, term = b, estimate = as.numeric(ip[[b]]),
     stringsAsFactors = FALSE)))
+  ## Signed loadings (fitIRT's signedLoadings) take the identity link, so
+  ## their reported value is the free parameter itself and may be negative.
+  ## The primary loading stays in the "A" rows; on a fit with any signed
+  ## loading, every free cross-loading gets a row of its own as well, term
+  ## "A_<scale>", since it is a parameter of interest there and the A column
+  ## carries only the item's own scale. Fits without signed loadings report
+  ## exactly as before.
+  sdat <- x$prepared
+  signed_mat <- if(!is.null(sdat)) bigIRT_signed_loading_matrix(sdat) else NULL
+  signed_row <- rep(FALSE, nrow(out))
+  cross <- NULL
+  if(!is.null(signed_mat) && "A" %in% blocks){
+    ni <- as.integer(sdat$Nitems); K <- as.integer(sdat$Nscales)
+    own <- as.integer(sdat$scale)[match(seq_len(ni), as.integer(sdat$item))]
+    signed_row[out$term == "A"] <- signed_mat[cbind(seq_len(ni), own)]
+    free <- matrix(as.integer(sdat$fixedAlog) == 0L, ni, K, byrow = TRUE)
+    is_cross <- free; is_cross[cbind(seq_len(ni), own)] <- FALSE
+    Amat <- as.matrix(x$pars$A)
+    if(any(is_cross) && nrow(Amat) == ni && ncol(Amat) == K){
+      jk <- which(is_cross, arr.ind = TRUE)
+      jk <- jk[order(jk[, 2], jk[, 1]), , drop = FALSE]
+      snames <- colnames(Amat); if(is.null(snames)) snames <- as.character(seq_len(K))
+      cross <- data.frame(item = item[jk[, 1]], term = paste0("A_", snames[jk[, 2]]),
+        estimate = Amat[jk], stringsAsFactors = FALSE)
+      cross$std.error <- NA_real_
+      cross_signed <- signed_mat[jk]
+    }
+  }
   out$std.error <- NA_real_
-  ## Standard errors need the prepared data, and they are only computed when
-  ## asked for. Returning a column of NAs without saying why is the same trap
-  ## as a column of zeros: the caller reads the name, not the values.
-  ## itemInformation() already errors clearly in this situation; say the same
-  ## thing here rather than handing back silence.
-  if(isTRUE(conf.int) && is.null(x$internals))
-    warning("No standard errors: this fit carries no prepared data. ",
-      "Refit with `keepInternals = TRUE`.", call. = FALSE)
+  ## Standard errors are only computed when asked for. They need either the
+  ## exact covariance the convergence certificate keeps -- read without any
+  ## internals, and present on a default fit -- or the prepared internals to
+  ## compute a covariance afresh. (This used to demand the internals in both
+  ## cases, so a default fit got a column of NA standard errors even though
+  ## itemInformation() could read them from the certificate.) Returning a
+  ## column of NAs without saying why is the same trap as a column of zeros:
+  ## the caller reads the name, not the values, so say why.
+  can_se <- !is.null(x$internals) || (identical(method, "exact") &&
+    !is.null(x$laplaceStatus$certificate$covariance$items))
+  if(isTRUE(conf.int) && !can_se)
+    warning("No standard errors: this fit kept no exact covariance and carries ",
+      "no prepared data to compute one. Refit with `keepInternals = TRUE`.", call. = FALSE)
   if(!isTRUE(conf.int))
-    message("`std.error` is NA: call tidyIRT(conf.int = TRUE) on a fit made ",
-      "with `keepInternals = TRUE` to compute standard errors and intervals.")
-  info <- if(isTRUE(conf.int) && !is.null(x$internals))
+    message("`std.error` is NA: call tidyIRT(conf.int = TRUE) to compute ",
+      "standard errors and intervals.")
+  info <- if(isTRUE(conf.int) && can_se)
     tryCatch(itemInformation(x, cores = cores, method = method),
       error = function(e) { warning("Standard errors could not be computed: ",
         conditionMessage(e), call. = FALSE); NULL }) else NULL
@@ -90,26 +127,55 @@ tidyIRT <- function(x, conf.int = FALSE, conf.level = 0.95,
       est_b <- as.numeric(ip[[b]])
       jac <- switch(b,
         B = rep(1, length(est_b)),
-        ## softplus'(z) = logistic(z) = 1 - exp(-A)
-        A = 1 - exp(-pmax(est_b, 0)),
+        ## softplus'(z) = logistic(z) = 1 - exp(-A); a signed loading is z
+        ## itself, so its Jacobian is one.
+        A = ifelse(signed_row[sel], 1, 1 - exp(-pmax(est_b, 0))),
         C = bigIRT_dc_dx(est_b),
         D = bigIRT_dd_dx(est_b),
         rep(1, length(est_b)))
       out$std.error[sel] <- se_b * abs(jac)
     }
+    ## Cross-loadings, from the per-loading errors itemInformation(method =
+    ## "exact") carries on fits with signed loadings; the same two Jacobians.
+    if(!is.null(cross) && !is.null(info$se_loadings)){
+      se_c <- info$se_loadings[jk]
+      cross$std.error <- se_c * ifelse(cross_signed, 1, 1 - exp(-pmax(cross$estimate, 0)))
+    }
+    ## With cross-loadings free there is more than one loading per item and no
+    ## per-item A block, so on such a fit the primary loading's error comes
+    ## from the same per-loading errors, when they were kept.
+    if(!is.null(signed_mat) && "A" %in% blocks && !("A" %in% info$active) &&
+       !is.null(info$se_loadings)){
+      sel <- out$term == "A"
+      out$std.error[sel] <- info$se_loadings[cbind(seq_len(ni), own)] *
+        ifelse(signed_row[sel], 1, 1 - exp(-pmax(as.numeric(ip$A), 0)))
+    }
     z <- stats::qnorm(1 - (1 - conf.level) / 2)
+    if(!is.null(cross)){
+      cross$conf.low <- cross$estimate - z * cross$std.error
+      cross$conf.high <- cross$estimate + z * cross$std.error
+      cross$conf.low[!cross_signed] <- pmax(cross$conf.low[!cross_signed], 0)
+    }
     out$conf.low <- out$estimate - z * out$std.error
     out$conf.high <- out$estimate + z * out$std.error
     ## A and the asymptotes are bounded, so a symmetric interval can escape;
-    ## clip rather than print an impossible bound.
-    bnd <- out$term %in% c("A")
+    ## clip rather than print an impossible bound. A signed loading is not.
+    bnd <- out$term %in% c("A") & !signed_row
     out$conf.low[bnd] <- pmax(out$conf.low[bnd], 0)
     bnd <- out$term %in% c("C", "D")
     out$conf.low[bnd] <- pmax(out$conf.low[bnd], 0)
     out$conf.high[bnd] <- pmin(out$conf.high[bnd], 1)
     attr(out, "se_scale") <- "natural scale, delta method from the free parameters"
   }
-  out[order(match(out$term, blocks), out$item), ]
+  out <- out[order(match(out$term, blocks), out$item), ]
+  if(!is.null(cross)){
+    if(is.null(out$conf.low) && !is.null(cross$conf.low)) cross$conf.low <- cross$conf.high <- NULL
+    if(!is.null(out$conf.low) && is.null(cross$conf.low)) cross$conf.low <- cross$conf.high <- NA_real_
+    se_scale <- attr(out, "se_scale")
+    out <- rbind(out, cross[, names(out)])
+    attr(out, "se_scale") <- se_scale
+  }
+  out
 }
 
 ## One row of model-level summary.

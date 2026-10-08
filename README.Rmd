@@ -75,7 +75,7 @@ train <- sample(nrow(dat), 0.9 * nrow(dat))   # hold a tenth back
 
 tm <- system.time(
   fit <- fitIRT(dat, pl = 2,
-    marginalApprox = "laplace",   # pass this: the default is the old MAP path
+    marginalApprox = "laplace",   # the default since 0.1.9
     trainingRows = train,
     keepInternals = TRUE,         # keep what standard errors need
     laplaceDiagnostics = TRUE,    # keep the optimiser trace for plotting
@@ -163,8 +163,8 @@ the internal person-sorted order. `fit$pars$originalRow` maps between the two.
 | `itemSpecificBetas` | `FALSE` (default) for one coefficient per predictor, `TRUE` for one per item |
 | `loadings` | Item x scale matrix. Fixed values, `NA` to estimate |
 | `estimateAbilityCorr` | Estimate the latent correlation between scales |
-| `ebayes` | `TRUE` (default) estimates the prior hyperparameters from the data |
-| `dropPerfectScores` | Drops all-right and all-wrong people and items before fitting |
+| `ebayes` | `TRUE` estimates the prior hyperparameters from the data. Default `FALSE` since 0.1.9: on 3PL/4PL data it ruined interval coverage |
+| `dropPerfectScores` | Drops people and items all right or all wrong in the training rows before fitting |
 | `keepInternals` | Needed by `itemInformation()` and the tidiers |
 | `laplaceDiagnostics` | Keeps the optimiser trace for `plot(fit, "convergence")` |
 | `laplaceKeepCovariance` | Keeps full person posterior covariances. Needed by `looIRT()`. Large |

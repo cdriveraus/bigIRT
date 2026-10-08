@@ -1,6 +1,6 @@
 Package: bigIRT
 Title: Item Response Theory for Large Sparse Data
-Version: 0.1.8
+Version: 0.1.9
 Authors@R:
     person(given = "Charles",
            family = "Driver",

@@ -4,8 +4,29 @@
 inv_logit <- function(x) stats::plogis(x)
 logit <- function(x)  log(x)-log((1-x))
 
-afunc <- function(x) log1p(exp(x))
-afunci <- function(x) log(exp(x)-1)
+## Softplus and its inverse, in the form that cannot overflow. log1p(exp(x))
+## is Inf beyond x = 709.78, and an unregularised fit can put a raw loading
+## there (6197 in the case that found this) while the native objective, which
+## has always used the stable form below, sees a finite loading. The R side then
+## reported A = Inf, and the linear predictor took Inf * 0 = NaN for every
+## person whose ability on that dimension was exactly the prior mean. The
+## branch is the C++ one (bigirt_softplus_scalar), so R and the native kernels
+## form the same loading to the last bit.
+afunc <- function(x){
+  out <- log1p(exp(-abs(x)))
+  pos <- !is.na(x) & x > 0
+  out[pos] <- x[pos] + out[pos]
+  out
+}
+afunci <- function(x) x + log(-expm1(-x))
+
+## The user's labels in the order of fitIRT's sequential integers, from one of
+## its index tables (columns `original` and `new`).
+bigIRT_index_labels <- function(index){
+  out <- character(max(c(0L, as.integer(index$new))))
+  out[as.integer(index$new)] <- as.character(index$original)
+  out
+}
 
 cfunc <- function(x) inv_logit(x)*.5
 cfunci <- function(x) logit(x*2)
@@ -13,6 +34,53 @@ dfunc <- function(x) inv_logit(x)*.5+.5
 
 a_matrix_to_vector <- function(x){
   as.array(as.vector(t(as.matrix(x))))
+}
+
+## fitIRT's signedLoadings as an Nitems x Nscales logical matrix: TRUE where a
+## free loading takes the identity link rather than softplus. `fixed` is the
+## final fixed/free pattern, `itemScale` each item's own scale index, and the
+## names align a user matrix exactly as `loadings` is aligned.
+bigIRT_resolve_signed_loadings <- function(signedLoadings, fixed, itemScale,
+                                           itemNames, scaleNames){
+  Nitems <- nrow(fixed); Nscales <- ncol(fixed)
+  out <- matrix(FALSE, Nitems, Nscales)
+  if(is.null(signedLoadings) || isFALSE(signedLoadings)) return(out)
+  if(is.character(signedLoadings)){
+    if(!identical(signedLoadings, "cross"))
+      stop("signedLoadings must be NULL, FALSE, \"cross\", or a logical Nitems x Nscales matrix.",
+        call. = FALSE)
+    out[,] <- !fixed
+    out[cbind(seq_len(Nitems), itemScale)] <- FALSE
+    if(!any(out))
+      warning("signedLoadings = \"cross\" found no free cross-loadings, so nothing is signed. ",
+        "Cross-loadings are free where `loadings` has NA off the item's own scale.", call. = FALSE)
+    return(out)
+  }
+  m <- as.matrix(signedLoadings)
+  if(!is.logical(m) || length(dim(m)) != 2L)
+    stop("signedLoadings must be NULL, FALSE, \"cross\", or a logical Nitems x Nscales matrix.",
+      call. = FALSE)
+  if(nrow(m) != Nitems || ncol(m) != Nscales)
+    stop("`signedLoadings` must have dimensions Nitems x Nscales after indexing.", call. = FALSE)
+  if(!is.null(rownames(m))){
+    rowMap <- match(itemNames, rownames(m))
+    if(any(is.na(rowMap))) stop("Could not align `signedLoadings` row names to items.", call. = FALSE)
+    m <- m[rowMap,, drop = FALSE]
+  }
+  if(!is.null(colnames(m))){
+    colMap <- match(scaleNames, colnames(m))
+    if(any(is.na(colMap))) stop("Could not align `signedLoadings` column names to scales.", call. = FALSE)
+    m <- m[, colMap, drop = FALSE]
+  }
+  if(anyNA(m)) stop("`signedLoadings` must be TRUE or FALSE in every cell.", call. = FALSE)
+  if(any(m & fixed)){
+    bad <- which(m & fixed, arr.ind = TRUE)[1, ]
+    stop(sprintf(paste0("`signedLoadings` marks a fixed loading as signed (item %s, scale %s, ",
+      "and %d in all). Only a free loading has a link to choose."),
+      itemNames[bad[1]], scaleNames[bad[2]], sum(m & fixed)), call. = FALSE)
+  }
+  dimnames(m) <- NULL
+  m
 }
 
 checkP <- function(fit){
@@ -155,8 +223,19 @@ checkP <- function(fit){
 #' @param normaliseScale The scale to normalise to.
 #' @param normaliseMean The mean to normalise to. The default is 0 for the
 #'   supported \code{normbase} values ('Ability' or 'B').
-#' @param robust if TRUE, outliers (greater than 1.5x the interquartile range from the interquartile region of 25-75%)
-#' are dropped before computing the mean and sd for normalisation.
+#' @param robust If TRUE, the location and scale come from the median and the
+#'   interquartile range, the latter converted to a standard deviation
+#'   (divided by 1.349, its value for a normal distribution). Until October
+#'   2026 the interquartile range itself was set to \code{normaliseScale},
+#'   which left a normal latent variable with standard deviation .74.
+#' @param AbilitySD,AbilityMean Optional latent standard deviation and mean of
+#'   the solution, used in place of the spread and centre of \code{Ability}
+#'   when \code{normbase = 'Ability'}. Supply them when \code{Ability} holds
+#'   point estimates (MAP, EAP): those are shrunk toward the prior mean, so
+#'   their spread understates the latent scale by roughly the square root of
+#'   the reliability, and normalising by it flattens the discriminations by
+#'   the same factor. For a \code{fitIRT} fit, \code{extractMIRTpars()} returns
+#'   them as \code{latent_sd} and \code{latent_mean}.
 #'
 #' @return A list containing the normalised A, B, and Ability parameters.
 #' @export
@@ -167,7 +246,8 @@ checkP <- function(fit){
 #' normaliseIRT(B, Ability, A, normbase='B')
 #'
 #'
-normaliseIRT <- function(B,Ability, A,normbase='Ability',normaliseScale=1,  normaliseMean=0,robust=TRUE){
+normaliseIRT <- function(B,Ability, A,normbase='Ability',normaliseScale=1,  normaliseMean=0,robust=TRUE,
+                         AbilitySD=NULL, AbilityMean=NULL){
 
   # if(!robust){
   #   includePersons <- 1:length(Ability)
@@ -178,16 +258,19 @@ normaliseIRT <- function(B,Ability, A,normbase='Ability',normaliseScale=1,  norm
   #   includeItems <- which(B %in% boxplot(B, plot = F)$out & A %in% boxplot(A, plot = F)$out)
   # }
 
+  ## The interquartile range of a normal variable is 1.349 standard deviations.
+  iqr_sd <- function(x) diff(stats::quantile(x, probs = c(.25, .75), na.rm = TRUE)) / (2 * stats::qnorm(.75))
   if(normbase %in% c('Ability','B')){
     if(normbase =='Ability'){
-      nsd <- ifelse(robust, diff(quantile(Ability,probs=c(.25,.75))), sd(Ability)) / (normaliseScale)
-      nm <- ifelse(robust, median(Ability),mean(Ability))
+      nsd <- (if(!is.null(AbilitySD)) as.numeric(AbilitySD)[1] else if(robust) iqr_sd(Ability) else sd(Ability)) / (normaliseScale)
+      nm <- if(!is.null(AbilityMean)) as.numeric(AbilityMean)[1] else if(robust) median(Ability) else mean(Ability)
     }
 
     if(normbase =='B'){
-      nsd <- ifelse(robust, diff(quantile(B, probs=c(.25,.75))), sd(B)) / (normaliseScale)
-      nm <- ifelse(robust, median(B), mean(B))
+      nsd <- (if(robust) iqr_sd(B) else sd(B)) / (normaliseScale)
+      nm <- if(robust) median(B) else mean(B)
     }
+    nsd <- unname(nsd); nm <- unname(nm)
 
     ## With eta = A * Ability - B, let Ability' = (Ability - nm) / nsd
     ## + normaliseMean.  The curve-preserving counterpart is A' = A * nsd
@@ -222,10 +305,23 @@ normaliseIRT <- function(B,Ability, A,normbase='Ability',normaliseScale=1,  norm
 #'
 #' @param B Numeric vector of item intercept/difficulty parameters.
 #' @param Ability Numeric matrix of person abilities with rows corresponding to
-#'   persons and columns to latent factors.
+#'   persons and columns to latent factors. Its mean and covariance define the
+#'   transform, so it should represent the latent distribution: true or
+#'   generating abilities, or draws from the fitted posterior. Point estimates
+#'   (MAP, EAP) are shrunk toward the prior mean, so their spread understates
+#'   the latent scale by roughly the square root of the reliability, and the
+#'   loadings come out flattened by the same factor -- about a fifth at ten
+#'   responses per person. Solutions that already share an identification (the
+#'   same fixed latent distribution and a confirmatory loading pattern) need
+#'   no transform at all.
 #' @param A Numeric item-by-factor loading matrix.
 #' @param AbilityCorr Optional latent correlation matrix. If omitted, the
 #'   correlation is estimated from `Ability`.
+#' @param AbilitySD,AbilityMean Optional latent standard deviations and means,
+#'   one per factor, used in place of the spread and centre of `Ability`. Pass
+#'   them whenever `Ability` holds point estimates; [extractMIRTpars()]
+#'   returns them for `bigIRT` and `mirt` fits as `latent_sd` and
+#'   `latent_mean`.
 #' @param normaliseScale Numeric scalar giving the target latent SD after
 #'   whitening. Defaults to 1.
 #' @param normaliseMean Numeric scalar or vector giving the target latent mean
@@ -241,7 +337,8 @@ normaliseIRT <- function(B,Ability, A,normbase='Ability',normaliseScale=1,  norm
 #' @export
 normaliseMIRT <- function(B, Ability, A, AbilityCorr = NULL,
   normaliseScale = 1, normaliseMean = 0, jitter = 1e-8,
-  referenceA = NULL, align = c("none", "orthogonal")){
+  referenceA = NULL, align = c("none", "orthogonal"),
+  AbilitySD = NULL, AbilityMean = NULL){
 
   align <- match.arg(align)
 
@@ -254,9 +351,14 @@ normaliseMIRT <- function(B, Ability, A, AbilityCorr = NULL,
   if(nrow(A) != length(B)) stop("A must have one row per item in B.")
   if(ncol(A) != ncol(Ability)) stop("A and Ability must have the same number of dimensions.")
   K <- ncol(A)
+  if(!is.null(AbilitySD) && length(AbilitySD) != K) stop("AbilitySD needs one value per factor.")
+  if(!is.null(AbilityMean) && length(AbilityMean) != K) stop("AbilityMean needs one value per factor.")
   if(K <= 1L){
     out <- normaliseIRT(B = B, Ability = as.numeric(Ability[,1]), A = as.numeric(A[,1]),
-      normbase = "Ability", normaliseScale = normaliseScale, normaliseMean = normaliseMean, robust = FALSE)
+      normbase = "Ability", normaliseScale = normaliseScale, normaliseMean = normaliseMean, robust = FALSE,
+      AbilitySD = AbilitySD, AbilityMean = AbilityMean)
+    sd1 <- if(!is.null(AbilitySD)) as.numeric(AbilitySD) else stats::sd(Ability[,1], na.rm = TRUE)
+    mu1 <- if(!is.null(AbilityMean)) as.numeric(AbilityMean) else mean(Ability[,1], na.rm = TRUE)
     A1 <- matrix(as.numeric(out$A), ncol = 1L)
     Ability1 <- matrix(as.numeric(out$Ability), ncol = 1L)
     B1 <- as.numeric(out$B)
@@ -278,9 +380,9 @@ normaliseMIRT <- function(B, Ability, A, AbilityCorr = NULL,
       A = A1,
       B = B1,
       Ability = Ability1,
-      center = mean(Ability[,1], na.rm = TRUE),
-      chol_cov = matrix(stats::sd(Ability[,1], na.rm = TRUE) / normaliseScale, 1, 1),
-      inv_chol = matrix(normaliseScale / pmax(stats::sd(Ability[,1], na.rm = TRUE), jitter), 1, 1),
+      center = mu1,
+      chol_cov = matrix(sd1 / normaliseScale, 1, 1),
+      inv_chol = matrix(normaliseScale / pmax(sd1, jitter), 1, 1),
       global_scale = 1,
       latent_shift = 0,
       AbilityCorr = matrix(1, 1, 1),
@@ -289,8 +391,8 @@ normaliseMIRT <- function(B, Ability, A, AbilityCorr = NULL,
     ))
   }
 
-  mu <- colMeans(Ability, na.rm = TRUE)
-  ability_sd <- apply(Ability, 2, stats::sd, na.rm = TRUE)
+  mu <- if(!is.null(AbilityMean)) as.numeric(AbilityMean) else colMeans(Ability, na.rm = TRUE)
+  ability_sd <- if(!is.null(AbilitySD)) as.numeric(AbilitySD) else apply(Ability, 2, stats::sd, na.rm = TRUE)
   ability_sd[!is.finite(ability_sd) | ability_sd < jitter] <- 1
 
   corr <- if(is.null(AbilityCorr)) {
@@ -359,6 +461,26 @@ normaliseMIRT <- function(B, Ability, A, AbilityCorr = NULL,
   )
 }
 
+## The latent mean and SD of a fit's ability metric, from the posterior rather
+## than from the point estimates. By the law of total variance, Var(theta) =
+## Var(E[theta | y]) + E[Var(theta | y)]; the posterior modes stand in for the
+## means and the Laplace posterior precisions give the variances. On a
+## simulated 2PL with ten responses per person and a N(0, 1) prior, the modes
+## had SD .75 and this gave .98. Person covariates are included: the point
+## estimates carry them and the posterior variance is that of the base. NULL
+## when the fit kept no per-person precision (the JMAP path).
+bigIRT_latent_moments <- function(object){
+  P <- object$personPosterior$precision
+  ab <- as.matrix(object$pars$Ability)
+  K <- ncol(ab)
+  if(is.null(P) || length(dim(P)) != 3L || dim(P)[1] != K) return(NULL)
+  pv <- if(K == 1L) matrix(1 / P[1, 1, ], ncol = 1L) else
+    t(vapply(seq_len(dim(P)[3]), function(i) diag(solve(P[, , i])), numeric(K)))
+  if(!all(is.finite(pv))) return(NULL)
+  list(mean = colMeans(ab, na.rm = TRUE),
+    sd = sqrt(apply(ab, 2, stats::var, na.rm = TRUE) + colMeans(pv)))
+}
+
 #' Extract Comparable MIRT Parameters
 #'
 #' Extracts a common set of multidimensional IRT parameters from either a
@@ -369,8 +491,16 @@ normaliseMIRT <- function(B, Ability, A, AbilityCorr = NULL,
 #' @param score_method Character string passed to `mirt::fscores()` when
 #'   extracting abilities from a `mirt` fit.
 #'
-#' @return A list with components `source`, `A`, `B`, `C`, `D`, `Ability`, and
-#'   `corr`.
+#' @return A list with components `source`, `A`, `B`, `C`, `D`, `Ability`,
+#'   `corr`, and `latent_mean` and `latent_sd`: the mean and standard
+#'   deviation of the latent variable on the solution's own metric, which is
+#'   what a normalisation should use. `Ability` holds point estimates, whose
+#'   spread understates the latent scale. For a `bigIRT` fit they come from the
+#'   posterior by the law of total variance (variance of the posterior modes
+#'   plus the mean posterior variance), for a `mirt` fit from its estimated
+#'   latent distribution; they are `NULL` for a simulation, whose `Ability` is
+#'   the latent variable itself, and for a fit that kept no posterior
+#'   precision.
 #' @export
 extractMIRTpars <- function(object, score_method = "EAP"){
   if(inherits(object, "bigIRT_simIRT")){
@@ -381,17 +511,22 @@ extractMIRTpars <- function(object, score_method = "EAP"){
     if(is.null(factor_names)) factor_names <- paste0("F", seq_len(K))
     colnames(ability) <- factor_names
 
+    ## The upper asymptote is taken from the simulation, like every other
+    ## parameter. It used to be set to 1 for every item on both paths, so 4PL
+    ## curve recovery was scored against curves the data did not come from
+    ## (test-compare-truth.R).
     if(!is.null(object$primaryScale)){
       A <- as.matrix(object$A)
       B <- as.numeric(object$B)
       C <- as.numeric(object$C)
-      D <- rep(1, length(B))
+      D <- as.numeric(object$D)
       rownames(A) <- if(!is.null(rownames(A))) rownames(A) else as.character(seq_len(nrow(A)))
       colnames(A) <- factor_names
     } else {
       A_in <- as.matrix(object$A)
       B_in <- as.matrix(object$B)
       C_in <- as.matrix(object$C)
+      D_in <- as.matrix(object$D)
       nitems_per_scale <- nrow(A_in)
       total_items <- nitems_per_scale * K
       A <- matrix(0, nrow = total_items, ncol = K)
@@ -420,6 +555,7 @@ extractMIRTpars <- function(object, score_method = "EAP"){
         A[rows, k] <- A_in[, k]
         B[rows] <- A_in[, k] * B_in[, k]
         C[rows] <- C_in[, k]
+        D[rows] <- D_in[, k]
         item_names[rows] <- paste0("S", factor_names[k], "_I", seq_len(nitems_per_scale))
         idx <- idx + nitems_per_scale
       }
@@ -441,6 +577,7 @@ extractMIRTpars <- function(object, score_method = "EAP"){
     if(is.null(dim(A))) A <- matrix(as.numeric(A), ncol = 1)
     ability <- as.matrix(object$pars$Ability)
     if(is.null(dim(ability))) ability <- matrix(as.numeric(ability), ncol = 1)
+    lm <- bigIRT_latent_moments(object)
     return(list(
       source = "bigIRT",
       A = A,
@@ -448,7 +585,9 @@ extractMIRTpars <- function(object, score_method = "EAP"){
       C = if(!is.null(object$pars$C)) as.numeric(object$pars$C) else rep(0, length(object$pars$B)),
       D = if(!is.null(object$pars$D)) as.numeric(object$pars$D) else rep(1, length(object$pars$B)),
       Ability = ability,
-      corr = if(!is.null(object$abilityPrior$corr)) as.matrix(object$abilityPrior$corr) else if(ncol(ability) > 1) stats::cor(ability) else matrix(1, 1, 1)
+      corr = if(!is.null(object$abilityPrior$corr)) as.matrix(object$abilityPrior$corr) else if(ncol(ability) > 1) stats::cor(ability) else matrix(1, 1, 1),
+      latent_mean = lm$mean,
+      latent_sd = lm$sd
     ))
   }
   if(requireNamespace("mirt", quietly = TRUE) && inherits(object, "SingleGroupClass")){
@@ -464,7 +603,9 @@ extractMIRTpars <- function(object, score_method = "EAP"){
       C = if("g" %in% names(items)) as.numeric(items$g) else rep(0, nrow(items)),
       D = if("u" %in% names(items)) as.numeric(items$u) else rep(1, nrow(items)),
       Ability = as.matrix(mirt::fscores(object, method = score_method, full.scores = TRUE)),
-      corr = cov2cor(coef_s$cov)
+      corr = cov2cor(coef_s$cov),
+      latent_mean = as.numeric(coef_s$means),
+      latent_sd = sqrt(diag(as.matrix(coef_s$cov)))
     ))
   }
   stop("Unsupported object type for extractMIRTpars().")
@@ -472,6 +613,11 @@ extractMIRTpars <- function(object, score_method = "EAP"){
 
 bigIRT_comparison_state_normalised <- function(state, referenceA = NULL,
   normaliseScale = 1, normaliseMean = 0){
+  ## Each model is standardised by its latent distribution (latent_sd,
+  ## latent_mean from extractMIRTpars), not by the spread of its point
+  ## estimates, which are shrunk: that flattened a fit's loadings by about a
+  ## fifth at ten responses per person while the simulated truth, standardised
+  ## by its true abilities, was left alone.
   norm <- normaliseMIRT(
     B = state$B,
     Ability = state$Ability,
@@ -480,13 +626,18 @@ bigIRT_comparison_state_normalised <- function(state, referenceA = NULL,
     normaliseScale = normaliseScale,
     normaliseMean = normaliseMean,
     referenceA = referenceA,
-    align = if(is.null(referenceA)) "none" else "orthogonal"
+    align = if(is.null(referenceA)) "none" else "orthogonal",
+    AbilitySD = state$latent_sd,
+    AbilityMean = state$latent_mean
   )
+  K <- ncol(as.matrix(state$A))
   utils::modifyList(state, list(
     A = norm$A,
     B = norm$B,
     Ability = norm$Ability,
     corr = norm$AbilityCorr,
+    latent_sd = if(!is.null(state$latent_sd)) rep(normaliseScale, K),
+    latent_mean = if(!is.null(state$latent_mean)) rep_len(normaliseMean, K),
     transform = norm
   ))
 }
@@ -614,6 +765,17 @@ bigIRT_comparison_attach_reference <- function(dt, id_cols, ref_name){
 #'
 #' Coerces simulated truth, `bigIRT` fits, and `mirt` fits onto a common raw
 #' and normalized parameter representation for direct comparison.
+#'
+#' Which form to read: when every model identifies its metric the way the
+#' reference does -- the same fixed latent distribution, a confirmatory
+#' loading pattern -- the `"raw"` form is already on the reference's metric and
+#' is the one to compare. The `"normalized"` form standardises each model by
+#' the spread of its own ability estimates, which for a fitted model are point
+#' estimates shrunk toward the prior mean: it flattens the fitted loadings by
+#' roughly the square root of the reliability (about a fifth at ten responses
+#' per person) while the reference, standardised by its true abilities, is
+#' left alone, and so favours models with steeper loadings. Use it only when
+#' the metrics genuinely differ, and treat its curve RMSE accordingly.
 #'
 #' @param models A named or unnamed list containing up to one `simIRT` object
 #'   and any number of fitted `bigIRT` and/or `mirt` models.
@@ -793,6 +955,12 @@ compareIRTmodels <- function(models, score_method = "EAP", normaliseScale = 1,
 #' @param itemref. The column name of the item variable in \code{dat}
 #' @param idref. The column name of the id variable in \code{dat}
 #' @param tol. Tolerance level for checking perfect scores -- .01 would drop subjects with less than 1% correct or incorrect
+#' @param trainref. Optional name of a 0/1 column marking training rows. When
+#'   given, whether a person or item is perfect is decided from its training
+#'   rows only, and all its rows (held-out ones too) are dropped; a person or
+#'   item with no training rows is kept. \code{fitIRT} passes its
+#'   \code{trainingRows} this way, so held-out responses never decide who is
+#'   fitted.
 #'
 #' @return The input data table (\code{dat}) without variables/items and subjects with all perfect scores.
 #'
@@ -803,25 +971,38 @@ compareIRTmodels <- function(models, score_method = "EAP", normaliseScale = 1,
 #' dat <- data.table(id=c(1,1,1,2,2,2,3,3,3), Item=c('I1','I2','I3','I1','I2','I3','I1','I2','I3'),
 #'    score=c(1,0,1,0,0,0,0,1,1))
 #' print(dropPerfectScores(dat))
-dropPerfectScores <- function(dat,scoreref.='score',itemref.='Item',idref.='id',tol.=.001){
+## `trainref.` names a 0/1 column marking training rows; when given, the means
+## that decide what is dropped are taken over training rows only, and every
+## row (held-out ones too) of a dropped person or item goes. Until October
+## 2026 the means ran over all rows, so held-out responses decided who was
+## dropped: a person correct on every training response was kept or dropped
+## according to their held-out answers. A person or item with no training
+## rows has no mean and is kept (a whole-person holdout is predicted from the
+## prior).
+dropPerfectScores <- function(dat,scoreref.='score',itemref.='Item',idref.='id',tol.=.001,trainref.=NULL){
   if(!'data.table' %in% class(dat)) stop('Not a data.table!')
+  train <- if(!is.null(trainref.) && trainref. %in% names(dat)) as.logical(dat[[trainref.]]) else rep(TRUE, nrow(dat))
+  dat[, ("__bigIRT_counts__") := train]
+  extreme <- function(m) !is.na(m) & (abs(m - .5) + tol.) >= .5
+  train_mean <- function(s, w) if(any(w)) mean(s[w]) else NA_real_
 
   dropping <- TRUE
   while(dropping){
     dropping <- FALSE
-    dat[,itemMean:=mean(get(scoreref.)),by=itemref.]
-    if(any((abs(dat$itemMean-.5)+tol.)>= .5)){
+    dat[,itemMean:=train_mean(get(scoreref.), get("__bigIRT_counts__")),by=itemref.]
+    if(any(extreme(dat$itemMean))){
       dropping <- TRUE
       warning('Dropping items with all 0 or 1',immediate. = TRUE)
-      dat <- dat[(abs(itemMean-.5)+tol.)< .5,]
+      dat <- dat[!extreme(itemMean),]
     }
-    dat[,personMean:= mean(get(scoreref.)),by=idref.]
-    if(any((abs(dat$personMean-.5)+tol.)>= .5)){
+    dat[,personMean:= train_mean(get(scoreref.), get("__bigIRT_counts__")),by=idref.]
+    if(any(extreme(dat$personMean))){
       warning('Dropping subjects with all 0 or 1',immediate. = TRUE)
       dropping <- TRUE
-      dat <-dat[(abs(personMean-.5)+tol.)< .5,]
+      dat <-dat[!extreme(personMean),]
     }
   }
+  dat[, ("__bigIRT_counts__") := NULL]
   dat[,itemMean:=NULL]
   dat[,personMean:=NULL]
   dat[1,] #weirdness required to ensure return prints properly
@@ -1153,6 +1334,9 @@ print.bigIRT_fit <- function(x, ...){
     if(isTRUE(status$beta_frozen)) cat("Note: person-predictor effects were held fixed.\n")
   }
   if(!is.null(status$certificate)) cat(bigIRT_certificate_line(status$certificate), "\n", sep = "")
+  if(!is.null(status$diverged) && is.null(status$certificate$diverged))
+    cat("Run off (see laplaceStatus$diverged): ", bigIRT_name_list(paste0("item ",
+      status$diverged$item, " ", status$diverged$parameter)), "\n", sep = "")
   invisible(x)
 }
 
@@ -1330,6 +1514,36 @@ bigIRT_validate_fit_inputs <- function(dat, score, id, item, scale, pl, controls
 #'   forces fixed/free status for each loading entry. `TRUE` means fixed,
 #'   `FALSE` means free, `NA` defers to `loadings` values. If omitted, fixed/free
 #'   status is inferred from whether `loadings` entries are `NA`.
+#' @param signedLoadings Which free loadings may take either sign. Every free
+#'   loading is otherwise the softplus \eqn{\log(1 + e^x)} of an unconstrained
+#'   parameter, so it is positive. That positivity is what fixes the sign of
+#'   each latent dimension, and it is kept for primary loadings; but it makes a
+#'   negative cross-loading impossible, so an item that truly loads negatively
+#'   on a second dimension has its cross-loading pinned near zero instead. A
+#'   signed loading takes the identity link: the loading is the parameter
+#'   itself.
+#'   \itemize{
+#'   \item `NULL` or `FALSE` (default): none; exactly the behaviour without the
+#'   argument.
+#'   \item `"cross"`: every free loading off the item's own scale (its `scale`
+#'   column) is signed; primary loadings stay positive.
+#'   \item a logical `Nitems x Nscales` matrix, aligned by row and column names
+#'   as `loadings` is: `TRUE` marks a signed loading. Marking a fixed loading
+#'   is an error.
+#'   }
+#'   A signed loading's prior is normal with mean zero and SD `invspASD`, on
+#'   the loading itself. Its mean is fixed: the estimated discrimination mean
+#'   (`estMeans` 'A') describes the softplus pre-images of the positive
+#'   loadings and applies to those alone, and empirical Bayes leaves signed
+#'   loadings out of its discrimination update. It starts at zero. Item
+#'   covariates on discrimination (`AitemPreds`) add to the parameter under
+#'   either link. Requires `marginalApprox = "laplace"` and `pl >= 2`.
+#'
+#'   Signs do not identify a rotation: with cross-loadings free in both
+#'   directions the dimensions can rotate into each other unless `loadings`
+#'   fixes enough of them, at least \eqn{K(K-1)/2} zeros placed so that every
+#'   pair of dimensions is pinned. `tidyIRT()` reports free cross-loadings as
+#'   terms `A_<scale>` on fits with signed loadings.
 #' @param AitemPreds Character vector. Names of predictors for item discrimination parameters. Default is an empty character vector.
 #' @param BitemPreds Character vector. Names of predictors for item difficulty parameters. Default is an empty character vector.
 #' @param CitemPreds Character vector. Names of predictors for item guessing parameters. Default is an empty character vector.
@@ -1376,7 +1590,12 @@ bigIRT_validate_fit_inputs <- function(dat, score, id, item, scale, pl, controls
 #' @param iter Integer. Maximum number of iterations for the fitting algorithm. Default is 2000.
 #' @param cores Integer. Number of cores to use for parallel computation. Default is 6.
 #' @param carefulfit Logical. Whether to use a slower, careful fitting procedure. Default is FALSE. Experimental.
-#' @param ebayes Logical. Whether to use empirical Bayes estimation. Default is TRUE. With ebayes, the priors are adapted based on a first pass estimate.
+#' @param ebayes Logical. Whether to use empirical Bayes estimation: the
+#'   priors are adapted from a first-pass estimate. Default FALSE since 0.1.9
+#'   (TRUE before). On simulated 3PL and 4PL data, empirical-Bayes priors
+#'   narrowed toward the first pass left item intervals covering .004 to .84
+#'   of the time against a nominal .95, where the fixed default priors were
+#'   conservative.
 #' @param ebayesmultiplier Numeric. Multiplier for the widths of the empirical Bayes priors. Default is 2, as this appears to work better in practice.
 #' @param ebayesFromFixed Logical. Whether to initialize empirical Bayes from any specifed fixed values Default is FALSE.
 #' @param estMeans Character vector. Which means to estimate, from 'ability',
@@ -1395,9 +1614,10 @@ bigIRT_validate_fit_inputs <- function(dat, score, id, item, scale, pl, controls
 #'   person has no likelihood, so their ability is the prior mean, which under
 #'   the default is 0 plus whatever their \code{personPreds} imply.
 #' @param priors Logical. Whether to use prior distributions. Default is TRUE.
-#' @param marginalApprox Character. Marginal approximation backend. Use
-#'   \code{"none"} for the legacy Stan/JML path, or \code{"laplace"} for the
-#'   Laplace backend: a single-stage optimizer over the item block that
+#' @param marginalApprox Character. Marginal approximation backend.
+#'   \code{"laplace"} (the default since 0.1.9; \code{"none"} before) for the
+#'   Laplace backend, or \code{"none"} for the legacy Stan/JML path. The
+#'   Laplace backend is a single-stage optimizer over the item block that
 #'   re-solves the person modes inside every objective evaluation and
 #'   differentiates through them, so the gradient carries the adjoint term
 #'   rather than treating the modes as fixed. It accepts item predictors,
@@ -1532,9 +1752,12 @@ bigIRT_validate_fit_inputs <- function(dat, score, id, item, scale, pl, controls
 #'   Laplace approximation. The refinement starts from the Laplace optimum and
 #'   uses the same optimiser, so it is a short continuation, not a second fit.
 #'   \code{"auto"} (default): with free asymptotes (3PL, 4PL), by quadrature
-#'   at any dimension; without, by \code{"laplace2"} from two dimensions on,
-#'   where Laplace put 2PL loadings 0.12 to 0.22 standard errors low on
-#'   simulated data. \code{"agq"} always refines by quadrature: a product
+#'   at any dimension; without, not at all in one dimension, by quadrature in
+#'   two and three, and by \code{"laplace2"} beyond three, where Laplace put
+#'   2PL loadings 0.12 to 0.22 standard errors low on simulated data and
+#'   quadrature costs about four times as much (earlier versions used
+#'   \code{"laplace2"} from two dimensions on; see below for why that
+#'   changed). \code{"agq"} always refines by quadrature: a product
 #'   Gauss-Hermite rule up to three dimensions, and beyond that an expansion
 #'   of each person's log integral in product rules on every pair (and,
 #'   coarsely, every triple) of dimensions, which on 3PL data at nine
@@ -1553,9 +1776,41 @@ bigIRT_validate_fit_inputs <- function(dat, score, id, item, scale, pl, controls
 #'   about 5 per cent larger), and on 4PL data nearly one standard error (8 to
 #'   13 per cent); the bias is fixed per person while standard errors shrink
 #'   with N, so intervals under-cover more as data grow. Laplace can also hold
-#'   a fit at an optimum the exact marginal does not have. For the 2PL the
-#'   shift was about 0.03 standard errors, which is why \code{"auto"} leaves
-#'   it alone. The reported \code{logLik} is then the quadrature marginal;
+#'   a fit at an optimum the exact marginal does not have. For the
+#'   one-dimensional 2PL the shift was about 0.03 standard errors, which is
+#'   why \code{"auto"} leaves it alone -- under the item priors. Without them (\code{priors = FALSE})
+#'   the 2PL Laplace marginals reward a near-step curve for a weakly
+#'   identified item: on sparse simulated data with 75 training responses per
+#'   item, 75 per cent of one-dimensional Laplace fits had a discrimination
+#'   above 10, against 10 per cent of the same fits finished by quadrature and
+#'   5 per cent for an EM quadrature fit (paper/Submission2,
+#'   unregularised_marginal_check.R). Set \code{"agq"} when the item priors
+#'   are off. Without them an item can also run off along its own ray, its
+#'   loading and intercept growing together towards a step, where the
+#'   gradient along the ray vanishes. So the refinement judges each stretch
+#'   of steps taken on held quadrature nodes against the objective with the
+#'   nodes re-centred, and undoes one that lost more than re-centring alone
+#'   moves it (held nodes are a discrete ability distribution, which a step
+#'   between two of them fits better the steeper it is); and it restarts
+#'   from run-off items pulled back along their rays, keeping whichever end
+#'   is best on its own objective. \code{laplaceStatus$refine} records both
+#'   (\code{held_nodes_lost}, \code{pulled_back}). The second-order finish
+#'   also falls short, with the priors on,
+#'   when each person has only a few responses per dimension. On sparse
+#'   three-dimensional 2PL data with about eight fitted responses per person,
+#'   its primary loadings had an RMSE of .283 against .235 for the same fits
+#'   finished by quadrature, and sat higher (mean error +.045 against +.020),
+#'   in every one of 20 replications; and with 1,350 persons, 2 to 4 per cent
+#'   of its fits were certified at a spurious optimum with one item at a
+#'   discrimination of 4 to 10, where quadrature put it at 1.6 and an EM fit
+#'   below 2 (paper/Submission2, Study 2). That is why \code{"auto"} now
+#'   finishes the 2PL by quadrature up to three dimensions, at four to five
+#'   times the former cost there. At nine dimensions the same data showed
+#'   the smaller, systematic part of the problem (curves recovered slightly
+#'   less closely than by quadrature, no spurious optima in ten fits), and
+#'   quadrature there costs about four times as much; set \code{"agq"} for
+#'   sparse high-dimensional fits when accuracy matters more than speed.
+#'   The reported \code{logLik} is then the quadrature marginal;
 #'   \code{laplaceStatus} records both values and what the refinement did.
 #' @param agqNodes Integer. Gauss-Hermite nodes per dimension for
 #'   \code{laplaceRefine}. Up to three dimensions the product rule costs
@@ -1583,7 +1838,16 @@ bigIRT_validate_fit_inputs <- function(dat, score, id, item, scale, pl, controls
 #'   no direction has negative curvature, and stepping along the directions
 #'   with no curvature gains nothing; a discrimination, asymptote or latent
 #'   correlation whose transform has gone flat is pulled back towards its
-#'   live range, and a fit that gains from that is not a maximum.
+#'   live range, and a fit that gains from that is not a maximum. An item
+#'   whose response function has run off -- a loading steeper than
+#'   \code{getOption("bigIRT.runaway_slope", 20)} logits per ability SD, or
+#'   an intercept that many logits beyond every ability within four SDs,
+#'   which unregularised fits (\code{priors = FALSE}) can reach -- makes the
+#'   verdict \code{"diverged"}: its parameters are named in the reason and in
+#'   \code{laplaceStatus$diverged} (item, parameter, value, and what pulling
+#'   the item back along its own ray gained), and \code{converged} is
+#'   \code{FALSE}. That table is filled, and the reason set to
+#'   \code{"diverged"}, even when the certificate is off.
 #'   \code{converged} follows the verdict, \code{laplaceStatus$certificate}
 #'   holds it, and the default standard errors of \code{\link{itemInformation}},
 #'   \code{summary()} and \code{tidyIRT()} come from its curvature.
@@ -1599,7 +1863,13 @@ bigIRT_validate_fit_inputs <- function(dat, score, id, item, scale, pl, controls
 #'   modes rather than the Laplace objective's; the two agree near the
 #'   optimum, and far from it a fit the exact route calls
 #'   \code{"suboptimal"} may be called \code{"notmaximum"} here -- neither
-#'   certifies it.
+#'   certifies it. Because this route can also find negative curvature the
+#'   exact one does not, along a direction only a prior identifies, a
+#'   \code{"notmaximum"} from negative curvature is re-tested by the exact
+#'   route whenever that projects within
+#'   \code{getOption("bigIRT.certify_escalate", 60)} seconds; the exact
+#'   verdict is then the one reported, and the fast one is kept in
+#'   \code{laplaceStatus$certificate$fast}.
 #'
 #'   \code{"exact"}: the whole Hessian by central differences of the
 #'   gradient, two evaluations per free parameter, which roughly doubles a
@@ -1727,7 +1997,7 @@ bigIRT_validate_fit_inputs <- function(dat, score, id, item, scale, pl, controls
 fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   personDat=NA, personPreds=character(),
   itemDat=NA,
-  loadings=NA, loadingsFixed=NA,
+  loadings=NA, loadingsFixed=NA, signedLoadings=NULL,
   AitemPreds=character(),
   BitemPreds=character(),
   CitemPreds=character(),
@@ -1742,9 +2012,9 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   AMeanSD=1,BMeanSD=BSD,logitCMeanSD=logitCSD,logitDMeanSD=logitDSD,
   AbilityMeanSD=array(1,dim=c(length(unique(dat[[scale]])))),
   iter=2000,cores=6,carefulfit=FALSE,
-  ebayes=TRUE,ebayesmultiplier=2,ebayesFromFixed=FALSE,ebayesIter=5L,ebayesMethod=c("laplace","moment"),ebayesMinSD=0.05,ebayesCoarse=1000,
+  ebayes=FALSE,ebayesmultiplier=2,ebayesFromFixed=FALSE,ebayesIter=5L,ebayesMethod=c("laplace","moment"),ebayesMinSD=0.05,ebayesCoarse=1000,
   estMeans=c('A','B','C','D'),priors=TRUE,
-  marginalApprox=c("none","laplace","laplace_fast","laplace_direct"),
+  marginalApprox=c("laplace","none","laplace_fast","laplace_direct"),
   estimateAbilityCorr=FALSE,
   laplaceCorrParam=c("stan_corsqrt","normalized_chol"),
   keepInternals=FALSE,laplaceOuterIter=500,laplaceTol=1e-4,laplaceTolScale=c("relative","per_obs"),laplaceGradTol=1e-4,laplacePolish=NA,laplacePersonTol=1e-6,laplaceOptimizer=c("fisher","mize"),
@@ -1838,6 +2108,16 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   ## recovery down to match, monotonically and across seeds. Regularisation
   ## belongs in the priors, not in where an optimiser happens to stall.
   if(marginalApprox %in% c("laplace_fast", "laplace_direct")) marginalApprox <- "laplace"
+  ## Signed loadings exist on the Laplace path only: the Stan model behind
+  ## "none" has softplus loadings and nothing else. An all-FALSE matrix asks
+  ## for nothing and is allowed anywhere.
+  signedAsked <- !is.null(signedLoadings) && !isFALSE(signedLoadings) &&
+    (is.character(signedLoadings) || isTRUE(any(as.logical(signedLoadings))))
+  if(signedAsked && !identical(marginalApprox, "laplace"))
+    stop("signedLoadings needs marginalApprox = \"laplace\": the Stan path (\"none\") ",
+      "has positive (softplus) loadings only.", call. = FALSE)
+  if(signedAsked && pl < 2)
+    stop("signedLoadings needs pl >= 2: a 1PL has no free loadings.", call. = FALSE)
   ebayesMethod <- match.arg(ebayesMethod)
   laplaceCorrParam <- match.arg(laplaceCorrParam)
   laplaceOptimizer <- match.arg(laplaceOptimizer)
@@ -1867,7 +2147,8 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   dat[, `__bigIRT_training__` := as.integer(get("__bigIRT_input_row__") %in% trainingRows)]
 
   #drop problem people and items
-  if(dropPerfectScores)    dat <- dropPerfectScores(dat,scoreref. = scoreref.,itemref. = itemref.,idref. = idref.)
+  if(dropPerfectScores)    dat <- dropPerfectScores(dat,scoreref. = scoreref.,itemref. = itemref.,idref. = idref.,
+    trainref. = "__bigIRT_training__")
   if(!nrow(dat)) stop("No observations remain after filtering perfect-score rows.")
 
   #sort data by subject
@@ -2005,6 +2286,10 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     loadingValues[cbind(seq_len(Nitems), itemSetup$scale)] <- 1
     loadingFixedFromValues[,] <- TRUE
   }
+  ## Which free loadings take the identity link; see signedLoadings.
+  signedMat <- bigIRT_resolve_signed_loadings(signedLoadings, fixed = loadingFixedFromValues,
+    itemScale = itemSetup$scale, itemNames = itemSetup$original,
+    scaleNames = scaleIndex$original)
 
   itemSetup$A <- loadingValues[cbind(seq_len(Nitems), itemSetup$scale)]
   itemSetup[,paste0(c('B','C','D'),'data'):= .SD, .SDcols=c('B','C','D')] #create data columns
@@ -2163,10 +2448,16 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     logitCMeanSD=logitCMeanSD,
     logitDMeanSD=logitDMeanSD,
     AbilityMeanSD=array(AbilityMeanSD),
-    fixedAMean=as.integer(!'A' %in% estMeans || pl < 2),
-    fixedBMean=as.integer(!'B' %in% estMeans),
-    fixedCMean=as.integer(!'C' %in% estMeans || pl < 3),
-    fixedDMean=as.integer(!'D' %in% estMeans || pl < 4),
+    ## A family's prior centre is estimated only if the family has a free item
+    ## parameter: with every item of a family fixed (scoring new persons
+    ## against a calibrated bank through itemDat) the centre describes nothing,
+    ## its curvature is zero, and the Laplace optimiser failed with "missing
+    ## value where TRUE/FALSE needed" -- the common use, once Laplace became
+    ## the default in 0.1.9.
+    fixedAMean=as.integer(!'A' %in% estMeans || pl < 2 || !any(fixedAlog == 0L)),
+    fixedBMean=as.integer(!'B' %in% estMeans || !any(is.na(itemSetup$B))),
+    fixedCMean=as.integer(!'C' %in% estMeans || pl < 3 || !any(is.na(itemSetup$C))),
+    fixedDMean=as.integer(!'D' %in% estMeans || pl < 4 || !any(is.na(itemSetup$D))),
     fixedAbilityMean=as.integer(!'Ability' %in% estMeans & !'ability' %in% estMeans),
     rowIndexPar=0L,
     originalRow=array(as.integer(dat[["__bigIRT_input_row__"]])),
@@ -2178,6 +2469,15 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   sdat$freeBref=array(as.integer(cumsum(1-as.numeric(sdat$fixedB))))
   sdat$freeCref=array(as.integer(cumsum(1-as.numeric(sdat$fixedClogit))))
   sdat$freeDref=array(as.integer(cumsum(1-as.numeric(sdat$fixedDlogit))))
+  ## Signed loadings, one entry per item-by-scale cell in the order of
+  ## fixedAlog; read through bigIRT_laplace_signed_A(). Present only when
+  ## something is signed, so the prepared data of every other fit are exactly
+  ## what they were.
+  if(any(signedMat)){
+    sdat$signedA <- array(as.integer(a_matrix_to_vector(signedMat)))
+    ## With every free loading signed there is no softplus mean to estimate.
+    if(all(signedMat[!loadingFixedFromValues])) sdat$fixedAMean <- 1L
+  }
 
   ## fitIRT sorts the data by person before fitting, so every row-aligned
   ## internal quantity is in that sorted order.  `p` and `pcorrect` are the
@@ -2369,8 +2669,10 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     eb_trace <- list()
     ## Quadrature refinement of the final pass; see laplaceRefine.
     free_asymptotes <- (sdat$Nitems - sdat$NfixedC) > 0 || (sdat$Nitems - sdat$NfixedD) > 0
-    ## "auto" uses quadrature up to three dimensions and second-order Laplace
-    ## beyond. Not quasi-Monte Carlo: at 256 points in nine dimensions a
+    ## "auto": with free asymptotes, quadrature at every dimension (the
+    ## anchored-ANOVA rule beyond three); without, nothing at one dimension,
+    ## quadrature at two and three, second-order Laplace beyond. Not
+    ## quasi-Monte Carlo: at 256 points in nine dimensions a
     ## refinement held on fixed points was measured running away (693
     ## evaluations, correlations 100 SE off) -- the optimiser finds parameters
     ## a few points favour -- and 1,024 points still sat up to 1.6 SE from
@@ -2394,7 +2696,19 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     ##        dev/optim/pairs_fit.R) was not: at K = 9 within 0.5 SE, at 10
     ##        times Laplace's time and a twelfth of the reference's.
     ##   4PL  K = 5: Laplace up to 13 SE off; the same rule within 2.
-    auto_kind <- if(!free_asymptotes) { if(sdat$Nscales >= 2L) "laplace2" else "none" } else "agq"
+    ## The 2PL figures above had every person answer many items. With two or
+    ## three responses per person and dimension (the paper's Study 2, K = 3,
+    ## priors on) second-order Laplace sat off the quadrature optimum in every
+    ## fit -- primary loadings RMSE .283 against .235, all of 40 replications
+    ## -- and at 1,350 persons 2 to 4 per cent of fits certified a spurious
+    ## optimum with one item at a discrimination of 4 to 10, where quadrature
+    ## put it at 1.6 and an EM fit at under 2; plain Laplace did the same. So
+    ## up to K = 3, where product rules are cheap (four to five times the
+    ## default's former cost there), the 2PL is finished by quadrature as well.
+    ## Beyond three the anchored-ANOVA rule costs about four times
+    ## second-order Laplace at K = 9, which stays the default there.
+    auto_kind <- if(free_asymptotes) "agq" else if(sdat$Nscales == 1L) "none" else
+      if(sdat$Nscales <= 3L) "agq" else "laplace2"
     refine_kind <- switch(laplaceRefine, none = "none", agq = "agq", laplace2 = "laplace2",
       auto = auto_kind)
     agq_rule <- switch(refine_kind, none = NULL,
@@ -2452,7 +2766,10 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
         list(route = if(isTRUE(laplaceCertify) || identical(laplaceCertify, "fast")) "fast" else "exact",
           budget = if(is.numeric(laplaceCertify))
             max(0, as.numeric(laplaceCertify)[1], na.rm = TRUE) else Inf,
-          tolerance = 10 * laplaceTol)
+          tolerance = 10 * laplaceTol,
+          ## So that a verdict naming items names them as the data did.
+          item_labels = bigIRT_index_labels(itemIndex),
+          scale_labels = bigIRT_index_labels(scaleIndex))
     )
 
       if(eb_round > eb_rounds) break
@@ -2590,6 +2907,15 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     ## and cannot see a transform that has gone flat. NA keeps them.
     certificate <- directFit$optim$certificate
     cert_converged <- if(is.null(certificate)) NA else bigIRT_certificate_converged(certificate$status)
+    ## Item parameters that have run off along their item's own ray
+    ## (R/certify.R): the certificate's table, which also says what pulling
+    ## each item back gained, or the backend's screen where no certificate
+    ## reached one. NULL when nothing ran off.
+    diverged <- certificate$diverged
+    if(is.null(diverged) && length(directFit$optim$runaway$item))
+      diverged <- cbind(bigIRT_runaway_named(directFit$optim$runaway, sdat$Nscales,
+        bigIRT_index_labels(itemIndex), bigIRT_index_labels(scaleIndex))[,
+        c("item", "parameter", "value")], pullback_gain = NA_real_)
     ## A single scaled norm sums over every parameter, so it cannot say which
     ## block is responsible and it hides one stuck parameter among thousands.
     ## It also lets a small block with a naturally larger gradient dominate the
@@ -2621,13 +2947,15 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     fit$laplaceStatus <- list(
       ## The certificate's verdict when it reached one (R/certify.R), the
       ## optimiser's own labels otherwise.
-      converged = if(is.na(cert_converged)) strict_direct else cert_converged,
+      converged = if(is.na(cert_converged)) strict_direct && is.null(diverged) else cert_converged,
       reason = if(!is.na(cert_converged)) certificate$status else
+        if(!is.null(diverged)) "diverged" else
         if(gain_converged) "predicted_gain" else
         if(isTRUE(strict_direct)) "approx_gradient" else
         if(direct_terminate %in% c("linesearch_failed", "not_descent")) "linesearch_failed" else
         "max_iter",
       certificate = certificate,
+      diverged = diverged,
       outer_iters = if(!is.null(directFit$optim$iter)) directFit$optim$iter else max(2L, as.integer(laplaceOuterIter)),
       beta_frozen = bigIRT_laplace_beta_frozen(sdat, directFit$optim$layout),
       initialized_from = "prior_anchored",
@@ -2688,6 +3016,13 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     if(isFALSE(cert_converged))
       warning(sprintf("The fit is not certified as converged (%s): %s. See laplaceStatus$certificate.",
         certificate$status, certificate$reason), call. = FALSE)
+    ## Without a certificate's verdict the run-off items still say so.
+    if(is.na(cert_converged) && !is.null(diverged))
+      warning(sprintf(paste0("Item parameters have run off, beyond %s logits per ability SD: %s. ",
+        "Their values are arbitrary points on a ray to infinity; item priors (priors = TRUE) ",
+        "would bound them. See laplaceStatus$diverged."), format(bigIRT_runaway_slope()),
+        bigIRT_name_list(paste0("item ", diverged$item, " ", diverged$parameter, " = ",
+          bigIRT_format_each(diverged$value)))), call. = FALSE)
     if(identical(certificate$status, "saturated"))
       message("Boundary estimate: ", certificate$reason, ".")
     if((identical(certificate$status, "skipped") && isTRUE(certificate$budget > 0)) ||
@@ -2798,6 +3133,9 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   # skip the Laplace optimization and fall back to the legacy JML
   # parameterization so output construction does not crash.
   if(all(is.na(fit)) && identical(marginalApprox, "laplace")){
+    if(!is.null(sdat$signedA))
+      stop("marginalApprox='laplace' found no free ability parameters, and the JML path it ",
+        "would fall back to has no signed loadings (signedLoadings).", call. = FALSE)
     warning("marginalApprox='laplace' requested but no free ability parameters were found; falling back to marginalApprox='none' (JML).")
     marginalApprox <- "none"
     for(i in 1:length(JMLseq)){
@@ -2812,6 +3150,13 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
   }
 
   if(normalise){   #normalise pars
+    ## Standardise by the latent distribution of the fitted metric (posterior
+    ## modes plus posterior variance), not by the spread of the point
+    ## estimates, which are shrunk: that flattened the discriminations by
+    ## about a fifth at ten responses per person, on a metric the ability prior
+    ## had already fixed. Falls back to the point estimates when the fit kept
+    ## no posterior precision.
+    latentMoments <- bigIRT_latent_moments(fit)
     if(!is.null(dim(fit$pars$A)) && length(dim(fit$pars$A)) == 2 && ncol(fit$pars$A) > 1){
       abilityCorrNorm <- NULL
       if(!is.null(fit$abilityPrior$corr)) abilityCorrNorm <- fit$abilityPrior$corr
@@ -2821,7 +3166,9 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
         A = fit$pars$A,
         AbilityCorr = abilityCorrNorm,
         normaliseScale = normaliseScale,
-        normaliseMean = normaliseMean
+        normaliseMean = normaliseMean,
+        AbilitySD = latentMoments$sd,
+        AbilityMean = latentMoments$mean
       )
       fit$pars$Ability <- normpars$Ability
       fit$pars$B <- normpars$B
@@ -2858,7 +3205,10 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
         }
       }
       if(!is.null(fit$abilityPrior)){
-        fit$abilityPrior$sd <- apply(fit$pars$Ability, 2, stats::sd, na.rm = TRUE)
+        ## The normalised metric's latent SDs are normaliseScale by
+        ## construction; the spread of the transformed point estimates is
+        ## smaller and is not the latent quantity.
+        fit$abilityPrior$sd <- rep(normaliseScale, ncol(fit$pars$Ability))
         ## Preserve what the model estimated before overwriting it.
         ##
         ## The line below replaces the latent correlation with the empirical
@@ -2889,7 +3239,8 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
 
         normpars <- normaliseIRT(B = fit$pars$B[selector],
           Ability = fit$pars$Ability[,i],
-          A=a_for_scale,normaliseScale = normaliseScale, normaliseMean = normaliseMean)
+          A=a_for_scale,normaliseScale = normaliseScale, normaliseMean = normaliseMean,
+          AbilitySD = latentMoments$sd[i], AbilityMean = latentMoments$mean[i])
 
         fit$pars$Ability[,i] <- normpars$Ability
 
@@ -2930,6 +3281,20 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     fit$itemPars <- cbind(fit$itemPars, fit$pars$itemPredsMean)
   }
 
+  ## Person posterior SDs from the per-person posterior precision, which every
+  ## Laplace fit keeps. They used to come only from the covariance, kept with
+  ## laplaceKeepCovariance = TRUE (or set by the empirical-Bayes rounds), so a
+  ## fit with ebayes = FALSE -- what the paper recommends -- returned no _SD
+  ## columns at all. Not under normalise = TRUE in one dimension, whose
+  ## transform leaves the posterior on the unnormalised metric.
+  if(identical(marginalApprox, "laplace") && is.null(fit$pars$sAbilitySD) &&
+     !is.null(fit$personPosterior$precision) &&
+     (!normalise || ncol(as.matrix(fit$pars$Ability)) > 1L)){
+    P <- fit$personPosterior$precision; K <- ncol(as.matrix(fit$pars$Ability))
+    if(length(dim(P)) == 3L && dim(P)[1] == K && dim(P)[3] == nrow(as.matrix(fit$pars$Ability)))
+      fit$pars$sAbilitySD <- t(matrix(vapply(seq_len(dim(P)[3]), function(i)
+        sqrt(diag(solve(matrix(P[, , i], K)))), numeric(K)), nrow = K))
+  }
   fit$personPars <- data.frame(id=rownames(fit$pars$Ability),fit$pars$Ability)
   colnames(fit$personPars)[1] = id
   if(identical(marginalApprox, "laplace") && !is.null(fit$pars$sAbilitySD)){
@@ -3001,7 +3366,10 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
       sum(!fit$personPosterior$converged) else NA_integer_
     status$numerical_failure <- !is.finite(fit$optim$logLik) ||
       (!is.null(status$last_item_grad_norm) && !is.finite(status$last_item_grad_norm))
-    if(!isTRUE(status$converged) && isTRUE(status$person_mode_failures > 0L))
+    ## An item that has run off is the likelier cause of failed person modes,
+    ## so its reason stands.
+    if(!isTRUE(status$converged) && isTRUE(status$person_mode_failures > 0L) &&
+       !identical(status$reason, "diverged"))
       status$reason <- "person_mode_failures"
     if(isTRUE(status$numerical_failure)) status$reason <- "numerical_failure"
     status$covariance_retained <- !is.null(fit$personPosterior$covariance)
@@ -3014,8 +3382,9 @@ fitIRT <- function(dat,score='score', id='id', item='Item', scale='Scale',pl=1,
     status$stalled <- !isTRUE(status$converged) && !isTRUE(status$iteration_limit) &&
       !isTRUE(status$numerical_failure) && !isTRUE(status$person_mode_failures > 0L) &&
       ## A certificate that reached a verdict has already warned in its own
-      ## terms, in nats rather than a gradient.
-      is.na(bigIRT_certificate_converged(status$certificate$status))
+      ## terms, in nats rather than a gradient, and so have run-off items.
+      is.na(bigIRT_certificate_converged(status$certificate$status)) &&
+      is.null(status$diverged)
     intolerable_modes <- isTRUE(status$person_mode_failures > 0L)
     if(isTRUE(status$iteration_limit) || intolerable_modes ||
        isTRUE(status$numerical_failure) || isTRUE(status$stalled)){

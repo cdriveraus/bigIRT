@@ -67,12 +67,16 @@ bigIRT_laplace_row_derivatives <- function(ev, sdat, context, layout){
     add(keepB, beta_col(layout$B_beta, st$Bbeta, rc$B_beta_row[keepB], m),
       -s[keepB] * rc$B_pred[keepB, m] * w[keepB])
   ## Discrimination: loading = softplus(raw), raw = invspA + item-covariate
-  ## term, so d loading / d raw = plogis(raw), times the row ability.
+  ## term, so d loading / d raw = plogis(raw), times the row ability. A signed
+  ## loading (signedLoadings) is raw itself, slope one.
+  signedA <- (rc$A_signed %||% bigIRT_laplace_signed_A(sdat)) == 1L
   for(k in seq_len(K)){
     ref <- rc$A_ref[, k]
     keep <- which(ref > 0L)
     if(!length(keep)) next
-    vA <- s[keep] * inv_logit(alin[keep, k]) * rab[keep, k] * w[keep]
+    slope <- inv_logit(alin[keep, k])
+    if(any(signedA)) slope[signedA[ref[keep]]] <- 1
+    vA <- s[keep] * slope * rab[keep, k] * w[keep]
     if(length(layout$A)) add(keep, layout$A[ref[keep]], vA)
     if(length(layout$A_beta)) for(m in seq_len(ncol(rc$A_pred)))
       add(keep, beta_col(layout$A_beta, st$invspAbeta, rc$A_beta_row[keep, k], m),
@@ -132,6 +136,10 @@ bigIRT_laplace_prior_curvature <- function(sdat, layout, n, N, P0){
       put(idx, idx, prec)
       mi <- layout[[b[[2]]]]
       if(length(mi)){
+        ## A signed loading's prior is centred at zero, not at the A mean, so
+        ## it does not couple to it.
+        tied <- if(identical(b[[1]], "A")) bigIRT_laplace_signed_A(sdat) != 1L else NULL
+        if(!is.null(tied) && !all(tied)){ idx <- idx[tied]; prec <- prec[tied] }
         put(idx, rep(mi, length(idx)), -prec); put(rep(mi, length(idx)), idx, -prec)
         put(mi, mi, sum(prec) + 1 / max(as.numeric(sdat[[b[[4]]]])[1], 1e-8)^2)
       }
@@ -236,6 +244,45 @@ bigIRT_block_inverse <- function(A){
     }
   }
   I
+}
+
+## Coordinates whose curvature is numerically nil next to the rest: a diagonal
+## not above `rel` of the largest (non-positive ones included). An unregularised
+## loading on the flat tail of its softplus is one -- at a raw value of -124 its
+## slope is 1e-54 and its curvature 1e-108. Left in the metric, its inverse
+## moved that coordinate by its coupling to every other gradient over that
+## curvature: a step of 9e53, which no line search can shorten to sense (30
+## shortenings reach 1e-30), so the fit took no step at all (unregularised 3D
+## 2PL, M_misspecified_N450_r007, Laplace and quadrature alike). The same rule
+## is applied to the item blocks in src/fisher_blocks.cpp.
+bigIRT_metric_flat <- function(dg, rel = 1e-12){
+  dg <- as.numeric(dg)
+  top <- suppressWarnings(max(dg[is.finite(dg)]))
+  if(!is.finite(top) || !(top > 0)) return(which(!(dg > 0)))
+  which(!(dg > rel * top))
+}
+
+## The metric with the tiny-but-positive ones decoupled -- row and column
+## zeroed -- and given the median of the other curvatures. Its step is then its
+## own gradient over an ordinary curvature, which for a flat coordinate is next
+## to nothing: it stays where it is, and the certificate says whether it should
+## not. With `nonpos`, a non-positive diagonal (no data, no prior) gets the
+## median as the block metrics always gave it, couplings kept; the dense
+## metrics never did that, and do not now. Either way a metric without tiny
+## diagonals is exactly as it was.
+bigIRT_metric_decouple <- function(M, rel = 1e-12, nonpos = TRUE){
+  dg <- as.numeric(if(inherits(M, "Matrix")) Matrix::diag(M) else diag(M))
+  flat <- bigIRT_metric_flat(dg, rel)
+  tiny <- flat[dg[flat] > 0]
+  if(!nonpos) flat <- tiny
+  if(!length(flat)) return(M)
+  ok <- dg[setdiff(seq_along(dg), bigIRT_metric_flat(dg, rel))]
+  med <- max(if(length(ok)) stats::median(ok) else 0, 1e-8)
+  if(length(tiny)){ M[tiny, ] <- 0; M[, tiny] <- 0 }
+  if(inherits(M, "Matrix"))
+    M <- M + Matrix::sparseMatrix(i = flat, j = flat, x = rep(med, length(flat)), dims = dim(M))
+  else diag(M)[flat] <- med
+  M
 }
 
 ## Factor a symmetric metric, with a small ridge if rounding or a
@@ -357,7 +404,7 @@ bigIRT_laplace_fisher_solver <- function(ev, x, g, sdat, context, layout, gfun, 
     }
     H <- Matrix::Matrix(H, sparse = TRUE)
   }
-  bigIRT_laplace_factor_metric(H)
+  bigIRT_laplace_factor_metric(bigIRT_metric_decouple(H, nonpos = FALSE))
 }
 
 ## Block-diagonal metric, for fits too large for the dense one.
@@ -424,12 +471,9 @@ bigIRT_laplace_blockdiag_solver <- function(ev, x, g, sdat, context, layout, gfu
   }
   Bd <- Matrix::sparseMatrix(i = ti, j = tj, x = tx, dims = c(n, n))
   ## A parameter no data and no prior reach (possible only in odd
-  ## specifications) still needs a positive diagonal to factor.
-  dg <- Matrix::diag(Bd)
-  fixd <- which(!(dg > 0))
-  if(length(fixd)) Bd <- Bd + Matrix::sparseMatrix(i = fixd, j = fixd,
-    x = rep(max(stats::median(dg[dg > 0]), 1e-8), length(fixd)), dims = c(n, n))
-  bigIRT_laplace_factor_metric(Bd)
+  ## specifications) still needs a positive diagonal to factor, and one on a
+  ## flat transform must not be moved by its coupling (bigIRT_metric_flat).
+  bigIRT_laplace_factor_metric(bigIRT_metric_decouple(Bd))
 }
 
 ## The prior curvature, cached for the optimiser run: it depends on the
@@ -469,6 +513,7 @@ bigIRT_fisher_kernel_call <- function(entry, ev, sdat, context, layout, ps, prio
     as.integer(sdat$id[rows]), as.integer(rc$items), as.matrix(ev$posterior$theta_mode),
     as.matrix(person_pred), bigirt_int_matrix(rc$fixed_ability, nr, K), as.matrix(rc$fixed_ability_value),
     bigirt_int_matrix(rc$A_ref, nr, K), as.matrix(rc$fixed_A_value), as.matrix(rc$A_pred),
+    as.integer(rc$A_signed %||% bigIRT_laplace_signed_A(sdat)),
     as.integer(rc$B_ref), as.numeric(rc$B_fixed_value), as.matrix(rc$B_pred),
     as.integer(rc$C_ref), as.numeric(rc$C_fixed_value), as.matrix(rc$C_pred),
     as.integer(rc$D_ref), as.numeric(rc$D_fixed_value), as.matrix(rc$D_pred),
@@ -481,8 +526,8 @@ bigIRT_fisher_kernel_call <- function(entry, ev, sdat, context, layout, ps, prio
     as.numeric(prior_diag), as.integer(context$grain_size %||% 64L))
   ## Literal .Call()s: configure regenerates the native registration by
   ## scanning the R code for them, so the routine must be named at the call.
-  if(identical(entry, "dense")) .Call(`_bigIRT_fisher_dense_cpp_impl`, a[[1]], a[[2]], a[[3]], a[[4]], a[[5]], a[[6]], a[[7]], a[[8]], a[[9]], a[[10]], a[[11]], a[[12]], a[[13]], a[[14]], a[[15]], a[[16]], a[[17]], a[[18]], a[[19]], a[[20]], a[[21]], a[[22]], a[[23]], a[[24]], a[[25]], a[[26]], a[[27]], a[[28]], a[[29]], a[[30]], a[[31]], a[[32]], a[[33]], a[[34]], a[[35]], a[[36]], a[[37]], a[[38]], a[[39]], a[[40]], a[[41]], a[[42]])
-  else .Call(`_bigIRT_fisher_blocks_cpp_impl`, a[[1]], a[[2]], a[[3]], a[[4]], a[[5]], a[[6]], a[[7]], a[[8]], a[[9]], a[[10]], a[[11]], a[[12]], a[[13]], a[[14]], a[[15]], a[[16]], a[[17]], a[[18]], a[[19]], a[[20]], a[[21]], a[[22]], a[[23]], a[[24]], a[[25]], a[[26]], a[[27]], a[[28]], a[[29]], a[[30]], a[[31]], a[[32]], a[[33]], a[[34]], a[[35]], a[[36]], a[[37]], a[[38]], a[[39]], a[[40]], a[[41]], a[[42]])
+  if(identical(entry, "dense")) .Call(`_bigIRT_fisher_dense_cpp_impl`, a[[1]], a[[2]], a[[3]], a[[4]], a[[5]], a[[6]], a[[7]], a[[8]], a[[9]], a[[10]], a[[11]], a[[12]], a[[13]], a[[14]], a[[15]], a[[16]], a[[17]], a[[18]], a[[19]], a[[20]], a[[21]], a[[22]], a[[23]], a[[24]], a[[25]], a[[26]], a[[27]], a[[28]], a[[29]], a[[30]], a[[31]], a[[32]], a[[33]], a[[34]], a[[35]], a[[36]], a[[37]], a[[38]], a[[39]], a[[40]], a[[41]], a[[42]], a[[43]])
+  else .Call(`_bigIRT_fisher_blocks_cpp_impl`, a[[1]], a[[2]], a[[3]], a[[4]], a[[5]], a[[6]], a[[7]], a[[8]], a[[9]], a[[10]], a[[11]], a[[12]], a[[13]], a[[14]], a[[15]], a[[16]], a[[17]], a[[18]], a[[19]], a[[20]], a[[21]], a[[22]], a[[23]], a[[24]], a[[25]], a[[26]], a[[27]], a[[28]], a[[29]], a[[30]], a[[31]], a[[32]], a[[33]], a[[34]], a[[35]], a[[36]], a[[37]], a[[38]], a[[39]], a[[40]], a[[41]], a[[42]], a[[43]])
 }
 
 ## Dense metric, assembled in C++: the full F with its item-item coupling, in
@@ -512,7 +557,7 @@ bigIRT_laplace_fisher_solver_cpp <- function(ev, x, g, sdat, context, layout, gf
       Fm[, j] <- col; Fm[j, ] <- col
     }
   }
-  Fm <- (Fm + t(Fm)) / 2
+  Fm <- bigIRT_metric_decouple((Fm + t(Fm)) / 2, nonpos = FALSE)
   ch <- NULL; ridge <- 0
   for(attempt in 1:6){
     ch <- tryCatch(chol(if(ridge > 0) Fm + diag(ridge, n) else Fm), error = function(e) NULL)
@@ -548,10 +593,7 @@ bigIRT_laplace_blockdiag_solver_cpp <- function(ev, x, g, sdat, context, layout,
       k <- match(j, G)
       FG[, k] <- col; FG[k, ] <- col
     }
-    FG <- (FG + t(FG)) / 2
-    dg <- diag(FG)
-    bad <- which(!(dg > 0))
-    if(length(bad)) diag(FG)[bad] <- max(stats::median(dg[dg > 0]), 1e-8)
+    FG <- bigIRT_metric_decouple((FG + t(FG)) / 2)
     ch <- NULL; ridge <- 0
     for(attempt in 1:6){
       ch <- tryCatch(chol(if(ridge > 0) FG + diag(ridge, nrow(FG)) else FG), error = function(e) NULL)
@@ -619,7 +661,8 @@ bigIRT_laplace_metric_solver <- function(e, sdat, context, layout, gfun,
 ## the predicted gain 0.5 g'Hg falls below `gain_tol` (nats), and treats an
 ## Armijo failure below 1e-4 nats of predicted gain as the noise floor of the
 ## objective rather than a failure. `refresh(e)` may return a new minv every
-## `refresh_every` iterations.
+## `refresh_every` iterations, or list(stop = TRUE) to end the search there
+## (terminate "refresh_stop").
 bigIRT_laplace_lbfgs <- function(x0, fg, minv = NULL, memory = 30L, maxit = 500L,
   gain_tol = 1e-3, c1 = 1e-4, maxback = 30L, refresh = NULL, refresh_every = 10L){
   S <- list(); Y <- list(); rho <- numeric(0)
@@ -677,8 +720,11 @@ bigIRT_laplace_lbfgs <- function(x0, fg, minv = NULL, memory = 30L, maxit = 500L
       m <- refresh(e)
       ## A refresh may also move the objective itself (the quadrature
       ## refinement re-centres its nodes), in which case it hands back the
-      ## current point re-evaluated, and the search continues from that.
+      ## current point re-evaluated, and the search continues from that --
+      ## or it may say the steps since the last refresh were no progress on
+      ## the objective it moved to, and end the search.
       if(is.list(m) && !is.function(m)){
+        if(isTRUE(m$stop)){ term <- "refresh_stop"; break }
         if(!is.null(m$e)){ e <- m$e; f <- e$f; g <- e$g }
         m <- m$minv
       }

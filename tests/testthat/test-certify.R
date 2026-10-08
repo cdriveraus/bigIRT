@@ -523,4 +523,66 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     expect_lte(fast$evaluations, 4L)
     expect_gt(ex$evaluations, 2L * length(f$optim$par))
   })
+
+  test_that("a fast-route rejection on negative curvature is re-tested by the exact route", {
+    ## Unregularised 2PL, 150 persons answering 10 of 20 items: fits the fast
+    ## route calls "notmaximum" on a negative eigenvalue the exact curvature
+    ## does not have (two of them certify, one is a boundary maximum).
+    fit_seed <- function(seed, ...){
+      set.seed(seed)
+      sim <- simIRT(Nsubs = 150, Nitems = 20, Nscales = 1L, NitemsAnswered = 20, AMean = 1,
+        ASD = .2, BMean = 0, BSD = 1, AbilityMean = 0, AbilitySD = 1)
+      d <- data.table::as.data.table(sim$dat)[, row := .I]
+      train <- sort(d[, .(row = sample(row, floor(.N / 2))), by = id]$row)
+      suppressWarnings(fitIRT(sim$dat, pl = 2L, cores = 1L, priors = FALSE, ebayes = FALSE,
+        trainingRows = train, marginalApprox = "laplace", dropPerfectScores = FALSE,
+        normalise = FALSE, verbose = 0, plot = FALSE, ...))
+    }
+    ## These are the unregularised Laplace 2PL's runaways: one has a
+    ## discrimination of 373 on 75 training responses. With the run-off
+    ## screen on (R/certify.R, "Items that run off") their verdict is
+    ## "diverged", whatever the curvature of the rest says
+    ## (test-diverged-fits.R). This test is about the escalation, so the
+    ## screen is off below.
+    for(seed in c(18, 35, 3)){
+      fd <- fit_seed(seed)
+      expect_identical(fd$laplaceStatus$certificate$status, "diverged")
+      expect_false(fd$laplaceStatus$converged)
+      dv <- fd$laplaceStatus$diverged
+      expect_true(all(abs(dv$value[dv$parameter == "A"]) > bigIRT:::bigIRT_runaway_slope()))
+    }
+    old_slope <- options(bigIRT.runaway_slope = Inf)
+    on.exit(options(old_slope), add = TRUE)
+    verdicts <- character(0)
+    for(seed in c(18, 35, 3)){
+      old <- options(bigIRT.certify_escalate = 0)
+      f0 <- fit_seed(seed)
+      options(old)
+      ## Asserted first, so the test cannot pass by the false alarm not
+      ## reproducing.
+      expect_equal(f0$laplaceStatus$certificate$status, "notmaximum")
+      expect_gt(f0$laplaceStatus$certificate$nnegative, 0L)
+      expect_match(f0$laplaceStatus$certificate$reason, "bigIRT.certify_escalate")
+      f <- fit_seed(seed)
+      fx <- fit_seed(seed, laplaceCertify = "exact")
+      ce <- f$laplaceStatus$certificate
+      expect_equal(f$itemPars, f0$itemPars)
+      expect_equal(ce$status, fx$laplaceStatus$certificate$status)
+      expect_equal(ce$gap, fx$laplaceStatus$certificate$gap)
+      expect_equal(ce$route, fx$laplaceStatus$certificate$route)
+      expect_equal(ce$route_asked, "fast")
+      expect_equal(ce$fast$status, "notmaximum")
+      expect_identical(f$laplaceStatus$converged, fx$laplaceStatus$converged)
+      verdicts <- c(verdicts, ce$status)
+    }
+    ## Seed 3 used to end with A[19] parked on the flat tail of its softplus
+    ## (2.4e-11) and was called a boundary estimate, "saturated". Once the
+    ## metric stopped throwing flat coordinates (test-agq-runoff.R) the
+    ## optimiser leaves it (A[19] = 0.055, 0.008 nats higher) and stops 0.0011
+    ## nats short by the exact gap: "suboptimal". What this test is about holds
+    ## either way -- no fast-route false alarm survives, and each verdict is
+    ## the exact route's (above).
+    expect_equal(verdicts[1:2], c("certified", "certified"))
+    expect_false(any(verdicts == "notmaximum"))
+  })
 }
