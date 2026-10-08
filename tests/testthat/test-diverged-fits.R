@@ -49,9 +49,14 @@ test_that("an unregularised fit that runs off says so by name, with every probab
   out_id <- 7L
   train <- which(d$id != out_id)
   ws <- character(0)
+  ## On Laplace, which takes the separated item to a discrimination of about
+  ## 42. This ran on laplaceRefine = "agq" until the quadrature refinement
+  ## stopped walking items out along their rays (test-agq-runoff.R); it took
+  ## this item to 1e8 and so ran off too. See the next test for what the
+  ## refinement does with it now.
   fit <- withCallingHandlers(
     fitIRT(d, pl = 2, priors = FALSE, estMeans = character(0), dropPerfectScores = FALSE,
-      laplaceRefine = "agq", trainingRows = train, cores = 1, verbose = 0, plot = FALSE),
+      laplaceRefine = "none", trainingRows = train, cores = 1, verbose = 0, plot = FALSE),
     warning = function(w){ ws <<- c(ws, conditionMessage(w)); invokeRestart("muffleWarning") })
   st <- fit$laplaceStatus
 
@@ -80,13 +85,42 @@ test_that("an unregularised fit that runs off says so by name, with every probab
 
   ## With the certificate off the screen still names it.
   fit0 <- suppressWarnings(fitIRT(d, pl = 2, priors = FALSE, estMeans = character(0),
-    dropPerfectScores = FALSE, laplaceRefine = "agq", trainingRows = train,
+    dropPerfectScores = FALSE, laplaceRefine = "none", trainingRows = train,
     laplaceCertify = FALSE, cores = 1, verbose = 0, plot = FALSE))
   expect_null(fit0$laplaceStatus$certificate)
   expect_identical(fit0$laplaceStatus$reason, "diverged")
   expect_false(fit0$laplaceStatus$converged)
   expect_setequal(fit0$laplaceStatus$diverged$item, "11")
   expect_true(all(is.finite(fit0$pars$pcorrect)))
+})
+
+test_that("the quadrature refinement does not exploit a separated item", {
+  ## On the exact marginal (a grid, as in test-agq-runoff.R) the separated
+  ## item's maximum is the step itself: its profile along its own ray rises
+  ## all the way, though by less than half a nat beyond a discrimination of
+  ## 9. Quadrature cannot integrate a step, so its objective has a maximum
+  ## near 9 instead, and the refinement now stops there. Before, held nodes
+  ## took the item to 3e11, where the reported objective was 17 nats ABOVE
+  ## the exact marginal at the same point -- the approximation exploited, and
+  ## by chance landing on the right verdict. What is required now is what can
+  ## be: no loss on the refinement's own objective, and the objective it
+  ## reports is the exact one, to within quadrature's error, where it ends.
+  d <- bigirt_separated_data()
+  fit <- suppressWarnings(fitIRT(d, pl = 2, priors = FALSE, estMeans = character(0),
+    dropPerfectScores = FALSE, laplaceRefine = "agq", cores = 1, verbose = 0, plot = FALSE))
+  rf <- fit$laplaceStatus$refine
+  expect_gte(rf$agq_end - rf$agq_start, -1e-3)
+  grid <- seq(-7, 7, length.out = 1401)
+  ip <- fit$itemPars
+  j <- match(as.character(d$Item), as.character(ip$Item))
+  eta <- outer(ip$A[j], grid) - ip$B[j]
+  L <- rowsum(stats::plogis((2 * d$score - 1) * eta, log.p = TRUE), d$id, reorder = TRUE)
+  L <- sweep(L, 2, stats::dnorm(grid, log = TRUE) + log(grid[2] - grid[1]), "+")
+  mx <- apply(L, 1, max)
+  exact <- sum(mx + log(rowSums(exp(L - mx)))) + nrow(L) * log(2 * pi) / 2
+  expect_lt(abs(fit$optim$logLik - exact), 1)
+  expect_true(all(is.finite(as.matrix(ip[, c("A", "B")]))))
+  expect_true(all(is.finite(fit$pars$pcorrect)))
 })
 
 test_that("a well-behaved fit is not called diverged", {

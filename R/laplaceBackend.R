@@ -1903,6 +1903,7 @@ bigIRT_laplace_optimize_direct <- function(state, sdat, prior_precision,
     ## error, so the search takes the re-evaluated point from there, and the
     ## fit only stops once a re-centred point shows no gain left.
     fixed_nodes <- inherits(refine, "bigIRT_agq_rules") && isTRUE(getOption("bigIRT.agq_fixed_nodes", TRUE))
+    held_nodes <- fixed_nodes
     recentre <- function(par){
       context$agq_centre <<- NULL
       cache_par <<- NULL; cache_eval <<- NULL
@@ -1910,29 +1911,187 @@ bigIRT_laplace_optimize_direct <- function(state, sdat, prior_precision,
       if(fixed_nodes) context$agq_centre <<- e$ev$posterior
       e
     }
-    e_r <- recentre(fit$par)
-    m_r <- solver(e_r)
-    get_eval(fit$par)
+    ## Held nodes can be exploited. Away from where they were placed they are
+    ## a fixed discrete ability distribution, and an item made a step between
+    ## two of them fits that distribution better the steeper it is, without
+    ## bound. Each such stretch of steps gains on the held nodes and loses on
+    ## the objective, so a run of them walks the item out along its own ray,
+    ## every re-centring a little lower than the last. A three-dimensional
+    ## 2PL with priors = FALSE took an item from a discrimination of 58 to
+    ## 6197 that way and ended 46 nats below where the refinement started.
+    ## So each re-centred point is judged against `best`, the best re-centred
+    ## point so far, and a stretch that ends lower by more than `slack` is
+    ## undone: the fit goes back to `best` and on with nodes that move, where
+    ## every evaluation is the objective itself and cannot be exploited this
+    ## way. Re-centring also moves the value by the change in quadrature
+    ## error, so near an optimum a stretch can end a little lower without
+    ## anything being exploited: on regularised 2PL to 4PL fits in three
+    ## dimensions by up to 6e-6 nats per person (in five, under 1e-4 nats in
+    ## all at 3,000 persons), where the exploited stretches of seven
+    ## unregularised benchmark fits lost from 2e-3 per person up.
+    ## `slack` is 1e-4 per person, between the two; below it the fit goes on,
+    ## `best` unchanged, and returns `best` if it ends lower (refine_from), so
+    ## the end is never more than `tol` below the best point seen.
+    best <- NULL; held_lost <- NA_real_
+    slack <- max(tol, 1e-4 * as.numeric(sdat$Nsubs))
+    judge <- function(ec){
+      if(is.finite(ec$f) && ec$f <= best$f + slack){
+        if(ec$f < best$f) best <<- ec
+        return(TRUE)
+      }
+      held_lost <<- if(is.finite(ec$f)) ec$f - best$f else Inf
+      FALSE
+    }
+    ## An item that has run off (R/certify.R) is stuck rather than at an
+    ## optimum wherever pulling it back along its own ray gains: the gradient
+    ## along a step item's ray vanishes, so no optimiser walks one back, held
+    ## nodes or not. The unregularised Laplace 2PL hands the refinement such
+    ## items (a discrimination of 58 where the exact marginal's maximum was
+    ## 3.3, on the case above), and with moving nodes the refinement stopped
+    ## at 52. So the refinement starts, and when it ends starts again, from
+    ## the run-off items pulled back wherever that gains on its own objective.
+    ## With `to` NULL each item goes to the best of the certificate's probe
+    ## points, in order of gain, one at a time while the value rises; with
+    ## `to` a fraction of the screen, every run-off item goes there, gain or
+    ## not (the retries below). NULL when nothing has run off and no
+    ## evaluation was made; otherwise the re-centred evaluation at the point
+    ## reached, the `items` moved (none when nothing gained) and the gain.
+    pull_back <- function(e, to = NULL){
+      ra <- tryCatch(bigIRT_runaway_items(e$ev$state, sdat, direct_layout), error = function(err) NULL)
+      if(!length(ra$item)) return(NULL)
+      x <- e$x; moved <- integer(0)
+      if(is.null(to)){
+        value_at <- function(p) tryCatch(-recentre(p)$f, error = function(err) -Inf)
+        pb <- bigIRT_runaway_pullback(value_at, e$x, ra, sdat, direct_layout, -e$f)
+        ord <- order(-pb$gain)
+        ord <- ord[is.finite(pb$gain[ord]) & pb$gain[ord] > tol]
+        v <- -e$f
+        for(i in ord){
+          p <- bigIRT_runaway_pull(x, ra[ra$item == pb$item[i], , drop = FALSE],
+            pb$to[i] / pb$magnitude[i], sdat, direct_layout)
+          vp <- value_at(p)
+          if(is.finite(vp) && vp > v + tol){ x <- p; v <- vp; moved <- c(moved, pb$item[i]) }
+        }
+      } else for(it in unique(ra$item)){
+        r <- ra[ra$item == it, , drop = FALSE]
+        f <- to * bigIRT_runaway_slope() / bigIRT_runaway_magnitude(r, sdat)
+        if(is.finite(f) && f > 0 && f < 1){
+          x <- bigIRT_runaway_pull(x, r, f, sdat, direct_layout)
+          moved <- c(moved, it)
+        }
+      }
+      ec <- recentre(x)
+      list(e = ec, items = moved, gain = e$f - ec$f)
+    }
+    pulled <- NULL
+    note_pull <- function(pb, at, kept = TRUE)
+      pulled <<- rbind(pulled, data.frame(at = at, items = paste(pb$items, collapse = ","),
+        gain = pb$gain, kept = kept, stringsAsFactors = FALSE))
     refresh_r <- function(e){
       m <- solver(e)
-      list(minv = m, e = recentre(e$x))
+      ec <- recentre(e$x)
+      if(fixed_nodes && !judge(ec)) return(list(stop = TRUE))
+      list(minv = m, e = ec)
     }
-    rf_iter <- 0L; rounds <- 0L; x_r <- fit$par
-    repeat {
-      rounds <- rounds + 1L
-      rf <- bigIRT_laplace_lbfgs(x_r, fg_f, minv = m_r, maxit = as.integer(niter),
-        gain_tol = tol, refresh = refresh_r,
-        refresh_every = as.integer(getOption("bigIRT.fisher_refresh", 10L)))
-      rf_iter <- rf_iter + rf$iter
-      x_r <- rf$par
-      if(!fixed_nodes || rf$iter == 0L || rounds >= 5L ||
-         !(rf$terminate$what %in% c("gain", "noise_floor"))) break
-      ## Converged on these nodes: re-centre, and go on only if that left
-      ## something to gain.
-      e_c <- recentre(x_r)
-      m_r <- solver(e_c)
+    rf_iter <- 0L; rounds <- 0L; restarts <- 0L
+    ## The refinement from `x`: rounds of held nodes, each judged, then
+    ## moving nodes if a stretch lost; and from an end with run-off items
+    ## that gain when pulled back (at most three times), again from there.
+    ## `start`, when given, is x re-centred already, the nodes held there if
+    ## they are to be. Returns the end's re-centred evaluation and the last
+    ## search.
+    refine_from <- function(x, start = NULL){
+      fixed_nodes <<- held_nodes
+      if(is.null(start)) start <- recentre(x)
+      best <<- start
+      x_r <- start$x
+      m_r <- solver(start)
       get_eval(x_r)
+      nround <- 0L; nrestart <- 0L
+      repeat {
+        rounds <<- rounds + 1L; nround <- nround + 1L
+        rf <- bigIRT_laplace_lbfgs(x_r, fg_f, minv = m_r, maxit = as.integer(niter),
+          gain_tol = tol, refresh = refresh_r,
+          refresh_every = as.integer(getOption("bigIRT.fisher_refresh", 10L)))
+        rf_iter <<- rf_iter + rf$iter
+        x_r <- rf$par
+        more <- FALSE
+        if(fixed_nodes){
+          ## The round's end, re-centred and judged; a round a refresh
+          ## stopped was judged there.
+          e_c <- if(!identical(rf$terminate$what, "refresh_stop")) recentre(x_r)
+          if(is.null(e_c) || !judge(e_c)){
+            fixed_nodes <<- FALSE
+            best <<- recentre(best$x)
+            x_r <- best$x
+            m_r <- solver(best)
+            get_eval(x_r)
+            next
+          }
+          ## Converged on these nodes: go on, re-centred, only if that left
+          ## something to gain.
+          more <- rf$iter > 0L && nround < 5L && rf$terminate$what %in% c("gain", "noise_floor")
+        } else {
+          e_c <- fg_f(x_r)
+          if(e_c$f < best$f) best <<- e_c
+        }
+        if(!more){
+          pb <- if(nrestart < 3L) pull_back(e_c)
+          if(!is.null(pb) && length(pb$items) && pb$e$f < best$f - tol){
+            nrestart <- nrestart + 1L; restarts <<- restarts + 1L
+            note_pull(pb, "end")
+            best <<- pb$e
+            x_r <- best$x
+            m_r <- solver(best)
+            get_eval(x_r)
+            next
+          }
+          break
+        }
+        m_r <- solver(e_c)
+        get_eval(x_r)
+      }
+      ## A held-node stretch that lost less than `slack` can leave the end
+      ## below the best point; the best point is then the result.
+      if(best$f < e_c$f - tol){
+        e_c <- best
+        rf$par <- best$x
+      }
+      rf$f <- e_c$f
+      list(e = e_c, rf = rf, metric = attr(m_r, "metric"))
     }
+    e_r <- recentre(fit$par)
+    ## pb$e is re-centred wherever the probes left it, and is the start
+    ## whether or not anything moved.
+    pb <- pull_back(e_r)
+    if(!is.null(pb) && length(pb$items)) note_pull(pb, "start")
+    start <- if(is.null(pb)) e_r else pb$e
+    res <- refine_from(start$x, start)
+    ## Pulling back only where it gains is not enough. A run-off item's
+    ## neighbours adapt to it, so at the end of the case above pulling item
+    ## 12 back alone lost 1.4 nats -- and yet the objective had an optimum 20
+    ## nats higher with no item run off, which the refinement reached from
+    ## every run-off item pulled to a quarter of the screen together, a pull
+    ## that first cost 23. So while the best end so far has run-off items,
+    ## they are all pulled to a quarter, an eighth and a half of the screen
+    ## (5, 2.5 and 10 logits per SD by default) in turn and the refinement
+    ## rerun; the best end is kept, and the retries stop at one that gained
+    ## and left nothing run off. Every end is a refinement's own, so the
+    ## result is never worse than not having tried.
+    for(to in c(1/4, 1/8, 1/2)){
+      pb <- pull_back(res$e, to = to)
+      if(is.null(pb) || !length(pb$items)) break
+      alt <- refine_from(pb$e$x)
+      kept <- alt$e$f < res$e$f - tol
+      note_pull(pb, sprintf("retry at %g", to * bigIRT_runaway_slope()), kept = kept)
+      if(kept){
+        res <- alt
+        ra <- tryCatch(bigIRT_runaway_items(res$e$ev$state, sdat, direct_layout), error = function(err) NULL)
+        if(!length(ra$item)) break
+      }
+    }
+    rf <- res$rf
+    m_r <- structure(list(), metric = res$metric)
     rf$iter <- rf_iter
     ## What is reported is the objective with the nodes centred at the end
     ## point itself, whatever round the loop stopped in: the final evaluation
@@ -1943,7 +2102,15 @@ bigIRT_laplace_optimize_direct <- function(state, sdat, prior_precision,
       rule = list(nodes = refine$nodes, points = refine$points, inflate = refine$inflate,
         pairs = isTRUE(refine$pairs), nodes3 = refine$nodes3),
       iter = rf$iter, evals = eval_count - lap_evals, terminate = rf$terminate,
-      rounds = rounds, fixed_nodes = fixed_nodes,
+      rounds = rounds, fixed_nodes = held_nodes,
+      ## NA, or what the stretch of held-node steps that ended them lost on
+      ## the re-centred objective (Inf: it was not finite there).
+      held_nodes_lost = held_lost,
+      ## Run-off items pulled back, by index, with what the pull itself
+      ## gained: at the start, at each end that restarted the refinement
+      ## (`restarts`), and each retry, `kept` when its end was the better.
+      ## NULL when none was.
+      pulled_back = pulled, restarts = restarts,
       laplace_value = lap_value, agq_start = -e_r$f, agq_end = -rf$f,
       metric = attr(m_r, "metric"), laplace_iter = fit$iter,
       laplace_terminate = fit$terminate)
@@ -1955,14 +2122,23 @@ bigIRT_laplace_optimize_direct <- function(state, sdat, prior_precision,
     ## exploit moves it without bound (a second-order Laplace refinement of a
     ## two-dimensional 3PL went to 1e13). Past half a nat per person, go back
     ## to the Laplace optimum rather than report the exploited point.
+    ##
+    ## A loss is another matter. Each stretch above is judged against the best
+    ## re-centred point and only moves that gain are taken, so the end cannot
+    ## be more than `tol` below the start, and the half-a-nat-per-person
+    ## allowance a gain needs has no counterpart for a loss: a refinement
+    ## that ended lower on its own objective did not follow it, and nothing
+    ## it reached can be trusted. That once let a 46-nat loss through.
     gain_r <- -rf$f - (-e_r$f)
-    if(!is.finite(gain_r) || abs(gain_r) > max(50, 0.5 * as.numeric(sdat$Nsubs))){
-      warning(sprintf(paste0("The %s refinement moved the objective by %.3g nats, which no ",
-        "approximation error of this size can explain; the fit reverts to the Laplace optimum. ",
+    if(!is.finite(gain_r) || gain_r < -tol || gain_r > max(50, 0.5 * as.numeric(sdat$Nsubs))){
+      warning(sprintf(paste0(if(isTRUE(gain_r < 0))
+          "The %s refinement ended %.3g nats lower on its own objective than it started, which a descent cannot do; " else
+          "The %s refinement moved the objective by %.3g nats, which no approximation error of this size can explain; ",
+        "the fit reverts to the Laplace optimum. ",
         if(identical(fit$refine$approx, "laplace2"))
           "Second-order Laplace is not reliable with free asymptotes; laplaceRefine = \"agq\" is." else
           "Refit with more quadrature points (agqNodes, agqPoints), or laplaceRefine = \"none\"."),
-        fit$refine$approx, gain_r), call. = FALSE)
+        fit$refine$approx, if(isTRUE(gain_r < 0)) -gain_r else gain_r), call. = FALSE)
       context$agq <- NULL; context$laplace2 <- FALSE; context$agq_centre <- NULL
       cache_par <- NULL; cache_eval <- NULL
       e_l <- fg_f(lap_par)

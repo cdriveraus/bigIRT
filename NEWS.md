@@ -21,6 +21,30 @@
 
 ## Fixes
 
+* The quadrature refinement (`laplaceRefine = "agq"`, and `"auto"` wherever
+  it refines by quadrature) could walk an item out along its own ray and
+  accept a worse fit. Its rounds on held quadrature nodes treat abilities as
+  a discrete distribution, which a step between two nodes fits better the
+  steeper it is; each stretch gained on the held nodes and lost on the
+  objective. On a three-dimensional 2PL with `priors = FALSE` an item went
+  from a discrimination of 58 to 6197, and the refinement ended 46 nats
+  below where it started -- where quadrature was 62 nats off the exact
+  marginal, whose maximum had that item at 3.3. Each stretch on held nodes is
+  now judged with the nodes re-centred and undone if it lost more than
+  re-centring alone moves the value (1e-4 nats per person; regularised fits
+  moved by 6e-6 at most, the exploited stretches lost 2e-3 and more), the
+  fit going on with moving nodes. Items that have run off are pulled back along their
+  rays and the refinement restarted from there, keeping whichever end is
+  best on its own objective; pulling only where that gains was not enough,
+  because a run-off item's neighbours adapt to it. A refinement that ends
+  lower on its own objective than it started now reverts to the Laplace
+  optimum, as one that moves it implausibly far already did. On that case the
+  fit now ends 20 nats higher, with no item run off and quadrature within 0.6
+  nats of the exact marginal. Regularised fits barely change: of 18
+  simulated 2PL to 4PL fits in one to three dimensions, 14 are bit-identical
+  and four end up to 0.005 nats higher, each at one more evaluation. Tests:
+  `test-agq-runoff.R`, against the exact marginal on frozen data, which fails
+  on the old code.
 * `dropPerfectScores` (on by default) decided whom to drop from all rows,
   held-out ones included, so held-out responses changed which persons and
   items were fitted. It now decides from the `trainingRows` only.

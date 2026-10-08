@@ -1785,7 +1785,17 @@ bigIRT_validate_fit_inputs <- function(dat, score, id, item, scale, pl, controls
 #'   above 10, against 10 per cent of the same fits finished by quadrature and
 #'   5 per cent for an EM quadrature fit (paper/Submission2,
 #'   unregularised_marginal_check.R). Set \code{"agq"} when the item priors
-#'   are off. The second-order finish also falls short, with the priors on,
+#'   are off. Without them an item can also run off along its own ray, its
+#'   loading and intercept growing together towards a step, where the
+#'   gradient along the ray vanishes. So the refinement judges each stretch
+#'   of steps taken on held quadrature nodes against the objective with the
+#'   nodes re-centred, and undoes one that lost more than re-centring alone
+#'   moves it (held nodes are a discrete ability distribution, which a step
+#'   between two of them fits better the steeper it is); and it restarts
+#'   from run-off items pulled back along their rays, keeping whichever end
+#'   is best on its own objective. \code{laplaceStatus$refine} records both
+#'   (\code{held_nodes_lost}, \code{pulled_back}). The second-order finish
+#'   also falls short, with the priors on,
 #'   when each person has only a few responses per dimension. On sparse
 #'   three-dimensional 2PL data with about eight fitted responses per person,
 #'   its primary loadings had an RMSE of .283 against .235 for the same fits

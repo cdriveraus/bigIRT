@@ -628,7 +628,8 @@ bigIRT_laplace_metric_solver <- function(e, sdat, context, layout, gfun,
 ## the predicted gain 0.5 g'Hg falls below `gain_tol` (nats), and treats an
 ## Armijo failure below 1e-4 nats of predicted gain as the noise floor of the
 ## objective rather than a failure. `refresh(e)` may return a new minv every
-## `refresh_every` iterations.
+## `refresh_every` iterations, or list(stop = TRUE) to end the search there
+## (terminate "refresh_stop").
 bigIRT_laplace_lbfgs <- function(x0, fg, minv = NULL, memory = 30L, maxit = 500L,
   gain_tol = 1e-3, c1 = 1e-4, maxback = 30L, refresh = NULL, refresh_every = 10L){
   S <- list(); Y <- list(); rho <- numeric(0)
@@ -686,8 +687,11 @@ bigIRT_laplace_lbfgs <- function(x0, fg, minv = NULL, memory = 30L, maxit = 500L
       m <- refresh(e)
       ## A refresh may also move the objective itself (the quadrature
       ## refinement re-centres its nodes), in which case it hands back the
-      ## current point re-evaluated, and the search continues from that.
+      ## current point re-evaluated, and the search continues from that --
+      ## or it may say the steps since the last refresh were no progress on
+      ## the objective it moved to, and end the search.
       if(is.list(m) && !is.function(m)){
+        if(isTRUE(m$stop)){ term <- "refresh_stop"; break }
         if(!is.null(m$e)){ e <- m$e; f <- e$f; g <- e$g }
         m <- m$minv
       }

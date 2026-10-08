@@ -631,36 +631,20 @@ bigIRT_runaway_pullback <- function(evaluate, par, runaway, sdat, layout, value,
                                     fractions = c(1, 1/2, 1/4, 1/8),
                                     max_items = getOption("bigIRT.runaway_probe_items", 10L)){
   items <- unique(runaway$item)
-  ps <- attr(layout, "par_scale"); if(length(ps) != length(par)) ps <- rep(1, length(par))
-  signedA <- bigIRT_laplace_signed_A(sdat) == 1L
-  sdv <- rep_len(pmax(as.numeric(sdat$AbilitySD), 1e-8), as.integer(sdat$Nscales))
   res <- data.frame(item = items, gain = NA_real_, magnitude = NA_real_, to = NA_real_)
-  for(i in seq_along(items)){
-    r <- runaway[runaway$item == items[i], , drop = FALSE]
-    isA <- r$parameter == "A"
-    res$magnitude[i] <- max(c(abs(r$value[isA]) * sdv[r$scale[isA]], abs(r$value[!isA])))
-  }
+  for(i in seq_along(items))
+    res$magnitude[i] <- bigIRT_runaway_magnitude(runaway[runaway$item == items[i], , drop = FALSE], sdat)
   probe <- order(-ifelse(is.finite(res$magnitude), res$magnitude, -Inf))
   probe <- probe[seq_len(min(length(probe), max(0L, as.integer(max_items))))]
   for(i in probe){
     r <- runaway[runaway$item == items[i], , drop = FALSE]
-    isA <- r$parameter == "A"
     m <- res$magnitude[i]
     if(!is.finite(m) || m <= 0) next
     best <- -Inf; to <- NA_real_
     for(fr in fractions){
       f <- fr * slope / m
       if(f >= 1) next
-      p <- par
-      for(q in seq_len(nrow(r))){
-        cc <- r$coordinate[q]
-        raw <- if(!isA[q]) f * r$value[q] else {
-          a <- f * r$value[q]
-          ## The loading's own link: identity when signed, softplus otherwise.
-          if(isTRUE(signedA[match(cc, layout$A)])) a else afunci(max(a, .Machine$double.xmin))
-        }
-        p[cc] <- raw / ps[cc]
-      }
+      p <- bigIRT_runaway_pull(par, r, f, sdat, layout)
       v <- try(evaluate(p), silent = TRUE)
       if(inherits(v, "try-error")) next
       v <- as.numeric(v)[1L]
@@ -669,6 +653,33 @@ bigIRT_runaway_pullback <- function(evaluate, par, runaway, sdat, layout, value,
     if(is.finite(best)){ res$gain[i] <- best; res$to[i] <- to }
   }
   res
+}
+
+## How far one run-off item (`r`, its rows of the bigIRT_runaway_items table)
+## has gone: its steepest loading in logits per prior SD of ability, or its
+## intercept, whichever is larger -- the scale the screen is on.
+bigIRT_runaway_magnitude <- function(r, sdat){
+  sdv <- rep_len(pmax(as.numeric(sdat$AbilitySD), 1e-8), as.integer(sdat$Nscales))
+  isA <- r$parameter == "A"
+  max(c(abs(r$value[isA]) * sdv[r$scale[isA]], abs(r$value[!isA])))
+}
+
+## `par` with one run-off item -- `r`, its rows of the bigIRT_runaway_items
+## table -- moved to f times its values along its own ray: free loadings and
+## intercept scaled together, so a step keeps its threshold.
+bigIRT_runaway_pull <- function(par, r, f, sdat, layout){
+  ps <- attr(layout, "par_scale"); if(length(ps) != length(par)) ps <- rep(1, length(par))
+  signedA <- bigIRT_laplace_signed_A(sdat) == 1L
+  for(q in seq_len(nrow(r))){
+    cc <- r$coordinate[q]
+    raw <- if(r$parameter[q] != "A") f * r$value[q] else {
+      a <- f * r$value[q]
+      ## The loading's own link: identity when signed, softplus otherwise.
+      if(isTRUE(signedA[match(cc, layout$A)])) a else afunci(max(a, .Machine$double.xmin))
+    }
+    par[cc] <- raw / ps[cc]
+  }
+  par
 }
 
 ## The `diverged` verdict, wrapped around `rest` -- the verdict on everything
