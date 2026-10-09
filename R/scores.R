@@ -1027,8 +1027,12 @@ bigIRT_score_test_items <- function(sc, zall, zlevel, parameters, form, by, item
     ## Parametric: sum the C(alpha) pieces over the group's items, each item
     ## projecting out its own free slots.
     Us <- 0; V <- 0; Vo <- 0; tests_ok <- TRUE; test_used <- NULL
+    ## Each item's rows, split once: finding them by scanning the group per
+    ## item is quadratic, which on a shared coefficient over a 15,000-item
+    ## bank (20 million rows) ran for hours.
+    by_item <- split(u, R$item[u])
     for(j in its){
-      uj <- u[R$item[u] == j]
+      uj <- by_item[[as.character(j)]]
       nuis <- which(free[j, ])
       test <- match(test_names, slots); test <- test[test %in% nuis]
       if(!length(test)){ next }
