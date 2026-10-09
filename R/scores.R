@@ -386,11 +386,12 @@ bigIRT_score_refit_ability <- function(st, rule, maxit = 30L, tol = 1e-7, jitter
     st$posterior <- do.call(bigIRT_laplace_person_step_block_cpp_impl, c(st$args_post, list(
       theta_init = st$posterior$theta_mode, jitter = jitter, max_attempts = 8L, max_iter = 100L,
       tol = 1e-10, keep_covariance = FALSE)))
-    if(max(abs(step)) < tol && sd_change < 10 * tol) break
+    conv <- max(abs(step)) < tol && sd_change < 10 * tol
+    if(conv) break
   }
   st$prior_mean <- st$args$prior_mean
   st$ability_sd <- sqrt(diag(solve(P0_of(st$prior_prec))))
-  st$refit_iter <- it
+  st$refit_iter <- it; st$refit_converged <- conv
   st
 }
 
@@ -550,6 +551,7 @@ bigIRT_score_compute <- function(fit, nodes = NULL, information = TRUE, cores = 
     ability_sd = st$ability_sd %||% sqrt(diag(solve(matrix(if(length(dim(st$prior_prec)) == 3L)
       st$prior_prec[, , 1] else st$prior_prec, K, K)))),
     adjusted = colnames(add_preds) %||% character(0),
+    refit_iter = st$refit_iter %||% NA_integer_, refit_converged = st$refit_converged %||% NA,
     value = aq$value),
     class = "bigIRT_scores")
 }
@@ -943,7 +945,10 @@ bigIRT_score_fluct <- function(z, S, info, Nb, test, nuis, ngrid, trim, nsim){
 #'   Benjamini-Hochberg (`p_fdr`) and Holm (`p_holm`) adjustments within each
 #'   covariate; and, for the parametric forms, `coefficients`, a data.table of
 #'   one-step estimates (`estimate`), standard errors and z values per tested
-#'   parameter and basis column.
+#'   parameter and basis column; and, when a covariate was added to the
+#'   ability model (`adjust`), `adjustment`: its basis terms' estimated
+#'   coefficients, the re-estimated ability SD against the fit's, and the
+#'   iterations taken and whether they converged (a warning is given if not).
 #'
 #' @seealso [scoreContributions()]
 #' @export
@@ -970,7 +975,7 @@ scoreTest <- function(fit, covariates, parameters = "B",
   }
   cv <- bigIRT_score_covariates(sc, covariates, level)
   ability <- identical(parameters, "Ability") || identical(parameters, "ability")
-  res <- list(); coefs <- list()
+  res <- list(); coefs <- list(); adjs <- list()
   for(v in names(cv$values)){
     zall <- cv$values[[v]]
     f_v <- form
@@ -984,6 +989,17 @@ scoreTest <- function(fit, covariates, parameters = "B",
       Badj <- if(adj) bigIRT_score_adjust_basis(zall, cv$level, sc, adjustDf, v) else NULL
       if(adj && is.null(Badj)) adj <- FALSE
       scv <- if(adj) bigIRT_score_compute(fit, nodes = nodes, cores = cores, add_preds = Badj) else sc
+      if(adj){
+        if(!isTRUE(scv$refit_converged))
+          warning(sprintf("Adding %s to the ability model did not converge in %d iterations; its tests may be miscalibrated.",
+            v, scv$refit_iter), call. = FALSE)
+        ab <- scv$ability_beta[, scv$adjusted, drop = FALSE]
+        adjs[[v]] <- data.table::data.table(covariate = v, term = rep(colnames(ab), each = nrow(ab)),
+          dim = rep(seq_len(nrow(ab)), ncol(ab)), estimate = as.numeric(ab),
+          ability_sd = scv$ability_sd[rep(seq_len(nrow(ab)), ncol(ab))],
+          fit_ability_sd = sc$ability_sd[rep(seq_len(nrow(ab)), ncol(ab))],
+          iterations = scv$refit_iter, converged = scv$refit_converged)
+      }
       if(!adj && cv$level == "person" && !(v %in% sc$person_preds))
         bigIRT_score_impact_check(sc, zall, v)
       out <- bigIRT_score_test_items(scv, zall, cv$level, parameters, f_v, by, items, df,
@@ -1010,6 +1026,7 @@ scoreTest <- function(fit, covariates, parameters = "B",
   if(nrow(coefficients))
     data.table::setcolorder(coefficients, c("covariate", setdiff(names(coefficients), "covariate")))
   structure(list(tests = tests, coefficients = if(nrow(coefficients)) coefficients else NULL,
+    adjustment = if(length(adjs)) data.table::rbindlist(adjs) else NULL,
     parameters = parameters, rule = sc$rule),
     class = "bigIRT_scoretest")
 }
@@ -1026,6 +1043,12 @@ print.bigIRT_scoretest <- function(x, n = 10L, ...){
     cat(sprintf("  %s: %d of %d at p < .05 (%d after FDR); smallest p %.3g\n", v,
       sum(tv[[pcol]] < .05, na.rm = TRUE), nrow(tv), sum(tv$p_fdr < .05, na.rm = TRUE),
       suppressWarnings(min(tv[[pcol]], na.rm = TRUE))))
+    av <- x$adjustment[x$adjustment$covariate == v]
+    if(!is.null(av) && nrow(av))
+      cat(sprintf("    added to the ability model after the fit: %d terms, ability SD %s (fit: %s), %d iterations%s\n",
+        data.table::uniqueN(av$term), paste(sprintf("%.3f", unique(av$ability_sd)), collapse = ", "),
+        paste(sprintf("%.3f", unique(av$fit_ability_sd)), collapse = ", "), av$iterations[1],
+        if(isTRUE(av$converged[1])) "" else ", NOT converged"))
   }
   o <- order(t[[pcol]])
   print(utils::head(t[o], n))
