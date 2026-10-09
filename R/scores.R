@@ -686,13 +686,24 @@ bigIRT_score_compute <- function(fit, nodes = NULL, information = TRUE, cores = 
   ## person's ability, a (P - c)(d - P) / (d - c) at the predictive
   ## probability: what turns an expected-score change into an ability-
   ## equivalent one (scoreTest's effects).
-  re <- bigIRT_laplace_row_effective(st$state, sdat, thetaBase = matrix(0, N, K),
-    rows = rc$rows, context = rc)
+  ## Without item predictors on the loadings or asymptotes these are the
+  ## item's own, so one row per item suffices; computing them for every row
+  ## doubled the time of a purified screen on 20 million responses.
+  if(all(c(sdat$NAitemPreds, sdat$NCitemPreds, sdat$NDitemPreds) == 0)){
+    first <- !duplicated(rc$items)
+    re <- bigIRT_laplace_row_effective(st$state, sdat, thetaBase = matrix(0, N, K), rows = rc$rows[first])
+    map <- match(rc$items, rc$items[first])
+    lo <- re$loadings[map, , drop = FALSE]; c_r <- re$c_row[map]; d_r <- re$d_row[map]
+  } else {
+    re <- bigIRT_laplace_row_effective(st$state, sdat, thetaBase = matrix(0, N, K),
+      rows = rc$rows, context = rc)
+    lo <- re$loadings; c_r <- re$c_row; d_r <- re$d_row
+  }
   pp <- rows$ppred
-  wq <- (pp - re$c_row) * (re$d_row - pp) / pmax(re$d_row - re$c_row, 1e-12)
+  wq <- (pp - c_r) * (d_r - pp) / pmax(d_r - c_r, 1e-12)
   for(k in seq_len(K))
-    data.table::set(rows, j = paste0("dpdtheta", if(K == 1L) "" else k), value = re$loadings[, k] * wq)
-  rm(re, wq, pp)
+    data.table::set(rows, j = paste0("dpdtheta", if(K == 1L) "" else k), value = lo[, k] * wq)
+  rm(re, lo, c_r, d_r, wq, pp)
   if(any(st$hold == 1L)) data.table::set(rows, j = "held", value = st$hold == 1L)
   if(isTRUE(information)){
     jj <- 0L
