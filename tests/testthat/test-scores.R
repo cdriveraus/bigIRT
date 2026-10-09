@@ -421,8 +421,8 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
 
   ## With few responses per person most of the SD's information is missing,
   ## and its EM crawls (each change .85 of the last with four responses):
-  ## plain EM overran the 30-iteration cap, as it did on Mindsteps. The
-  ## accelerated default must converge within it, to the same point.
+  ## plain EM overran the original 30-iteration cap. The accelerated default
+  ## must converge well within it, to the same point.
   test_that("the adjustment's SD re-estimation converges on thin data", {
     skip_on_cran()
     set.seed(31)
@@ -445,5 +445,26 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     expect_true(s1$refit_converged); expect_lt(s1$refit_iter, 30L)
     expect_equal(s1$ability_sd, s0$ability_sd, tolerance = 1e-5)
     expect_equal(s1$args$Abilitybeta, s0$args$Abilitybeta, tolerance = 1e-5)
+  })
+
+  ## A covariate that takes most of the variance leaves a small residual SD.
+  ## The SD's update once added a jitter of 1e-6 to the variance, which put a
+  ## floor of 1e-6 / (2 SD^2) under its change: above the tolerance for any
+  ## SD below .7, so such an adjustment could never converge.
+  test_that("the adjustment converges when the residual SD is small", {
+    skip_on_cran()
+    set.seed(41)
+    N <- 2000; J <- 20
+    z <- stats::rbinom(N, 1, .5); th <- stats::rnorm(N) + 3.5 * z
+    a <- stats::runif(J, .8, 1.6); b <- stats::rnorm(J)
+    P <- stats::plogis(matrix(a, N, J, byrow = TRUE) * th - matrix(b, N, J, byrow = TRUE))
+    d <- data.frame(id = rep(1:N, J), Item = rep(1:J, each = N), Scale = 1,
+      score = stats::rbinom(N * J, 1, P))
+    f0 <- suppressWarnings(fitIRT(d, pl = 2, laplaceRefine = "agq", cores = 1, verbose = 0,
+      laplaceCertify = FALSE))
+    cv <- data.frame(id = rownames(f0$pars$Ability)); cv$z <- factor(z[as.integer(cv$id)])
+    ra <- scoreTest(f0, cv, parameters = "B")$adjustment
+    expect_lt(ra$ability_sd[1], .7)
+    expect_true(ra$converged[1])
   })
 }
