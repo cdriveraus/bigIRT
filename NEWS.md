@@ -67,7 +67,26 @@
   Newton step) and multidimensional models use `"full"`.
   `adjust = "none"` tests the fit as it is, and then warns when a
   person-level covariate is related to ability but absent from it. See
-  `vignette("score-tests")`.
+  `vignette("score-tests")`. A person-level covariate already in the fit's
+  ability model under another name is recognised (it lies in the span of
+  the fit's person predictors) and not added again.
+* `scoreTest(effects = TRUE)` reports DIF effect sizes. A response's score
+  is the score of a Bernoulli given the person's other responses, so the
+  derivative of its predicted probability in the item's parameters is
+  exact; applied to the one-step DIF estimate it gives the response's
+  change in the probability of a correct answer at its own ability.
+  `effects` averages it per item and contrast; `dtf` (with `purify`, for a
+  person-level covariate) sums it per person over the flagged items, as a
+  change in expected number correct and its ability equivalent. Test-level
+  effects need anchors: with the covariate's ability effect estimated
+  freely, the DIF of all items sums to about zero per group. Simulated
+  (50 replications, three DIF items of .8 logits): item effects within
+  .006 of the truth, the expected-score change 93 to 95 per cent of it.
+* `sandwich::estfun()` on a `bigIRT_scores` object returns the per-person
+  (or per-response) score matrix by item and parameter, so
+  `strucchange::gefp()` and `sctest()` run on bigIRT fits. With no DIF and
+  impact modelled their outer-product decorrelation held 2.8 to 3.9 per cent
+  where `scoreTest()` held 4.5 to 5.0.
 
 # bigIRT 0.2.0
 
