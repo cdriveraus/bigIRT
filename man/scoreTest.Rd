@@ -25,6 +25,7 @@ scoreTest(
   information = c("expected", "observed", "opg"),
   adjust = c("auto", "none"),
   adjustDf = 3L,
+  adjustMethod = c("fast", "full"),
   nodes = NULL,
   cores = 1L
 )
@@ -94,6 +95,16 @@ the fit's ability model to it before testing, as a natural spline with
 \code{adjustDf} degrees of freedom (indicators for a factor or a covariate
 with few values), items held; \code{"none"} does not. Needs \code{fit} to be a
 fit; the result records it in \code{ability_adjusted}.}
+
+\item{adjustMethod}{How the added covariate's coefficients and the
+residual ability SD are estimated. \code{"fast"} (default) holds the fit's own
+coefficients and takes Newton steps for the added ones -- a regression of
+the posterior means on the basis, corrected for their shrinkage -- with
+the residual SD by variance decomposition; a few quadrature passes. It
+needs a covariate constant within person and a one-dimensional model, and
+otherwise falls back to \code{"full"}: every coefficient and the SD
+re-estimated jointly to convergence, which can take dozens of passes
+over the data.}
 
 \item{nodes, cores}{Passed to \code{\link[=scoreContributions]{scoreContributions()}} when \code{fit} is a fit.}
 }
