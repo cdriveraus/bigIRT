@@ -418,4 +418,32 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     t_ref <- suppressWarnings(scoreTest(f1, cv, parameters = "B", adjust = "none"))$tests
     expect_gt(cor(t_adj$p, t_ref$p[match(t_adj$item, t_ref$item)]), .99)
   })
+
+  ## With few responses per person most of the SD's information is missing,
+  ## and its EM crawls (each change .85 of the last with four responses):
+  ## plain EM overran the 30-iteration cap, as it did on Mindsteps. The
+  ## accelerated default must converge within it, to the same point.
+  test_that("the adjustment's SD re-estimation converges on thin data", {
+    skip_on_cran()
+    set.seed(31)
+    N <- 5000; J <- 100; per <- 4
+    z <- stats::runif(N); th <- stats::rnorm(N) + (z > .5)
+    a <- stats::runif(J, .8, 1.6); b <- stats::rnorm(J)
+    jj <- as.vector(replicate(N, sample.int(J, per)))
+    ii <- rep(seq_len(N), each = per)
+    d <- data.frame(id = ii, Item = jj, Scale = 1,
+      score = stats::rbinom(N * per, 1, stats::plogis(a[jj] * th[ii] - b[jj])))
+    f0 <- suppressWarnings(fitIRT(d, pl = 2, laplaceRefine = "agq", cores = 1, verbose = 0,
+      laplaceCertify = FALSE, dropPerfectScores = FALSE))
+    sc <- scoreContributions(f0)
+    B <- bigIRT:::bigIRT_score_adjust_basis(z[as.integer(sc$person_labels)], "person", sc, 3L, "z")
+    st <- bigIRT:::bigIRT_score_setup(f0, cores = 1L, add_preds = B)
+    rule <- bigIRT:::bigIRT_score_rule(f0, st$K, NULL)
+    s0 <- bigIRT:::bigIRT_score_refit_ability(st, rule, maxit = 300L, est_sd = TRUE, accelerate = FALSE)
+    s1 <- bigIRT:::bigIRT_score_refit_ability(st, rule, est_sd = TRUE)
+    expect_true(s0$refit_converged); expect_gt(s0$refit_iter, 30L)
+    expect_true(s1$refit_converged); expect_lt(s1$refit_iter, 30L)
+    expect_equal(s1$ability_sd, s0$ability_sd, tolerance = 1e-5)
+    expect_equal(s1$args$Abilitybeta, s0$args$Abilitybeta, tolerance = 1e-5)
+  })
 }
