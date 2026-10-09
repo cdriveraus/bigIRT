@@ -294,19 +294,23 @@ bigIRT_score_person_terms <- function(aq, st){
 ## datasets, against sqrt(1 / 1.25) = .894; the adjusted tests matched those
 ## of a refit with the covariate (p values correlating 1.000).
 ##
-## EM for the SD converges linearly, at the fraction of its information that
-## is missing: successive changes shrank by a constant .69 with eight
-## responses per person and .85 with four (33 and 67 iterations). With exact
-## Newton steps the coefficients only follow the SD. So once three EM updates
-## have changed each SD in the same direction, Aitken's extrapolation jumps to
-## the limit of the geometric sequence (only at ratios up to .95, and by at
-## most a tenth of the SD); the EM updates that follow check it.
-## Outer-product steps have a slow mode of their own, extrapolated the same
-## way (below). On Mindsteps the two together took 19 iterations where plain
-## iteration had not converged in 30; the cap is 50, and the result records
-## whether it was reached.
+## The iteration converges linearly. EM for the SD does so at the fraction of
+## its information that is missing (successive changes shrank by .69 with
+## eight responses per person and .85 with four: 33 and 67 iterations); the
+## outer-product steps taken when predictors vary within person have a slow
+## mode of their own (.84 and .82 on Mindsteps, the latter 93 iterations);
+## and the two are coupled. Extrapolating each on its own (Aitken) worked
+## when one was slow and fought when both were, ending further from the
+## optimum after 50 iterations than plain iteration. So the whole vector --
+## mean, coefficients, log SDs -- is extrapolated jointly by SQUAREM
+## (Varadhan & Roland, 2008, scheme S3): two plain passes, a step along their
+## squared extrapolation, and a pass from there. Never next to a capped
+## step, which is far from the asymptotic regime (extrapolating capped steps
+## once threw the SD to 59 and never converged); the step length is capped,
+## and a point that moves an SD by more than a factor of two, or whose next
+## pass is no closer to a fixed point than the plain one, is not taken.
 bigIRT_score_refit_ability <- function(st, rule, maxit = 50L, tol = 1e-7, jitter = 1e-6,
-  est_sd = FALSE, accelerate = TRUE){
+  est_sd = FALSE, accelerate = TRUE, max_alpha = 50){
   sdat <- st$sdat; K <- st$K; N <- st$N
   free_mean <- as.integer(sdat$fixedAbilityMean) == 0L
   P <- as.integer(st$P_real %||% 0L)
@@ -339,10 +343,27 @@ bigIRT_score_refit_ability <- function(st, rule, maxit = 50L, tol = 1e-7, jitter
   mu_sd <- pmax(rep_len(as.numeric(sdat$AbilityMeanSD), K), 1e-8)
   bsc <- as.numeric(sdat$betaScale)
   P0_of <- function(pa) if(length(dim(pa)) == 3L) matrix(pa[, , 1], K, K) else matrix(pa, K, K)
+  sd_of <- function(st) sqrt(diag(solve(P0_of(st$prior_prec))))
   R0 <- stats::cov2cor(solve(P0_of(st$prior_prec)))
-  sd_change <- 0; sd_hist <- NULL; n_accel <- 0L; jumped <- FALSE; prev_step <- NULL
-  trace <- vector("list", maxit)
-  for(it in seq_len(maxit)){
+  ## No jitter on Sig: it is positive definite by construction, and a jitter
+  ## of 1e-6 put a floor of 1e-6 / (2 SD^2) under every SD change, above the
+  ## tolerance for any SD below .7.
+  set_sd <- function(st, sdv){
+    pa <- bigIRT_prior_precision_array(solve(diag(sdv, K) %*% R0 %*% diag(sdv, K)), Nsubs = N, K = K)
+    st$prior_prec <- pa; st$args$prior_precision <- pa; st$args_post$prior_precision <- pa
+    st
+  }
+  solve_posterior <- function(st){
+    st$args_post$prior_mean <- st$args$prior_mean
+    st$args_post$Abilitybeta <- st$args$Abilitybeta
+    st$posterior <- do.call(bigIRT_laplace_person_step_block_cpp_impl, c(st$args_post, list(
+      theta_init = st$posterior$theta_mode, jitter = jitter, max_attempts = 8L, max_iter = 100L,
+      tol = 1e-10, keep_covariance = FALSE)))
+    st
+  }
+  ## One pass: a Newton (or outer-product) step for the mean and coefficients,
+  ## an EM step for the SDs, the posterior modes at the new values.
+  pass <- function(st){
     if(!varies){
       aq <- do.call(bigIRT_agq_fg_cpp_impl, c(st$args_post, list(
         theta_mode = st$posterior$theta_mode, precision = st$posterior$precision,
@@ -377,75 +398,70 @@ bigIRT_score_refit_ability <- function(st, rule, maxit = 50L, tol = 1e-7, jitter
     ## overshooting on an ability scale.
     capped <- varies && max(abs(step)) > 1
     if(capped) step <- step / max(abs(step))
-    ## Nor does it converge quadratically: on Mindsteps, where the outer
-    ## product and the curvature disagree, the steps settled into a fixed
-    ## direction shrinking by .84 each time. When two successive steps point
-    ## the same way, jump to the limit of that geometric sequence. (Exact
-    ## Newton steps need no help: their slow part follows the SD, which the
-    ## SD's own extrapolation already takes; jumping both overshoots.) Only
-    ## in that asymptotic regime: two capped steps also point the same way,
-    ## at a ratio near one, and extrapolating them threw the SD to 16 on
-    ## simulated data (57 iterations where plain iteration took 28).
-    jumped_b <- FALSE
-    if(isTRUE(accelerate) && varies && nc > 0L){
-      if(!is.null(prev_step) && !capped){
-        n1 <- sqrt(sum(prev_step^2)); n2 <- sqrt(sum(step^2))
-        cosv <- sum(step * prev_step) / (n1 * n2); rb <- n2 / n1
-        if(is.finite(cosv) && cosv > .99 && rb <= .95 && n2 > tol){
-          step <- step / (1 - rb)
-          jumped_b <- TRUE; n_accel <- n_accel + 1L; prev_step <- NULL
-        } else prev_step <- step
-      } else prev_step <- if(capped) NULL else step
-    }
     if(nc > 0L) for(k in seq_len(K)){
       d <- step[(k - 1L) * nc + seq_len(nc)]
       if(free_mean){ st$args$prior_mean[, k] <- st$args$prior_mean[, k] + d[1]; d <- d[-1] }
       if(P > 0L) st$args$Abilitybeta[k, seq_len(P)] <- st$args$Abilitybeta[k, seq_len(P)] + d
     }
-    st$args_post$prior_mean <- st$args$prior_mean
-    st$args_post$Abilitybeta <- st$args$Abilitybeta
     ## EM for the SDs, from this pass's posterior moments of the base ability
     ## about its prior mean, the correlation held.
+    sd_change <- 0
     if(isTRUE(est_sd)){
       eap <- matrix(aq$eap, N, K); pc <- aq$post_cov
       dv <- eap - matrix(st$args$prior_mean, N, K)
       Mv <- crossprod(dv) / N + matrix(rowMeans(matrix(pc, K * K, N)), K, K)
-      sd_old <- sqrt(diag(solve(P0_of(st$prior_prec))))
+      sd_old <- sd_of(st)
       sd_new <- sqrt(pmax(diag(Mv), 1e-6))
       sd_change <- max(abs(sd_new / sd_old - 1))
-      jumped <- FALSE
-      if(isTRUE(accelerate)){
-        sd_hist <- rbind(sd_hist, sd_new)
-        if(nrow(sd_hist) >= 3L){
-          h <- utils::tail(sd_hist, 3L); d1 <- h[2, ] - h[1, ]; d2 <- h[3, ] - h[2, ]
-          r <- d2 / d1
-          if(all(is.finite(r) & r > 0 & r <= .95 & d1 != 0) && sd_change > tol && !capped){
-            ## At most a tenth of the SD in one jump.
-            jmp <- d2 * r / (1 - r)
-            sd_new <- sd_new + sign(jmp) * pmin(abs(jmp), .1 * sd_new)
-            sd_hist <- NULL; jumped <- TRUE; n_accel <- n_accel + 1L
-          }
-        }
-      }
-      ## No jitter here: Sig is positive definite by construction, and a
-      ## jitter of 1e-6 put a floor of 1e-6 / (2 SD^2) under every SD change,
-      ## above the tolerance for any SD below .7.
-      Sig <- diag(sd_new, K) %*% R0 %*% diag(sd_new, K)
-      pa <- bigIRT_prior_precision_array(solve(Sig), Nsubs = N, K = K)
-      st$prior_prec <- pa; st$args$prior_precision <- pa; st$args_post$prior_precision <- pa
+      st <- set_sd(st, sd_new)
     }
-    st$posterior <- do.call(bigIRT_laplace_person_step_block_cpp_impl, c(st$args_post, list(
-      theta_init = st$posterior$theta_mode, jitter = jitter, max_attempts = 8L, max_iter = 100L,
-      tol = 1e-10, keep_covariance = FALSE)))
-    trace[[it]] <- c(step = max(abs(step)), sd_change = sd_change, jumped_sd = jumped, jumped_beta = jumped_b,
-      sd = sqrt(diag(solve(P0_of(st$prior_prec)))))
-    conv <- max(abs(step)) < tol && sd_change < 10 * tol && !(isTRUE(est_sd) && jumped) && !jumped_b
+    list(st = solve_posterior(st), step = max(abs(step)), sd_change = sd_change, capped = capped)
+  }
+  ## The parameters as one vector, and back.
+  sd_ix <- if(isTRUE(est_sd)) (if(free_mean) K else 0L) + K * P + seq_len(K) else integer(0)
+  theta_of <- function(st) c(if(free_mean) st$args$prior_mean[1, ],
+    if(P > 0L) as.numeric(st$args$Abilitybeta[, seq_len(P), drop = FALSE]),
+    if(isTRUE(est_sd)) log(sd_of(st)))
+  set_theta <- function(st, th){
+    j <- 0L
+    if(free_mean){ for(k in seq_len(K)) st$args$prior_mean[, k] <- th[k]; j <- K }
+    if(P > 0L) st$args$Abilitybeta[, seq_len(P)] <- matrix(th[j + seq_len(K * P)], K, P)
+    if(isTRUE(est_sd)) st <- set_sd(st, exp(th[sd_ix]))
+    solve_posterior(st)
+  }
+  trace <- list(); it <- 0L; n_accel <- 0L; conv <- FALSE
+  record <- function(p, alpha = NA_real_){
+    it <<- it + 1L
+    trace[[it]] <<- c(step = p$step, sd_change = p$sd_change, capped = p$capped, alpha = alpha,
+      sd = sd_of(p$st))
+    conv <<- p$step < tol && p$sd_change < 10 * tol
+  }
+  resid <- function(p) max(p$step, p$sd_change)
+  while(it < maxit){
+    st0 <- st
+    p1 <- pass(st0); record(p1); st <- p1$st
+    if(conv || it >= maxit) break
+    p2 <- pass(st); record(p2); st <- p2$st
+    if(conv || it >= maxit) break
+    if(!isTRUE(accelerate) || p1$capped || p2$capped) next
+    th0 <- theta_of(st0); th1 <- theta_of(p1$st); th2 <- theta_of(p2$st)
+    r <- th1 - th0; v <- th2 - 2 * th1 + th0
+    nr <- sqrt(sum(r^2)); nv <- sqrt(sum(v^2))
+    if(!(nv > 0) || !is.finite(nr / nv)) next
+    alpha <- max(-nr / nv, -max_alpha)
+    if(alpha > -1) next
+    thp <- th0 - 2 * alpha * r + alpha^2 * v
+    if(!all(is.finite(thp)) || any(abs(thp[sd_ix] - th2[sd_ix]) > log(2))) next
+    p3 <- pass(set_theta(st0, thp)); record(p3, alpha)
+    if(!p3$capped && is.finite(resid(p3)) && resid(p3) <= resid(p2)){
+      st <- p3$st; n_accel <- n_accel + 1L
+    } else conv <- FALSE
     if(conv) break
   }
   st$prior_mean <- st$args$prior_mean
-  st$ability_sd <- sqrt(diag(solve(P0_of(st$prior_prec))))
+  st$ability_sd <- sd_of(st)
   st$refit_iter <- it; st$refit_converged <- conv; st$refit_accel <- n_accel
-  st$refit_trace <- do.call(rbind, trace[seq_len(it)])
+  st$refit_trace <- do.call(rbind, trace)
   st
 }
 
