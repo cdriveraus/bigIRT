@@ -39,7 +39,9 @@ Suggests:
     mirt,
     testthat,
     knitr,
-    rmarkdown
+    rmarkdown,
+    sandwich,
+    strucchange
 VignetteBuilder: knitr
 SystemRequirements: GNU make
 URL: https://github.com/cdriveraus/bigIRT

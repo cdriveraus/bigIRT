@@ -682,6 +682,17 @@ bigIRT_score_compute <- function(fit, nodes = NULL, information = TRUE, cores = 
   for(jj in seq_along(slots)) data.table::set(rows, j = names(slots)[jj], value = sm[, jj])
   data.table::set(rows, j = "eta", value = sm[, length(slots) + 1L])
   data.table::set(rows, j = "ppred", value = sm[, length(slots) + 2L])
+  ## Each response's derivative of its probability in a common shift of the
+  ## person's ability, a (P - c)(d - P) / (d - c) at the predictive
+  ## probability: what turns an expected-score change into an ability-
+  ## equivalent one (scoreTest's effects).
+  re <- bigIRT_laplace_row_effective(st$state, sdat, thetaBase = matrix(0, N, K),
+    rows = rc$rows, context = rc)
+  pp <- rows$ppred
+  wq <- (pp - re$c_row) * (re$d_row - pp) / pmax(re$d_row - re$c_row, 1e-12)
+  for(k in seq_len(K))
+    data.table::set(rows, j = paste0("dpdtheta", if(K == 1L) "" else k), value = re$loadings[, k] * wq)
+  rm(re, wq, pp)
   if(any(st$hold == 1L)) data.table::set(rows, j = "held", value = st$hold == 1L)
   if(isTRUE(information)){
     jj <- 0L
@@ -701,6 +712,21 @@ bigIRT_score_compute <- function(fit, nodes = NULL, information = TRUE, cores = 
     data.table::set(persons, j = paste0("sd", dn[k]), value = sqrt(pmax(pt$post_cov[k, k, ], 0)))
   }
   for(k in seq_len(K)) data.table::set(persons, j = paste0("mu", dn[k]), value = pt$score[, k])
+  ## Each person's ability-regression prediction (the mean plus person-mean
+  ## predictors times their coefficients) and total ability estimate (the
+  ## base's posterior mean plus the same regression part).
+  Pr <- as.integer(st$P_real %||% 0L)
+  xb <- matrix(0, N, K)
+  if(Pr > 0L){
+    Xr <- as.matrix(st$args$person_pred)[, seq_len(Pr), drop = FALSE]
+    smx <- rowsum(Xr, st$args$id, reorder = TRUE); ix <- as.integer(rownames(smx))
+    Xbar <- matrix(0, N, Pr); Xbar[ix, ] <- smx / tabulate(st$args$id, N)[ix]
+    xb <- Xbar %*% t(matrix(st$args$Abilitybeta[, seq_len(Pr)], K, Pr))
+  }
+  for(k in seq_len(K)){
+    data.table::set(persons, j = paste0("pred", dn[k]), value = st$args$prior_mean[, k] + xb[, k])
+    data.table::set(persons, j = paste0("ability", dn[k]), value = pt$eap[, k] + xb[, k])
+  }
   jj <- 0L
   for(l in seq_len(K)) for(k in seq_len(l)){
     jj <- jj + 1L
@@ -735,6 +761,75 @@ print.bigIRT_scores <- function(x, ...){
   cat("Summed over all responses (near zero at a fitted optimum, up to the item prior):\n")
   print(tot)
   invisible(x)
+}
+
+#' Score contributions as an estimating-function matrix
+#'
+#' Arranges the score contributions of [scoreContributions()] as the matrix
+#' [sandwich::estfun()] returns: one row per person (the person's marginal
+#' score, summed over their responses) or per response, one column per free
+#' item parameter. Tools built on `estfun`, such as the generalised
+#' fluctuation tests of `strucchange::gefp()` and `strucchange::sctest()`,
+#' then run on a bigIRT fit as they do on `mirt` fits.
+#'
+#' Persons are independent and are the units such tools assume; responses
+#' within a person are not, so `level = "row"` is for bookkeeping (a
+#' covariate given per response), not for tests that treat rows as
+#' independent -- [scoreTest()] handles those. Those tools decorrelate with
+#' the outer product of these scores; [scoreTest()] uses each response's
+#' expected information instead, which on thin items is better calibrated.
+#'
+#' @param x A `bigIRT_scores` object.
+#' @param items Items to include (default all). Each free parameter is a
+#'   column, so for large banks choose items.
+#' @param parameters Parameter types to include: any of `"B"`, `"A"` (all
+#'   loadings), `"C"`, `"D"`.
+#' @param level `"person"` (default) or `"row"`.
+#' @param ... Unused.
+#' @return A matrix with rows in the order of `x$persons` (or `x$rows`) and
+#'   columns named `item:parameter`.
+#' @examples
+#' \dontrun{
+#' sc <- scoreContributions(fit)
+#' z <- covariate_per_person[as.integer(sc$person_labels)]
+#' gp <- strucchange::gefp(sc, fit = NULL, order.by = z,
+#'   scores = function(x) sandwich::estfun(x, items = "item7"))
+#' strucchange::sctest(gp, functional = "DM")
+#' }
+#' @rawNamespace S3method(sandwich::estfun, bigIRT_scores)
+estfun.bigIRT_scores <- function(x, items = NULL, parameters = c("B", "A", "C", "D"),
+  level = c("person", "row"), ...){
+  level <- match.arg(level)
+  R <- x$rows; slots <- names(x$slots)
+  pmap <- list(B = "B", A = grep("^A[0-9]*$", slots, value = TRUE), C = "C", D = "D")
+  use <- intersect(unlist(pmap[intersect(parameters, names(pmap))], use.names = FALSE), slots)
+  ii <- if(is.null(items)) seq_along(x$item_labels) else match(as.character(items), x$item_labels)
+  if(anyNA(ii)) stop("Unknown items: ", paste(items[is.na(ii)], collapse = ", "))
+  free <- x$item_free[ii, use, drop = FALSE]
+  if(!any(free)) stop("No free parameters of those types for those items.")
+  if(sum(free) > 2000L && is.null(items))
+    stop(sum(free), " columns; choose `items`.")
+  col_of <- matrix(0L, length(x$item_labels), length(use), dimnames = list(NULL, use))
+  col_of[ii, ][free] <- seq_len(sum(free))
+  keep <- R$item %in% ii
+  Rk <- R[keep]
+  M <- matrix(0, nrow(Rk), sum(free))
+  for(s in use){
+    cc <- col_of[Rk$item, s]
+    ok <- cc > 0L
+    M[cbind(which(ok), cc[ok])] <- Rk[[s]][ok]
+  }
+  wh <- which(col_of > 0L, arr.ind = TRUE)
+  colnames(M)[col_of[wh]] <- paste0(x$item_labels[wh[, 1]], ":", use[wh[, 2]])
+  if(level == "row"){
+    out <- matrix(0, nrow(R), ncol(M), dimnames = list(NULL, colnames(M)))
+    out[keep, ] <- M
+    return(out)
+  }
+  out <- matrix(0, nrow(x$persons), ncol(M), dimnames = list(x$person_labels, colnames(M)))
+  sm <- rowsum(M, Rk$person, reorder = TRUE)
+  out[as.integer(rownames(sm)), ] <- sm
+  out
 }
 
 ## ---------------------------------------------------------------------------
@@ -826,12 +921,17 @@ bigIRT_score_basis <- function(z, form, df){
     return(X)
   }
   z <- as.numeric(z)
+  ## `at` evaluates the basis at given covariate values, for effect contrasts.
   if(form == "linear"){
-    X <- matrix(z - mean(z), ncol = 1L); colnames(X) <- "linear"; return(X)
+    mz <- mean(z)
+    X <- matrix(z - mz, ncol = 1L); colnames(X) <- "linear"
+    attr(X, "at") <- function(q) matrix(q - mz, ncol = 1L)
+    return(X)
   }
-  X <- splines::ns(z, df = df)
-  X <- matrix(as.numeric(X), nrow = length(z))
+  nsb <- splines::ns(z, df = df)
+  X <- matrix(as.numeric(nsb), nrow = length(z))
   colnames(X) <- paste0("ns", seq_len(ncol(X)))
+  attr(X, "at") <- function(q) matrix(stats::predict(nsb, q), nrow = length(q))
   X
 }
 
@@ -1115,6 +1215,14 @@ bigIRT_score_fluct <- function(z, S, info, Nb, test, nuis, ngrid, trim, nsim){
 #'   otherwise falls back to `"full"`: every coefficient and the SD
 #'   re-estimated jointly to convergence, which can take dozens of passes
 #'   over the data.
+#' @param effects Report DIF effect sizes (parametric forms). Each response's
+#'   score is the score of a Bernoulli given the person's other responses, so
+#'   the derivative of its predicted probability in the item's parameters is
+#'   exact; applied to the one-step DIF estimate it gives the response's
+#'   first-order change in the probability of a correct answer at the
+#'   person's own ability. These are averaged per item (`effects`) and, with
+#'   `purify` and a person-level covariate, summed per person over the
+#'   flagged items they answered (`dtf`).
 #' @param nodes,cores Passed to [scoreContributions()] when `fit` is a fit.
 #'
 #' @return An object of class `bigIRT_scoretest`: a list with `tests`, a
@@ -1129,6 +1237,23 @@ bigIRT_score_fluct <- function(z, S, info, Nb, test, nuis, ngrid, trim, nsim){
 #'   ability model (`adjust`), `adjustment`: its basis terms' estimated
 #'   coefficients, the re-estimated ability SD against the fit's, and the
 #'   iterations taken and whether they converged (a warning is given if not).
+#'   With `effects`: `effects`, per item and contrast (a factor level against
+#'   the reference level; a continuous covariate's 90th against its 10th
+#'   percentile over responses), the mean change in the probability of a
+#'   correct answer over the item's responses at equal ability, signed (`dP`)
+#'   and unsigned (`dP_abs`), first-order in the DIF estimate. They are
+#'   relative to the scale the other items set: with `purify`, the anchors;
+#'   without, all items, which absorb any net DIF into the estimated impact.
+#'   With `purify` and a person-level covariate (one-dimensional models), also
+#'   `dtf`, the test-level effect of the flagged items per level or covariate
+#'   quintile, relative to the reference group (the reference level, or the
+#'   middle quintile): the mean change in a person's expected number correct
+#'   over the items they answered (`dT_flagged`), and the ability shift that
+#'   would change their expected score as much (`dtheta_flagged`) -- the bias
+#'   DIF puts into a person's ability estimate when scored with these item
+#'   parameters, to first order. Without anchors there is no test-level
+#'   effect to report: with the covariate's ability effect estimated freely,
+#'   the DIF effects of all items sum to about zero for each group.
 #'
 #' @seealso [scoreContributions()]
 #' @export
@@ -1140,7 +1265,7 @@ scoreTest <- function(fit, covariates, parameters = "B",
   purify = FALSE, purifyAlpha = 0.05, purifyMaxIter = 5L,
   information = c("expected", "observed", "opg"),
   adjust = c("auto", "none"), adjustDf = 3L, adjustMethod = c("fast", "full"),
-  nodes = NULL, cores = 1L){
+  effects = TRUE, nodes = NULL, cores = 1L){
   information <- match.arg(information); adjust <- match.arg(adjust)
   adjustMethod <- match.arg(adjustMethod)
   form <- match.arg(form); level <- match.arg(level)
@@ -1157,7 +1282,7 @@ scoreTest <- function(fit, covariates, parameters = "B",
   }
   cv <- bigIRT_score_covariates(sc, covariates, level)
   ability <- identical(parameters, "Ability") || identical(parameters, "ability")
-  res <- list(); coefs <- list(); adjs <- list()
+  res <- list(); coefs <- list(); adjs <- list(); effl <- list(); ownl <- list()
   for(v in names(cv$values)){
     zall <- cv$values[[v]]
     f_v <- form
@@ -1186,11 +1311,23 @@ scoreTest <- function(fit, covariates, parameters = "B",
       if(!adj && cv$level == "person" && !(v %in% sc$person_preds))
         bigIRT_score_impact_check(sc, zall, v)
       out <- bigIRT_score_test_items(scv, zall, cv$level, parameters, f_v, by, items, df,
-        ngrid, trim, nsim, minN, information)
-      if(isTRUE(purify) && !is.null(out))
-        out <- bigIRT_score_purify(fit, out, zall, cv$level, parameters, f_v, items, df,
+        ngrid, trim, nsim, minN, information, effects = effects)
+      persons_anchor <- NULL
+      if(isTRUE(purify) && !is.null(out)){
+        pu <- bigIRT_score_purify(fit, out, zall, cv$level, parameters, f_v, items, df,
           ngrid, trim, nsim, minN, purifyAlpha, purifyMaxIter, nodes, cores, information,
-          add_preds = Badj)
+          add_preds = Badj, effects = effects)
+        ## Effects relative to the anchors when anything was flagged; with
+        ## nothing flagged every item is an anchor and the first stage stands.
+        if(!is.null(pu$effects)){ out$effects <- pu$effects; out$own <- pu$own }
+        persons_anchor <- pu$persons_anchor %||% scv$persons
+        out$tests <- pu$tests; out$coefficients <- pu$coefficients
+      }
+      if(!is.null(out$effects)){
+        effl[[v]] <- out$effects[, covariate := v]
+        ownl[[v]] <- list(own = out$own, zall = zall, level = cv$level, form = f_v,
+          persons_all = scv$persons, persons_anchor = persons_anchor)
+      }
       if(!is.null(out)) out$tests[, ability_adjusted := adj]
     }
     if(is.null(out)) next
@@ -1208,10 +1345,60 @@ scoreTest <- function(fit, covariates, parameters = "B",
   coefficients <- data.table::rbindlist(coefs, fill = TRUE)
   if(nrow(coefficients))
     data.table::setcolorder(coefficients, c("covariate", setdiff(names(coefficients), "covariate")))
+  eff <- if(length(effl)) data.table::rbindlist(effl) else NULL
+  if(!is.null(eff)) data.table::setcolorder(eff, c("covariate", setdiff(names(eff), "covariate")))
+  dtf <- data.table::rbindlist(lapply(names(ownl), function(v){
+    o <- ownl[[v]]
+    flagged <- if("item" %in% names(tests)) tests[covariate == v & !is.na(p_fdr) & p_fdr < .05, item] else character(0)
+    d <- bigIRT_score_dtf(o$own, o$zall, o$level, o$form, flagged, o$persons_all, o$persons_anchor)
+    if(!is.null(d)) d[, covariate := v]
+    d
+  }), fill = TRUE)
+  if(nrow(dtf)) data.table::setcolorder(dtf, c("covariate", setdiff(names(dtf), "covariate")))
   structure(list(tests = tests, coefficients = if(nrow(coefficients)) coefficients else NULL,
     adjustment = if(length(adjs)) data.table::rbindlist(adjs) else NULL,
+    effects = eff, dtf = if(nrow(dtf)) dtf else NULL,
     parameters = parameters, rule = sc$rule),
     class = "bigIRT_scoretest")
+}
+
+## Test-level DIF effects for a person-level covariate, which need anchors.
+## With the covariate's ability effect estimated freely, its score equation
+## makes the DIF effects of all items sum to about zero for each group: net
+## DIF is absorbed into the estimated impact (simulated: +0.43 expected
+## correct answers of true DIF read as -0.06). So they come from the anchored
+## stage of `purify`, over the flagged items: per group, relative to the
+## reference group (a factor's reference level; for a continuous covariate
+## the middle quintile), the mean change in a person's expected number
+## correct (`dT_flagged`; simulated .437 against a true .426) and the ability
+## shift that would change their expected score on all their items as much
+## (`dtheta_flagged`): the bias DIF puts into a person's ability estimate
+## when scored with these item parameters, as in a calibrated bank
+## (simulated .074 against a true .080). It is not the bias in the fit's own
+## group gap, which also moves with the item parameters the DIF items
+## contaminated (.10 in the same simulations); re-estimating the ability side
+## on the anchors with the items held recovered under half of that, because
+## the anchors' own parameters carry part of it, and is not reported. One-
+## dimensional models.
+bigIRT_score_dtf <- function(own, zall, zlevel, form, flagged, persons_all, persons_anchor){
+  if(!identical(zlevel, "person") || is.null(persons_anchor) || is.null(own) || !nrow(own) ||
+    all(is.na(own$dpdtheta))) return(NULL)
+  N <- nrow(persons_anchor)
+  zp <- zall[seq_len(N)]
+  grp <- if(form == "factor") factor(zp) else {
+    q <- unique(stats::quantile(as.numeric(zp), 0:5 / 5, na.rm = TRUE))
+    cut(as.numeric(zp), q, include.lowest = TRUE)
+  }
+  ref <- if(form == "factor") levels(grp)[1] else levels(grp)[ceiling(nlevels(grp) / 2)]
+  per <- own[, list(items = .N, dT = sum(dP[Item %in% flagged]), slope = sum(dpdtheta)), by = person]
+  pg <- grp[per$person]
+  ft <- tapply(per$dT, pg, mean); fth <- tapply(per$dT / per$slope, pg, mean)
+  ni <- tapply(per$items, pg, mean)
+  data.table::data.table(group = levels(grp), reference = levels(grp) == ref,
+    persons = as.integer(table(grp)), items = as.numeric(ni[levels(grp)]),
+    flagged_items = length(flagged),
+    dT_flagged = as.numeric(ft[levels(grp)] - ft[[ref]]),
+    dtheta_flagged = as.numeric(fth[levels(grp)] - fth[[ref]]))
 }
 
 #' @export
@@ -1243,7 +1430,8 @@ print.bigIRT_scoretest <- function(x, n = 10L, ...){
 ## ability coefficients from unflagged items only), retest the rest, repeat.
 bigIRT_score_purify <- function(fit, out, zall, zlevel, parameters, form, items, df,
   ngrid, trim, nsim, minN, alpha, maxit, nodes, cores, information = "observed",
-  add_preds = NULL){
+  add_preds = NULL, effects = FALSE){
+  oA <- NULL; scA <- NULL; anchored_on <- character(0)
   pcol <- if(form == "fluctuation") "p_DM" else "p"
   tst <- data.table::copy(out$tests); cf <- out$coefficients
   tst[, `:=`(anchor = TRUE, stage = 1L)]
@@ -1258,11 +1446,12 @@ bigIRT_score_purify <- function(fit, out, zall, zlevel, parameters, form, items,
     ## the unflagged items; the unflagged items scored as usual against it,
     ## and each flagged item's responses scored against the same anchor with
     ## their own likelihood added (held-out rows, src/agq_backend.cpp).
-    scA <- bigIRT_score_compute(fit, nodes = nodes, cores = cores, exclude = flagged, refit = TRUE,
+    scA_new <- bigIRT_score_compute(fit, nodes = nodes, cores = cores, exclude = flagged, refit = TRUE,
       add_preds = add_preds)
-    oA <- bigIRT_score_test_items(scA, zall, zlevel, parameters, form, "item", all_items, df,
-      ngrid, trim, nsim, minN, information)
-    if(is.null(oA)) break
+    oA_new <- bigIRT_score_test_items(scA_new, zall, zlevel, parameters, form, "item", all_items, df,
+      ngrid, trim, nsim, minN, information, effects = effects)
+    if(is.null(oA_new)) break
+    oA <- oA_new; scA <- scA_new; anchored_on <- flagged
     new_t <- oA$tests
     new_t[, stage := it + 1L]
     new_flag <- flag_of(new_t)
@@ -1272,7 +1461,10 @@ bigIRT_score_purify <- function(fit, out, zall, zlevel, parameters, form, items,
     if(setequal(new_flag, flagged)) break
     flagged <- new_flag
   }
-  list(tests = tst, coefficients = cf)
+  ## The last anchored stage: its effects are relative to the anchors, and its
+  ## persons carry the ability side estimated on the anchors alone.
+  list(tests = tst, coefficients = cf, effects = oA$effects, own = oA$own,
+    persons_anchor = scA$persons, anchored_on = anchored_on)
 }
 
 ## The basis a covariate enters the ability regression with when `adjust`
@@ -1328,7 +1520,7 @@ bigIRT_score_impact_check <- function(sc, z, v){
 }
 
 bigIRT_score_test_items <- function(sc, zall, zlevel, parameters, form, by, items, df,
-  ngrid, trim, nsim, minN, information = "observed"){
+  ngrid, trim, nsim, minN, information = "observed", effects = FALSE){
   R <- sc$rows
   slots <- names(sc$slots)
   pmap <- list(B = "B", A = grep("^A[0-9]*$", slots, value = TRUE), C = "C", D = "D")
@@ -1363,7 +1555,18 @@ bigIRT_score_test_items <- function(sc, zall, zlevel, parameters, form, by, item
   if(form != "fluctuation" && is.null(G)) return(NULL)
   free <- sc$item_free
   units <- split(seq_len(nrow(R)), grp[R$item])
-  tests <- list(); coefs <- list()
+  tests <- list(); coefs <- list(); effs <- list()
+  ## Effect contrasts: a factor's levels against its reference; a continuous
+  ## covariate's 90th against its 10th percentile (over responses), and each
+  ## response against the median.
+  effects <- isTRUE(effects) && form != "fluctuation" && !is.null(R$ppred)
+  if(effects){
+    own_dP <- rep(NA_real_, nrow(R))
+    if(form != "factor"){
+      at <- attr(G, "at"); qz <- stats::quantile(as.numeric(z), c(.1, .5, .9), names = FALSE)
+      dg <- at(qz[3]) - at(qz[1]); g_med <- as.numeric(at(qz[2]))
+    }
+  }
   for(g in names(units)){
     u <- units[[g]]
     if(length(u) < minN) next
@@ -1430,10 +1633,43 @@ bigIRT_score_test_items <- function(sc, zall, zlevel, parameters, form, by, item
       parameter = rep(slots[test_used], each = ncol(G)),
       term = rep(colnames(G), times = length(test_used)),
       estimate = est, se = se, z = est / se)
+    ## Effects on the probability scale. A response's score is the score of a
+    ## Bernoulli with probability ppred given the person's other responses, so
+    ## ppred's derivative in each tested slot is exactly
+    ## s ppred (1 - ppred) / (y - ppred); applied to the one-step DIF
+    ## estimate it is that response's first-order change in the probability
+    ## of a correct answer, at the person's own ability.
+    if(effects && determined){
+      pp <- R$ppred[u]
+      dPs <- S[u, test_used, drop = FALSE] * (pp * (1 - pp) / (R$y[u] - pp))
+      E <- matrix(est, ncol(G), length(test_used))
+      Gu <- G[u, , drop = FALSE]
+      if(form == "factor"){
+        for(l in seq_len(ncol(G))){
+          rl <- Gu[, l] == 1
+          if(!any(rl)) next
+          d <- as.numeric(dPs[rl, , drop = FALSE] %*% E[l, ])
+          effs[[length(effs) + 1L]] <- data.table::data.table(item = g,
+            contrast = paste(colnames(G)[l], "vs reference"), n = sum(rl), dP = mean(d), dP_abs = mean(abs(d)))
+        }
+        own_dP[u] <- rowSums(dPs * (Gu %*% E))
+      } else {
+        d <- as.numeric(dPs %*% as.numeric(dg %*% E))
+        effs[[length(effs) + 1L]] <- data.table::data.table(item = g,
+          contrast = sprintf("%.3g vs %.3g (90th vs 10th percentile)", qz[3], qz[1]),
+          n = length(u), dP = mean(d), dP_abs = mean(abs(d)))
+        own_dP[u] <- rowSums(dPs * (sweep(Gu, 2, g_med) %*% E))
+      }
+    }
   }
   if(!length(tests)) return(NULL)
   out <- list(tests = data.table::rbindlist(tests, fill = TRUE),
     coefficients = if(length(coefs)) data.table::rbindlist(coefs) else NULL)
+  if(effects && length(effs)){
+    out$effects <- data.table::rbindlist(effs)
+    out$own <- data.table::data.table(person = R$person, Item = R$Item, dP = own_dP,
+      dpdtheta = if(!is.null(R$dpdtheta)) R$dpdtheta else NA_real_)[!is.na(dP)]
+  }
   if(!identical(by, "item")){
     data.table::setnames(out$tests, "item", "group")
     if(!is.null(out$coefficients)) data.table::setnames(out$coefficients, "item", "group")

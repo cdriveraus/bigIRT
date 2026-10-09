@@ -540,4 +540,74 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     expect_lt(ra$ability_sd[1], .7)
     expect_true(ra$converged[1])
   })
+
+  ## Effect sizes against simulation truth. Three of twenty items easier for
+  ## the focal group by .8 logits, impact modelled. Against the anchors of
+  ## purification, each DIF item's change in the probability of a correct
+  ## answer matches the truth at the focal persons' true abilities, clean
+  ## items sit near zero, and the focal group's change in expected number
+  ## correct over the flagged items matches the true one. Without anchors
+  ## the test-level effect is not reported: the impact estimate absorbs it.
+  test_that("DIF effect sizes recover simulated truth against the anchors", {
+    skip_on_cran()
+    set.seed(102)
+    N <- 6000; J <- 20
+    g <- stats::rbinom(N, 1, .5); th <- stats::rnorm(N) + .8 * g
+    a <- stats::runif(J, .8, 1.6); b <- stats::rnorm(J)
+    shift <- c(.8, .8, .8, rep(0, J - 3))
+    ii <- rep(seq_len(N), J); jj <- rep(seq_len(J), each = N)
+    eta0 <- a[jj] * th[ii] - b[jj]
+    d <- data.frame(id = ii, Item = jj, Scale = 1, g = g[ii],
+      score = stats::rbinom(N * J, 1, stats::plogis(eta0 + shift[jj] * g[ii])))
+    f <- suppressWarnings(fitIRT(d, pl = 2, personPreds = "g", laplaceRefine = "agq", cores = 1,
+      verbose = 0, laplaceCertify = FALSE, dropPerfectScores = FALSE))
+    cv <- data.frame(id = rownames(f$pars$Ability)); cv$g <- factor(g[as.integer(cv$id)])
+    r0 <- scoreTest(f, cv, parameters = "B")
+    expect_null(r0$dtf); expect_identical(nrow(r0$effects), as.integer(J))
+    r <- scoreTest(f, cv, parameters = "B", purify = TRUE)
+    foc <- g[ii] == 1
+    dP_true <- vapply(seq_len(J), function(j) mean((stats::plogis(eta0 + shift[jj]) -
+      stats::plogis(eta0))[foc & jj == j]), 0)
+    e <- r$effects[match(as.character(seq_len(J)), item)]
+    expect_lt(max(abs(e$dP[1:3] - dP_true[1:3])), .035)
+    expect_lt(max(abs(e$dP[-(1:3)])), .035)
+    expect_true(all(as.character(1:3) %in% r$tests[p_fdr < .05, item]))
+    dT_true <- mean(tapply((stats::plogis(eta0 + shift[jj]) - stats::plogis(eta0))[foc], ii[foc], sum))
+    x <- r$dtf[group == "1"]
+    expect_lt(abs(x$dT_flagged / dT_true - 1), .15)
+    expect_identical(r$dtf[group == "0", c(dT_flagged, dtheta_flagged)], c(0, 0))
+    expect_gt(x$dtheta_flagged, 0)
+  })
+
+  ## estfun: the person-level matrix holds each person's marginal score per
+  ## free item parameter (their responses' scores summed), and its column
+  ## sums are the row scores' sums; the row-level one sums to the same.
+  test_that("estfun arranges the score contributions for sandwich and strucchange", {
+    skip_on_cran(); skip_if_not_installed("sandwich")
+    set.seed(61)
+    N <- 800; J <- 10
+    th <- stats::rnorm(N); a <- stats::runif(J, .8, 1.6); b <- stats::rnorm(J)
+    ii <- rep(seq_len(N), J); jj <- rep(seq_len(J), each = N)
+    d <- data.frame(id = ii, Item = jj, Scale = 1, score = stats::rbinom(N * J, 1, stats::plogis(a[jj] * th[ii] - b[jj])))
+    f <- suppressWarnings(fitIRT(d, pl = 2, cores = 1, verbose = 0, laplaceCertify = FALSE))
+    sc <- scoreContributions(f)
+    E <- sandwich::estfun(sc)
+    expect_identical(dim(E), c(nrow(sc$persons), sum(sc$item_free)))
+    expect_identical(rownames(E), sc$person_labels)
+    tot <- sc$rows[, list(B = sum(B), A = sum(A)), by = Item]
+    expect_equal(unname(E[, paste0(tot$Item, ":B")] |> colSums()), tot$B, tolerance = 1e-10)
+    expect_equal(unname(E[, paste0(tot$Item, ":A")] |> colSums()), tot$A, tolerance = 1e-10)
+    Er <- sandwich::estfun(sc, level = "row")
+    expect_identical(nrow(Er), nrow(sc$rows))
+    expect_equal(unname(rowsum(Er, sc$rows$person, reorder = TRUE)),
+      unname(E[sort(unique(sc$rows$person)), ]), tolerance = 1e-10)
+    E3 <- sandwich::estfun(sc, items = "3", parameters = "B")
+    expect_identical(colnames(E3), "3:B")
+    skip_if_not_installed("strucchange")
+    z <- stats::runif(nrow(E))
+    gp <- strucchange::gefp(sc, fit = NULL, order.by = z,
+      scores = function(x, ...) sandwich::estfun(x, items = "3"))
+    p <- strucchange::sctest(gp, functional = "DM")$p.value
+    expect_true(p >= 0 && p <= 1)
+  })
 }
