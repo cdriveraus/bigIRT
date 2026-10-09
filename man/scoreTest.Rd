@@ -23,6 +23,8 @@ scoreTest(
   purifyAlpha = 0.05,
   purifyMaxIter = 5L,
   information = c("expected", "observed", "opg"),
+  adjust = c("auto", "none"),
+  adjustDf = 3L,
   nodes = NULL,
   cores = 1L
 )
@@ -87,6 +89,12 @@ liberal on thin items (7 to 12 per cent at a nominal 5 in the same
 simulation). The ability tests always use the observed information of
 the ability mean, which is not subject to these problems.}
 
+\item{adjust, adjustDf}{\code{"auto"} (default) adds a covariate missing from
+the fit's ability model to it before testing, as a natural spline with
+\code{adjustDf} degrees of freedom (indicators for a factor or a covariate
+with few values), items held; \code{"none"} does not. Needs \code{fit} to be a
+fit; the result records it in \code{ability_adjusted}.}
+
 \item{nodes, cores}{Passed to \code{\link[=scoreContributions]{scoreContributions()}} when \code{fit} is a fit.}
 }
 \value{
@@ -131,12 +139,20 @@ In both, each item's own other parameters are projected out exactly
 are estimated is accounted for, and the small pull of the item priors on the
 fit is too.
 
-\strong{Impact.} If the covariate is related to ability, it must be in the
-fitted ability model (\code{personPreds}, in a form flexible enough to carry the
-relation -- a factor for groups, a spline basis for a nonlinear trend);
-otherwise every item inherits the unmodelled ability difference and the DIF
-tests are not valid. \code{scoreTest()} checks this for person-level covariates
-that are not in the ability model, with the ability test below, and warns.
+\strong{Impact.} A covariate related to ability has to be in the ability model
+for its DIF tests to be valid; otherwise every item inherits the
+unmodelled ability difference. When \code{fit} is a fit and the covariate is not
+among its \code{personPreds}, \code{adjust = "auto"} (the default) puts it there
+after the fact: a natural spline of it (\code{adjustDf} degrees of freedom), or
+indicators for a factor, centred, enters the ability regression, its
+coefficients are estimated with the item parameters held, and the
+contributions are recomputed under that model before testing. A
+response-level covariate enters per response, so ability may also change
+with it within person (age at the response, say). The item parameters stay
+as the fit estimated them, without the covariate; each item's test projects
+out the resulting discrepancy in its own parameters. \code{adjust = "none"}
+tests against the fit as it is, and then warns when a person-level
+covariate is related to ability but absent from the model.
 The same is true of the uniform part of DIF that every item shares: it is
 indistinguishable from an ability difference, and DIF is measured relative
 to it.

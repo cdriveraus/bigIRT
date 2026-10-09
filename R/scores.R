@@ -112,7 +112,7 @@ bigIRT_score_item_free <- function(sdat, slots){
 ## state is read back from `fit$pars`, and checked against the fit's own
 ## row-level parameters, which a normalised fit no longer matches.
 bigIRT_score_setup <- function(fit, cores = 1L, jitter = 1e-6, person_tol = 1e-10,
-  exclude_items = NULL){
+  exclude_items = NULL, add_preds = NULL){
   if(!inherits(fit, "bigIRT_fit")) stop("`fit` must be a fit from fitIRT().")
   int <- fit$internals
   sdat <- if(!is.null(int$sdat)) int$sdat else fit$prepared
@@ -189,6 +189,26 @@ bigIRT_score_setup <- function(fit, cores = 1L, jitter = 1e-6, person_tol = 1e-1
     logitDpars = state$logitDpars, logitDbeta = mat0(state$logitDbeta, 1L),
     prior_mean = prior_mean, prior_precision = prior_prec,
     free_mask = 1L - sdat$fixedAbilityLogical, grain_size = grain)
+  ## Predictors added to the ability regression after the fit (`adjust` in
+  ## scoreTest), one row per training response, their coefficients starting
+  ## at zero for bigIRT_score_refit_ability to estimate with the items held.
+  P_real <- if(isTRUE(sdat$NpersonPreds > 0)) as.integer(sdat$NpersonPreds) else 0L
+  pred_names <- if(P_real > 0L) colnames(as.matrix(state$Abilitybeta)) %||% paste0("pred", seq_len(P_real)) else character(0)
+  if(length(add_preds)){
+    add_preds <- as.matrix(add_preds)
+    if(nrow(add_preds) != length(rc$rows))
+      stop("Added ability predictors need one row per training response.")
+    zero <- matrix(0, K, ncol(add_preds))
+    if(P_real > 0L){
+      args$person_pred <- cbind(args$person_pred, add_preds)
+      args$Abilitybeta <- cbind(args$Abilitybeta, zero)
+    } else {
+      args$person_pred <- add_preds
+      args$Abilitybeta <- zero
+    }
+    P_real <- P_real + ncol(add_preds)
+    pred_names <- c(pred_names, colnames(add_preds) %||% paste0("added", seq_len(ncol(add_preds))))
+  }
   ## The person modes (the quadrature's centres) come from the rows that are
   ## not held out.
   args_post <- if(any(hold)) bigIRT_score_args_rows(args, !hold) else args
@@ -200,7 +220,7 @@ bigIRT_score_setup <- function(fit, cores = 1L, jitter = 1e-6, person_tol = 1e-1
       "taken at the last iterate.", call. = FALSE)
   list(sdat = sdat, state = state, rc = rc, args = args, args_post = args_post,
     hold = as.integer(hold), posterior = post, K = K, N = N,
-    prior_mean = prior_mean, prior_prec = prior_prec)
+    prior_mean = prior_mean, prior_prec = prior_prec, P_real = P_real, pred_names = pred_names)
 }
 
 ## The per-row kernel arguments restricted to some rows.
@@ -252,20 +272,52 @@ bigIRT_score_person_terms <- function(aq, st){
 }
 
 ## Re-estimate the ability distribution's mean (when the fit estimated it) and
-## the person-covariate coefficients with the item parameters held, by Newton
-## on the quadrature marginal, from the person scores above. Used after
-## excluding items: the coefficients were estimated with those items' DIF
-## pulling on them, and the anchors alone should set them. Person covariates
-## enter at their person means, which is exact when they are constant within
-## person. Updates st$args (prior mean, coefficients) and the posterior.
-bigIRT_score_refit_ability <- function(st, rule, maxit = 10L, tol = 1e-7, jitter = 1e-6){
+## the person-covariate coefficients -- the fit's own and any added after it --
+## with the item parameters held, by Newton on the quadrature marginal plus the
+## fit's penalty on them. Used after excluding items (the anchors alone set the
+## ability side) and after adding a covariate's basis (`adjust`).
+##
+## Predictors constant within person enter through each person's score in the
+## ability mean and its Louis information, exact Newton. A predictor that
+## varies within person moves each response's ability on its own, so its score
+## is summed over the person's responses (linear-predictor score times loading
+## times value) and the step uses the outer product of the per-person scores,
+## whose root is the same. Updates st$args and st$args_post (prior mean,
+## coefficients) and the posterior.
+##
+## With `est_sd`, the ability SDs are re-estimated too (EM, correlation held).
+## A fit identifies its scale by fixing the ability SD; with the items held
+## the items fix it instead, and a covariate added after the fit takes up part
+## of the variance the fit attributed to the residual, which must then shrink
+## to stay on the items' metric. Measured: 1 SD of impact on a step, added
+## after a fit without it, put the residual SD at .89 to .91 over six
+## datasets, against sqrt(1 / 1.25) = .894; the adjusted tests matched those
+## of a refit with the covariate (p values correlating 1.000).
+bigIRT_score_refit_ability <- function(st, rule, maxit = 30L, tol = 1e-7, jitter = 1e-6,
+  est_sd = FALSE){
   sdat <- st$sdat; K <- st$K; N <- st$N
   free_mean <- as.integer(sdat$fixedAbilityMean) == 0L
-  P <- if(isTRUE(sdat$NpersonPreds > 0)) as.integer(sdat$NpersonPreds) else 0L
-  if(!free_mean && P == 0L) return(st)
-  X <- cbind(if(free_mean) matrix(1, N, 1) else NULL,
-    if(P > 0L) as.matrix(bigIRT_laplace_person_means_by_id(sdat)) else NULL)
-  nc <- ncol(X)
+  P <- as.integer(st$P_real %||% 0L)
+  if(!free_mean && P == 0L && !isTRUE(est_sd)) return(st)
+  ap <- st$args_post
+  Xr <- if(P > 0L) as.matrix(ap$person_pred)[, seq_len(P), drop = FALSE] else NULL
+  varies <- P > 0L && any(bigIRT_laplace_person_pred_varies(Xr, ap$id))
+  if(!varies){
+    Xp <- NULL
+    if(P > 0L){
+      Xp <- matrix(0, N, P)
+      sm <- rowsum(Xr, ap$id, reorder = TRUE); ii <- as.integer(rownames(sm))
+      Xp[ii, ] <- sm / tabulate(ap$id, N)[ii]
+    }
+    X <- cbind(if(free_mean) matrix(1, N, 1) else NULL, Xp)
+  } else {
+    keep <- st$hold == 0L
+    lo <- bigIRT_laplace_row_effective(st$state, sdat, thetaBase = matrix(0, N, K),
+      rows = st$rc$rows, context = st$rc)$loadings[keep, , drop = FALSE]
+    free_k <- as.matrix(ap$fixed_ability) == 0
+    X <- cbind(if(free_mean) matrix(1, nrow(Xr), 1) else NULL, Xr)
+  }
+  nc <- if(is.null(X)) 0L else ncol(X)
   ## The fit's own penalty on these (R/laplaceBackend.R): the mean's
   ## hyperprior and the coefficients' N(0, betaScale^2), both under `priors`.
   ## Without them the re-estimate sits off the fit's optimum even on the full
@@ -274,35 +326,71 @@ bigIRT_score_refit_ability <- function(st, rule, maxit = 10L, tol = 1e-7, jitter
   mu0 <- rep_len(as.numeric(sdat$AbilityMeandat), K)
   mu_sd <- pmax(rep_len(as.numeric(sdat$AbilityMeanSD), K), 1e-8)
   bsc <- as.numeric(sdat$betaScale)
+  P0_of <- function(pa) if(length(dim(pa)) == 3L) matrix(pa[, , 1], K, K) else matrix(pa, K, K)
+  R0 <- stats::cov2cor(solve(P0_of(st$prior_prec)))
+  sd_change <- 0
   for(it in seq_len(maxit)){
-    aq <- do.call(bigIRT_agq_fg_cpp_impl, c(st$args_post, list(
-      theta_mode = st$posterior$theta_mode, precision = st$posterior$precision,
-      rule = rule, want_person = TRUE)))
-    pt <- bigIRT_score_person_terms(aq, st)
-    U <- bigIRT_score_kron_s(X, pt$score, seq_len(K))
-    H <- bigIRT_score_kron(X, X, pt$info, seq_len(K), seq_len(K))
-    if(pri) for(k in seq_len(K)){
+    if(!varies){
+      aq <- do.call(bigIRT_agq_fg_cpp_impl, c(st$args_post, list(
+        theta_mode = st$posterior$theta_mode, precision = st$posterior$precision,
+        rule = rule, want_person = TRUE)))
+      if(nc > 0L){
+        pt <- bigIRT_score_person_terms(aq, st)
+        U <- bigIRT_score_kron_s(X, pt$score, seq_len(K))
+        H <- bigIRT_score_kron(X, X, pt$info, seq_len(K), seq_len(K))
+      }
+    } else {
+      aq <- do.call(bigIRT_agq_fg_cpp_impl, c(st$args_post, list(
+        theta_mode = st$posterior$theta_mode, precision = st$posterior$precision,
+        rule = rule, row_out = 1L, slot_out = integer(0), want_person = isTRUE(est_sd))))
+      seta <- aq$row_scores[, 1]
+      Ui <- matrix(0, N, K * nc)
+      for(k in seq_len(K)){
+        smk <- rowsum(X * (lo[, k] * seta * free_k[, k]), st$args_post$id, reorder = TRUE)
+        Ui[as.integer(rownames(smk)), (k - 1L) * nc + seq_len(nc)] <- smk
+      }
+      U <- colSums(Ui); H <- crossprod(Ui)
+    }
+    if(nc > 0L && pri) for(k in seq_len(K)){
       ix <- (k - 1L) * nc + seq_len(nc)
-      cur <- c(if(free_mean) st$args$prior_mean[1, k], if(P > 0L) st$args$Abilitybeta[k, ])
+      cur <- c(if(free_mean) st$args$prior_mean[1, k], if(P > 0L) st$args$Abilitybeta[k, seq_len(P)])
       cen <- c(if(free_mean) mu0[k], if(P > 0L) rep(0, P))
       prec <- c(if(free_mean) 1 / mu_sd[k]^2, if(P > 0L) rep(if(bsc > 0) 1 / bsc^2 else 0, P))
       U[ix] <- U[ix] - prec * (cur - cen)
       H[cbind(ix, ix)] <- H[cbind(ix, ix)] + prec
     }
-    step <- as.numeric(bigIRT_score_pinv(H)$inv %*% U)
-    for(k in seq_len(K)){
+    step <- if(nc > 0L) as.numeric(bigIRT_score_pinv(H)$inv %*% U) else 0
+    ## The outer-product step is not exact Newton; keep an early one from
+    ## overshooting on an ability scale.
+    if(varies && max(abs(step)) > 1) step <- step / max(abs(step))
+    if(nc > 0L) for(k in seq_len(K)){
       d <- step[(k - 1L) * nc + seq_len(nc)]
       if(free_mean){ st$args$prior_mean[, k] <- st$args$prior_mean[, k] + d[1]; d <- d[-1] }
-      if(P > 0L) st$args$Abilitybeta[k, ] <- st$args$Abilitybeta[k, ] + d
+      if(P > 0L) st$args$Abilitybeta[k, seq_len(P)] <- st$args$Abilitybeta[k, seq_len(P)] + d
     }
     st$args_post$prior_mean <- st$args$prior_mean
     st$args_post$Abilitybeta <- st$args$Abilitybeta
+    ## EM for the SDs, from this pass's posterior moments of the base ability
+    ## about its prior mean, the correlation held.
+    if(isTRUE(est_sd)){
+      eap <- matrix(aq$eap, N, K); pc <- aq$post_cov
+      dv <- eap - matrix(st$args$prior_mean, N, K)
+      Mv <- crossprod(dv) / N + matrix(rowMeans(matrix(pc, K * K, N)), K, K)
+      sd_old <- sqrt(diag(solve(P0_of(st$prior_prec))))
+      sd_new <- sqrt(pmax(diag(Mv), 1e-6))
+      sd_change <- max(abs(sd_new / sd_old - 1))
+      Sig <- diag(sd_new, K) %*% R0 %*% diag(sd_new, K)
+      pa <- bigIRT_prior_precision_array(solve(Sig + diag(jitter, K)), Nsubs = N, K = K)
+      st$prior_prec <- pa; st$args$prior_precision <- pa; st$args_post$prior_precision <- pa
+    }
     st$posterior <- do.call(bigIRT_laplace_person_step_block_cpp_impl, c(st$args_post, list(
       theta_init = st$posterior$theta_mode, jitter = jitter, max_attempts = 8L, max_iter = 100L,
       tol = 1e-10, keep_covariance = FALSE)))
-    if(max(abs(step)) < tol) break
+    if(max(abs(step)) < tol && sd_change < 10 * tol) break
   }
   st$prior_mean <- st$args$prior_mean
+  st$ability_sd <- sqrt(diag(solve(P0_of(st$prior_prec))))
+  st$refit_iter <- it
   st
 }
 
@@ -392,18 +480,19 @@ scoreContributions <- function(fit, nodes = NULL, information = TRUE, cores = 1L
 ## The work of scoreContributions(); `refit` re-estimates the ability side on
 ## the rows that are not held out.
 bigIRT_score_compute <- function(fit, nodes = NULL, information = TRUE, cores = 1L,
-  exclude = NULL, refit = FALSE){
+  exclude = NULL, refit = FALSE, add_preds = NULL){
   item_labels <- rownames(fit$pars$B) %||% as.character(seq_len(fit$prepared$Nitems))
   ex <- NULL
   if(length(exclude)){
     ex <- match(as.character(exclude), item_labels)
     if(anyNA(ex)) stop("Unknown items in `exclude`: ", paste(exclude[is.na(ex)], collapse = ", "))
   }
-  st <- bigIRT_score_setup(fit, cores = cores, exclude_items = ex)
+  st <- bigIRT_score_setup(fit, cores = cores, exclude_items = ex, add_preds = add_preds)
   sdat <- st$sdat; K <- st$K; N <- st$N
   slots <- bigIRT_score_free_slots(sdat)
   rule <- bigIRT_score_rule(fit, K, nodes)
-  if(isTRUE(refit)) st <- bigIRT_score_refit_ability(st, rule)
+  if(isTRUE(refit) || length(add_preds))
+    st <- bigIRT_score_refit_ability(st, rule, est_sd = length(add_preds) > 0L)
   rc <- st$rc
   aq <- do.call(bigIRT_agq_fg_cpp_impl, c(st$args, list(
     theta_mode = st$posterior$theta_mode, precision = st$posterior$precision,
@@ -455,7 +544,12 @@ bigIRT_score_compute <- function(fit, nodes = NULL, information = TRUE, cores = 
     person_preds = if(isTRUE(sdat$NpersonPreds > 0)) colnames(as.matrix(fit$pars$Abilitybeta)) %||% character(0) else character(0),
     person_pred_means = if(isTRUE(sdat$NpersonPreds > 0)) bigIRT_laplace_person_means_by_id(sdat) else NULL,
     excluded = if(length(ex)) item_labels[ex] else character(0),
-    ability_beta = st$args$Abilitybeta, ability_mean = st$args$prior_mean[1, ],
+    ability_beta = { ab <- st$args$Abilitybeta[, seq_len(st$P_real), drop = FALSE]
+      colnames(ab) <- st$pred_names; ab },
+    ability_mean = st$args$prior_mean[1, ],
+    ability_sd = st$ability_sd %||% sqrt(diag(solve(matrix(if(length(dim(st$prior_prec)) == 3L)
+      st$prior_prec[, , 1] else st$prior_prec, K, K)))),
+    adjusted = colnames(add_preds) %||% character(0),
     value = aq$value),
     class = "bigIRT_scores")
 }
@@ -753,12 +847,20 @@ bigIRT_score_fluct <- function(z, S, info, Nb, test, nuis, ngrid, trim, nsim){
 #' are estimated is accounted for, and the small pull of the item priors on the
 #' fit is too.
 #'
-#' **Impact.** If the covariate is related to ability, it must be in the
-#' fitted ability model (`personPreds`, in a form flexible enough to carry the
-#' relation -- a factor for groups, a spline basis for a nonlinear trend);
-#' otherwise every item inherits the unmodelled ability difference and the DIF
-#' tests are not valid. `scoreTest()` checks this for person-level covariates
-#' that are not in the ability model, with the ability test below, and warns.
+#' **Impact.** A covariate related to ability has to be in the ability model
+#' for its DIF tests to be valid; otherwise every item inherits the
+#' unmodelled ability difference. When `fit` is a fit and the covariate is not
+#' among its `personPreds`, `adjust = "auto"` (the default) puts it there
+#' after the fact: a natural spline of it (`adjustDf` degrees of freedom), or
+#' indicators for a factor, centred, enters the ability regression, its
+#' coefficients are estimated with the item parameters held, and the
+#' contributions are recomputed under that model before testing. A
+#' response-level covariate enters per response, so ability may also change
+#' with it within person (age at the response, say). The item parameters stay
+#' as the fit estimated them, without the covariate; each item's test projects
+#' out the resulting discrepancy in its own parameters. `adjust = "none"`
+#' tests against the fit as it is, and then warns when a person-level
+#' covariate is related to ability but absent from the model.
 #' The same is true of the uniform part of DIF that every item shares: it is
 #' indistinguishable from an ability difference, and DIF is measured relative
 #' to it.
@@ -826,6 +928,11 @@ bigIRT_score_fluct <- function(z, S, info, Nb, test, nuis, ngrid, trim, nsim){
 #'   liberal on thin items (7 to 12 per cent at a nominal 5 in the same
 #'   simulation). The ability tests always use the observed information of
 #'   the ability mean, which is not subject to these problems.
+#' @param adjust,adjustDf `"auto"` (default) adds a covariate missing from
+#'   the fit's ability model to it before testing, as a natural spline with
+#'   `adjustDf` degrees of freedom (indicators for a factor or a covariate
+#'   with few values), items held; `"none"` does not. Needs `fit` to be a
+#'   fit; the result records it in `ability_adjusted`.
 #' @param nodes,cores Passed to [scoreContributions()] when `fit` is a fit.
 #'
 #' @return An object of class `bigIRT_scoretest`: a list with `tests`, a
@@ -846,8 +953,9 @@ scoreTest <- function(fit, covariates, parameters = "B",
   level = c("auto", "person", "row"),
   ngrid = 50L, trim = 0.1, nsim = 1000L, seed = NULL, minN = 20L,
   purify = FALSE, purifyAlpha = 0.05, purifyMaxIter = 5L,
-  information = c("expected", "observed", "opg"), nodes = NULL, cores = 1L){
-  information <- match.arg(information)
+  information = c("expected", "observed", "opg"),
+  adjust = c("auto", "none"), adjustDf = 3L, nodes = NULL, cores = 1L){
+  information <- match.arg(information); adjust <- match.arg(adjust)
   form <- match.arg(form); level <- match.arg(level)
   if(isTRUE(purify) && !inherits(fit, "bigIRT_fit"))
     stop("purify needs the fit itself, to recompute the person side; pass the fit, not its scores.")
@@ -870,13 +978,21 @@ scoreTest <- function(fit, covariates, parameters = "B",
     if(ability){
       out <- bigIRT_score_test_ability(sc, zall, cv$level, f_v, df, dims, ngrid, trim, nsim)
     } else {
-      if(cv$level == "person" && !(v %in% sc$person_preds))
+      ## A covariate the ability model lacks: add a flexible basis of it to the
+      ## ability regression, the items held, and score under that model.
+      adj <- identical(adjust, "auto") && inherits(fit, "bigIRT_fit") && !(v %in% sc$person_preds)
+      Badj <- if(adj) bigIRT_score_adjust_basis(zall, cv$level, sc, adjustDf, v) else NULL
+      if(adj && is.null(Badj)) adj <- FALSE
+      scv <- if(adj) bigIRT_score_compute(fit, nodes = nodes, cores = cores, add_preds = Badj) else sc
+      if(!adj && cv$level == "person" && !(v %in% sc$person_preds))
         bigIRT_score_impact_check(sc, zall, v)
-      out <- bigIRT_score_test_items(sc, zall, cv$level, parameters, f_v, by, items, df,
+      out <- bigIRT_score_test_items(scv, zall, cv$level, parameters, f_v, by, items, df,
         ngrid, trim, nsim, minN, information)
       if(isTRUE(purify) && !is.null(out))
         out <- bigIRT_score_purify(fit, out, zall, cv$level, parameters, f_v, items, df,
-          ngrid, trim, nsim, minN, purifyAlpha, purifyMaxIter, nodes, cores, information)
+          ngrid, trim, nsim, minN, purifyAlpha, purifyMaxIter, nodes, cores, information,
+          add_preds = Badj)
+      if(!is.null(out)) out$tests[, ability_adjusted := adj]
     }
     if(is.null(out)) next
     out$tests[, covariate := v]
@@ -919,7 +1035,8 @@ print.bigIRT_scoretest <- function(x, n = 10L, ...){
 ## Iterative purification: flag, anchor on the rest (person posteriors and
 ## ability coefficients from unflagged items only), retest the rest, repeat.
 bigIRT_score_purify <- function(fit, out, zall, zlevel, parameters, form, items, df,
-  ngrid, trim, nsim, minN, alpha, maxit, nodes, cores, information = "observed"){
+  ngrid, trim, nsim, minN, alpha, maxit, nodes, cores, information = "observed",
+  add_preds = NULL){
   pcol <- if(form == "fluctuation") "p_DM" else "p"
   tst <- data.table::copy(out$tests); cf <- out$coefficients
   tst[, `:=`(anchor = TRUE, stage = 1L)]
@@ -934,7 +1051,8 @@ bigIRT_score_purify <- function(fit, out, zall, zlevel, parameters, form, items,
     ## the unflagged items; the unflagged items scored as usual against it,
     ## and each flagged item's responses scored against the same anchor with
     ## their own likelihood added (held-out rows, src/agq_backend.cpp).
-    scA <- bigIRT_score_compute(fit, nodes = nodes, cores = cores, exclude = flagged, refit = TRUE)
+    scA <- bigIRT_score_compute(fit, nodes = nodes, cores = cores, exclude = flagged, refit = TRUE,
+      add_preds = add_preds)
     oA <- bigIRT_score_test_items(scA, zall, zlevel, parameters, form, "item", all_items, df,
       ngrid, trim, nsim, minN, information)
     if(is.null(oA)) break
@@ -948,6 +1066,41 @@ bigIRT_score_purify <- function(fit, out, zall, zlevel, parameters, form, items,
     flagged <- new_flag
   }
   list(tests = tst, coefficients = cf)
+}
+
+## The basis a covariate enters the ability regression with when `adjust`
+## adds it after the fit: natural spline with `df` degrees of freedom, or
+## treatment indicators for a factor (or a numeric covariate with few values),
+## centred, so it moves groups relative to one another and not the whole
+## scale the held item parameters were estimated on. Built on the persons for
+## a person-level covariate (knots from the person distribution), on the
+## responses for a response-level one, and returned one row per training
+## response in the order of the score contributions' rows. Missing values
+## enter at the centre.
+bigIRT_score_adjust_basis <- function(zall, level, sc, df, v){
+  fac <- is.factor(zall) || is.character(zall) || is.logical(zall) ||
+    length(unique(stats::na.omit(zall))) <= df + 1L
+  if(fac){
+    f <- factor(zall)
+    if(nlevels(f) < 2L) return(NULL)
+    B <- vapply(levels(f)[-1L], function(l) as.numeric(f == l), numeric(length(f)))
+    B <- matrix(B, nrow = length(f))
+  } else {
+    z <- as.numeric(zall); ok <- !is.na(z)
+    if(sum(ok) < 3L) return(NULL)
+    B <- matrix(NA_real_, length(z), df)
+    B[ok, ] <- matrix(as.numeric(splines::ns(z[ok], df = df)), nrow = sum(ok))
+  }
+  idx <- if(identical(level, "person")) sc$rows$person else sc$rows$row
+  B <- B[idx, , drop = FALSE]
+  w <- if(identical(level, "person")) 1 / tabulate(idx, length(zall))[idx] else rep(1, length(idx))
+  for(j in seq_len(ncol(B))){
+    ok <- !is.na(B[, j])
+    B[, j] <- B[, j] - sum(B[ok, j] * w[ok]) / sum(w[ok])
+    B[!ok, j] <- 0
+  }
+  colnames(B) <- paste0(v, ".adj", seq_len(ncol(B)))
+  B
 }
 
 ## Warn when a person-level covariate tested for DIF is related to ability but
