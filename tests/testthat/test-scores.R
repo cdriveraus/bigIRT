@@ -564,6 +564,10 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     cv <- data.frame(id = rownames(f$pars$Ability)); cv$g <- factor(g[as.integer(cv$id)])
     r0 <- scoreTest(f, cv, parameters = "B")
     expect_null(r0$dtf); expect_identical(nrow(r0$effects), as.integer(J))
+    ## The fit's own covariate under another name is recognised as already in
+    ## the ability model and not added again.
+    r2 <- scoreTest(f, data.frame(id = cv$id, other_name = cv$g), parameters = "B", effects = FALSE)
+    expect_null(r2$adjustment); expect_false(any(r2$tests$ability_adjusted))
     r <- scoreTest(f, cv, parameters = "B", purify = TRUE)
     foc <- g[ii] == 1
     dP_true <- vapply(seq_len(J), function(j) mean((stats::plogis(eta0 + shift[jj]) -

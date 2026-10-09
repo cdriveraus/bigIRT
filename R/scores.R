@@ -1295,6 +1295,10 @@ scoreTest <- function(fit, covariates, parameters = "B",
       adj <- identical(adjust, "auto") && inherits(fit, "bigIRT_fit") && !(v %in% sc$person_preds)
       Badj <- if(adj) bigIRT_score_adjust_basis(zall, cv$level, sc, adjustDf, v) else NULL
       if(adj && is.null(Badj)) adj <- FALSE
+      in_model <- v %in% sc$person_preds
+      if(adj && identical(cv$level, "person") && bigIRT_score_in_span(Badj, sc)){
+        adj <- FALSE; Badj <- NULL; in_model <- TRUE
+      }
       scv <- if(adj) bigIRT_score_compute(fit, nodes = nodes, cores = cores, add_preds = Badj,
         adjust_method = adjustMethod) else sc
       if(adj){
@@ -1308,7 +1312,7 @@ scoreTest <- function(fit, covariates, parameters = "B",
           fit_ability_sd = sc$ability_sd[rep(seq_len(nrow(ab)), ncol(ab))],
           method = scv$adjust_method, iterations = scv$refit_iter, converged = scv$refit_converged)
       }
-      if(!adj && cv$level == "person" && !(v %in% sc$person_preds))
+      if(!adj && cv$level == "person" && !in_model)
         bigIRT_score_impact_check(sc, zall, v)
       out <- bigIRT_score_test_items(scv, zall, cv$level, parameters, f_v, by, items, df,
         ngrid, trim, nsim, minN, information, effects = effects)
@@ -1476,6 +1480,23 @@ bigIRT_score_purify <- function(fit, out, zall, zlevel, parameters, form, items,
 ## responses for a response-level one, and returned one row per training
 ## response in the order of the score contributions' rows. Missing values
 ## enter at the centre.
+## Is an added person-level basis already in the span of the fit's person
+## predictors? Matching by name misses a covariate passed under another name
+## (`gender` for the fit's `gender1`), and adding it again put a redundant
+## term in the ability model and more than doubled the time of a purified
+## screen on Mindsteps (1,222 s against 494 s).
+bigIRT_score_in_span <- function(B, sc, tol = 1e-8){
+  PM <- sc$person_pred_means
+  if(is.null(PM) || !length(PM)) return(FALSE)
+  R <- sc$rows
+  sm <- rowsum(as.matrix(B), R$person, reorder = TRUE); ii <- as.integer(rownames(sm))
+  Bp <- sm / tabulate(R$person, nrow(sc$persons))[ii]
+  X <- cbind(1, as.matrix(PM)[ii, , drop = FALSE])
+  res <- as.matrix(stats::lm.fit(X, Bp)$residuals)
+  tot <- colSums(scale(Bp, scale = FALSE)^2)
+  all(colSums(res^2) <= tol * pmax(tot, .Machine$double.eps))
+}
+
 bigIRT_score_adjust_basis <- function(zall, level, sc, df, v){
   fac <- is.factor(zall) || is.character(zall) || is.logical(zall) ||
     length(unique(stats::na.omit(zall))) <= df + 1L
