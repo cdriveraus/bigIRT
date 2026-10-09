@@ -49,7 +49,10 @@
   ignore it reached 37 to 43; with a covariate varying within person, 5.4
   per cent against 70. The result's `adjustment` records the coefficients,
   the re-estimated ability SD, and the iterations taken, and a warning is
-  given if they did not converge.
+  given if they did not converge. Both the SD's EM and the outer-product
+  steps used when predictors vary within person converge linearly, and
+  are extrapolated (Aitken) once their steps settle: on the Mindsteps
+  mathematics fit, 19 iterations where plain iteration took 35.
   `adjust = "none"` tests the fit as it is, and then warns when a
   person-level covariate is related to ability but absent from it. See
   `vignette("score-tests")`.
