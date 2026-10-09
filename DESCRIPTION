@@ -26,7 +26,8 @@ Imports:
     methods,
     mize,
     Rcpp (>= 0.12.0),
-    RcppParallel (>= 5.0.1)
+    RcppParallel (>= 5.0.1),
+    splines
 LinkingTo: 
     Rcpp (>= 0.12.0),
     RcppEigen (>= 0.3.3.3.0),
