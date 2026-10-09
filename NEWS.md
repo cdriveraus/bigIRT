@@ -44,9 +44,12 @@
   per response, so ability may also move with it within person. On the
   2025 score-test paper's simulation grid the adjusted tests matched a refit
   with the covariate item by item (median correlation of p values .999
-  under impact, the same decision for 99.3 per cent of items) and held 4.9
-  to 5.4 per cent under impact, where tests that ignore it reached 38 to 43;
-  with a covariate varying within person, 5.6 per cent against 69.
+  under impact, the same decision for 99.3 per cent of items) and held 5.0
+  to 5.2 per cent under impact (the refit 4.9 to 5.1), where tests that
+  ignore it reached 37 to 43; with a covariate varying within person, 5.4
+  per cent against 70. The result's `adjustment` records the coefficients,
+  the re-estimated ability SD, and the iterations taken, and a warning is
+  given if they did not converge.
   `adjust = "none"` tests the fit as it is, and then warns when a
   person-level covariate is related to ability but absent from it. See
   `vignette("score-tests")`.

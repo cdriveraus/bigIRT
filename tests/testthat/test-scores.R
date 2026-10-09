@@ -386,7 +386,7 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
       laplaceCertify = FALSE))
     cv <- data.frame(id = rownames(f0$pars$Ability)); cv$z <- z[as.integer(cv$id)]
     t_none <- suppressWarnings(scoreTest(f0, cv, parameters = "B", adjust = "none"))$tests
-    t_adj <- scoreTest(f0, cv, parameters = "B")$tests
+    r_adj <- scoreTest(f0, cv, parameters = "B"); t_adj <- r_adj$tests
     expect_true(all(t_adj$ability_adjusted)); expect_false(any(t_none$ability_adjusted))
     expect_gt(mean(t_none$p < .05), .3)
     expect_warning(scoreTest(f0, cv, parameters = "B", adjust = "none"), "related to ability")
@@ -406,6 +406,12 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     ## without it scaled to one, so the residual SD should come out near
     ## sqrt(1 / 1.25) = .894.
     expect_lt(abs(sc$ability_sd[1] - .894), .03)
+    ## The result records what the adjustment estimated: the same model.
+    ra <- r_adj$adjustment
+    expect_true(all(ra$converged)); expect_equal(ra$term, colnames(B))
+    expect_equal(ra$estimate, as.numeric(sc$ability_beta[1, colnames(B)]), tolerance = 1e-8)
+    expect_equal(ra$ability_sd[1], sc$ability_sd[1], tolerance = 1e-8)
+    expect_equal(ra$fit_ability_sd[1], 1, tolerance = 1e-6)
     ## And the tests themselves: the adjustment's against the refit's. (This
     ## dataset happens to put 4 of 20 clean items under .05 in both, which is
     ## why the comparison is against the refit, not against .05.)

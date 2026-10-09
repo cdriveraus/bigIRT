@@ -106,7 +106,10 @@ test comes from), with
 Benjamini-Hochberg (\code{p_fdr}) and Holm (\code{p_holm}) adjustments within each
 covariate; and, for the parametric forms, \code{coefficients}, a data.table of
 one-step estimates (\code{estimate}), standard errors and z values per tested
-parameter and basis column.
+parameter and basis column; and, when a covariate was added to the
+ability model (\code{adjust}), \code{adjustment}: its basis terms' estimated
+coefficients, the re-estimated ability SD against the fit's, and the
+iterations taken and whether they converged (a warning is given if not).
 }
 \description{
 Tests whether item parameters depend on a covariate (differential item
