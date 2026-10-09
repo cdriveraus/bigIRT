@@ -43,7 +43,9 @@ row in the data passed to \code{\link[=fitIRT]{fitIRT()}}), \code{id}, \code{Ite
 type (\code{B}, \code{A} or \code{A1}, \code{A2}, ..., \code{C}, \code{D}; zero where the response's
 item has that parameter fixed), \code{eta}, the score in the linear
 predictor (for the 2PL, the response minus its posterior-expected
-probability), and, with \code{information}, the information entries
+probability), \code{ppred}, the probability of a correct response given the
+person's other responses (the row's leave-one-out posterior
+predictive), and, with \code{information}, the observed information entries
 \verb{I.<a>.<b>}.}
 \item{\code{persons}}{A data.table per person: \code{id}, \code{person}, the posterior
 mean and SD of (base) ability on each dimension, the score in the

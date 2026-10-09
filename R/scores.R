@@ -40,7 +40,7 @@
 ##   U* = sum_u g_u s_uP - I_gF I_FF^-1 sum_u s_uF,
 ##   V  = I_gg - I_gF I_FF^-1 I_Fg,      LM = U*' V^-1 U* ~ chi2,
 ##
-## sums over the item's responses u, I_.. the summed Louis information. This is
+## sums over the item's responses u, I_.. the summed information. This is
 ## Neyman's C(alpha) form: valid at any root-n consistent estimate, so the
 ## item-prior's pull on the fit (which leaves sum_u s_uF slightly off zero) is
 ## handled rather than assumed away. V^-1 U* is the one-step estimate of the
@@ -57,6 +57,20 @@
 ## covariate-dependent way. Here the covariance of the projected process is
 ## computed exactly from the information accrued between breakpoints, and the
 ## p-value is simulated from it, so no uniformity is assumed.
+##
+## WHICH INFORMATION. A response's marginal score is exactly the score of the
+## Bernoulli p(y_r | y_-r) -- the response given the person's other
+## responses -- whose probability is the row's leave-one-out predictive. That
+## Bernoulli's Fisher information is the score's variance conditional on the
+## other responses: positive semidefinite, free of the response, and the
+## default. The observed (Louis) information is the alternative; a single
+## response's can be negative, and on thin items (tens of responses) the
+## observed efficient information for a discrimination split by a factor
+## collapsed while the scores still varied (0.0007 against 0.46 from the
+## outer product, LM 1257 on 35 responses). On a simulated thin bank with no
+## DIF (50 to 200 responses an item) the tests rejected at .05 as follows:
+## expected 3.8-5.5 per cent (discrimination) and 5.0 (intercept); observed
+## 4.6-5.8 once the collapsed ones were withheld; outer product 7-12.
 ##
 ## WHAT IS LEFT OUT. The coupling between items through shared persons, and
 ## the ability-side parameters, are not projected out of an item's test. Both
@@ -344,7 +358,9 @@ bigIRT_score_refit_ability <- function(st, rule, maxit = 10L, tol = 1e-7, jitter
 #'     type (`B`, `A` or `A1`, `A2`, ..., `C`, `D`; zero where the response's
 #'     item has that parameter fixed), `eta`, the score in the linear
 #'     predictor (for the 2PL, the response minus its posterior-expected
-#'     probability), and, with `information`, the information entries
+#'     probability), `ppred`, the probability of a correct response given the
+#'     person's other responses (the row's leave-one-out posterior
+#'     predictive), and, with `information`, the observed information entries
 #'     `I.<a>.<b>`.}
 #'   \item{`persons`}{A data.table per person: `id`, `person`, the posterior
 #'     mean and SD of (base) ability on each dimension, the score in the
@@ -395,6 +411,7 @@ bigIRT_score_compute <- function(fit, nodes = NULL, information = TRUE, cores = 
   sm <- aq$row_scores
   for(jj in seq_along(slots)) data.table::set(rows, j = names(slots)[jj], value = sm[, jj])
   data.table::set(rows, j = "eta", value = sm[, length(slots) + 1L])
+  data.table::set(rows, j = "ppred", value = sm[, length(slots) + 2L])
   if(isTRUE(information)){
     jj <- 0L
     for(b in seq_along(slots)) for(a in seq_len(b)){
@@ -424,7 +441,7 @@ bigIRT_score_compute <- function(fit, nodes = NULL, information = TRUE, cores = 
     item_labels = item_labels, person_labels = person_labels,
     id_name = id_name, item_name = item_name,
     n_input_rows = length(fit$pars$p %||% numeric(0)),
-    person_preds = if(isTRUE(sdat$NpersonPreds > 0)) colnames(as.matrix(sdat$personPreds)) else character(0),
+    person_preds = if(isTRUE(sdat$NpersonPreds > 0)) colnames(as.matrix(fit$pars$Abilitybeta)) %||% character(0) else character(0),
     person_pred_means = if(isTRUE(sdat$NpersonPreds > 0)) bigIRT_laplace_person_means_by_id(sdat) else NULL,
     excluded = if(length(ex)) item_labels[ex] else character(0),
     ability_beta = st$args$Abilitybeta, ability_mean = st$args$prior_mean[1, ],
@@ -478,6 +495,28 @@ bigIRT_score_kron <- function(X, Y, info, sx, sy){
     out[(i - 1L) * nx + seq_len(nx), (j - 1L) * ny + seq_len(ny)] <- crossprod(X * w, Y)
   }
   out
+}
+
+## The outer product of each unit's scores, packed like the information
+## columns: the OPG estimate of each unit's information.
+bigIRT_score_opg <- function(S){
+  ns <- ncol(S); out <- matrix(0, nrow(S), ns * (ns + 1L) / 2L)
+  for(b in seq_len(ns)) for(a in seq_len(b)) out[, bigIRT_score_pack_index(a, b)] <- S[, a] * S[, b]
+  out
+}
+
+## Each unit's expected information. A response's marginal score in its
+## item's parameters is exactly the score of the Bernoulli p(y_r | y_-r), the
+## response given the person's other responses, whose probability ppred
+## depends on the item's parameters through every node: s = (y - ppred) /
+## (ppred (1 - ppred)) d ppred/d psi. That model's Fisher information,
+## (d ppred)(d ppred)' / (ppred (1 - ppred)), is the conditional variance of
+## the score given the other responses -- positive semidefinite, free of the
+## response itself, and unbiased for the score's variance -- and recovered
+## from the score as s s' ppred (1 - ppred) / (y - ppred)^2.
+bigIRT_score_expected_info <- function(S, y, ppred){
+  f <- ppred * (1 - ppred) / (y - ppred)^2
+  bigIRT_score_opg(S) * f
 }
 
 ## Score in a set of directions: sum_u X_ua s_u[f], slot-major, basis-minor.
@@ -759,6 +798,23 @@ bigIRT_score_fluct <- function(z, S, info, Nb, test, nuis, ngrid, trim, nsim){
 #' @param purify,purifyAlpha,purifyMaxIter Iterative purification against
 #'   DIF contamination (see above), the adjusted-p threshold for flagging,
 #'   and the maximum number of anchoring rounds. Item tests by item only.
+#' @param information Which information the item tests use.
+#'   `"expected"` (default): each response's score is exactly the score of
+#'   the Bernoulli for that response given the person's other responses (with
+#'   probability `ppred`), and this is that Bernoulli's Fisher information --
+#'   the score's variance given the other responses, never negative. On a
+#'   simulated thin item bank with no DIF (50 to 200 responses an item) it
+#'   held the nominal rate for intercepts and discriminations alike.
+#'   `"observed"`: each response's Louis information. A single response's can
+#'   be negative, and on thin items the observed efficient information of a
+#'   comparison the item cannot support (a discrimination split by a factor
+#'   with few responses at one level) can collapse while the scores still
+#'   vary; such a test is withheld (`p = NA`) when that information is below a
+#'   fifth of the outer-product one (`info_ratio`). `"opg"`: the outer
+#'   product of the scores, the classical choice for fluctuation tests, but
+#'   liberal on thin items (7 to 12 per cent at a nominal 5 in the same
+#'   simulation). The ability tests always use the observed information of
+#'   the ability mean, which is not subject to these problems.
 #' @param nodes,cores Passed to [scoreContributions()] when `fit` is a fit.
 #'
 #' @return An object of class `bigIRT_scoretest`: a list with `tests`, a
@@ -779,7 +835,8 @@ scoreTest <- function(fit, covariates, parameters = "B",
   level = c("auto", "person", "row"),
   ngrid = 50L, trim = 0.1, nsim = 1000L, seed = NULL, minN = 20L,
   purify = FALSE, purifyAlpha = 0.05, purifyMaxIter = 5L,
-  nodes = NULL, cores = 1L){
+  information = c("expected", "observed", "opg"), nodes = NULL, cores = 1L){
+  information <- match.arg(information)
   form <- match.arg(form); level <- match.arg(level)
   if(isTRUE(purify) && !inherits(fit, "bigIRT_fit"))
     stop("purify needs the fit itself, to recompute the person side; pass the fit, not its scores.")
@@ -805,10 +862,10 @@ scoreTest <- function(fit, covariates, parameters = "B",
       if(cv$level == "person" && !(v %in% sc$person_preds))
         bigIRT_score_impact_check(sc, zall, v)
       out <- bigIRT_score_test_items(sc, zall, cv$level, parameters, f_v, by, items, df,
-        ngrid, trim, nsim, minN)
+        ngrid, trim, nsim, minN, information)
       if(isTRUE(purify) && !is.null(out))
         out <- bigIRT_score_purify(fit, out, zall, cv$level, parameters, f_v, items, df,
-          ngrid, trim, nsim, minN, purifyAlpha, purifyMaxIter, nodes, cores)
+          ngrid, trim, nsim, minN, purifyAlpha, purifyMaxIter, nodes, cores, information)
     }
     if(is.null(out)) next
     out$tests[, covariate := v]
@@ -851,7 +908,7 @@ print.bigIRT_scoretest <- function(x, n = 10L, ...){
 ## Iterative purification: flag, anchor on the rest (person posteriors and
 ## ability coefficients from unflagged items only), retest the rest, repeat.
 bigIRT_score_purify <- function(fit, out, zall, zlevel, parameters, form, items, df,
-  ngrid, trim, nsim, minN, alpha, maxit, nodes, cores){
+  ngrid, trim, nsim, minN, alpha, maxit, nodes, cores, information = "observed"){
   pcol <- if(form == "fluctuation") "p_DM" else "p"
   tst <- data.table::copy(out$tests); cf <- out$coefficients
   tst[, `:=`(anchor = TRUE, stage = 1L)]
@@ -867,7 +924,7 @@ bigIRT_score_purify <- function(fit, out, zall, zlevel, parameters, form, items,
     ## from unflagged items only.
     scA <- bigIRT_score_compute(fit, nodes = nodes, cores = cores, exclude = flagged, refit = TRUE)
     oA <- bigIRT_score_test_items(scA, zall, zlevel, parameters, form, "item",
-      setdiff(all_items, flagged), df, ngrid, trim, nsim, minN)
+      setdiff(all_items, flagged), df, ngrid, trim, nsim, minN, information)
     parts <- list(oA$tests); cparts <- list(oA$coefficients)
     ## Each flagged item against the same anchors: its responders' posteriors
     ## from the anchor items and its own responses, the ability side as the
@@ -880,7 +937,7 @@ bigIRT_score_purify <- function(fit, out, zall, zlevel, parameters, form, items,
       scj <- bigIRT_score_compute(fit, nodes = nodes, cores = cores,
         exclude = setdiff(flagged, j), keep_persons = who, ability = ab)
       oj <- bigIRT_score_test_items(scj, zall, zlevel, parameters, form, "item", j, df,
-        ngrid, trim, nsim, minN)
+        ngrid, trim, nsim, minN, information)
       if(!is.null(oj)){ parts[[length(parts) + 1L]] <- oj$tests; cparts[[length(cparts) + 1L]] <- oj$coefficients }
     }
     new_t <- data.table::rbindlist(parts, fill = TRUE)
@@ -914,7 +971,7 @@ bigIRT_score_impact_check <- function(sc, z, v){
 }
 
 bigIRT_score_test_items <- function(sc, zall, zlevel, parameters, form, by, items, df,
-  ngrid, trim, nsim, minN){
+  ngrid, trim, nsim, minN, information = "observed"){
   R <- sc$rows
   slots <- names(sc$slots)
   pmap <- list(B = "B", A = grep("^A[0-9]*$", slots, value = TRUE), C = "C", D = "D")
@@ -937,7 +994,14 @@ bigIRT_score_test_items <- function(sc, zall, zlevel, parameters, form, by, item
   S <- as.matrix(R[, slots, with = FALSE])
   info_cols <- character(0)
   for(b in seq_along(slots)) for(a in seq_len(b)) info_cols <- c(info_cols, paste0("I.", slots[a], ".", slots[b]))
-  info <- as.matrix(R[, info_cols, with = FALSE])
+  info_opg <- bigIRT_score_opg(S)
+  info <- switch(information,
+    opg = info_opg,
+    expected = {
+      if(is.null(R$ppred)) stop("These score contributions predate `ppred`; recompute them.")
+      bigIRT_score_expected_info(S, R$y, R$ppred)
+    },
+    as.matrix(R[, info_cols, with = FALSE]))
   G <- if(form == "fluctuation") NULL else bigIRT_score_basis(z, form, df)
   if(form != "fluctuation" && is.null(G)) return(NULL)
   free <- sc$item_free
@@ -965,7 +1029,7 @@ bigIRT_score_test_items <- function(sc, zall, zlevel, parameters, form, by, item
     }
     ## Parametric: sum the C(alpha) pieces over the group's items, each item
     ## projecting out its own free slots.
-    Us <- 0; V <- 0; tests_ok <- TRUE; test_used <- NULL
+    Us <- 0; V <- 0; Vo <- 0; tests_ok <- TRUE; test_used <- NULL
     for(j in its){
       uj <- u[R$item[u] == j]
       nuis <- which(free[j, ])
@@ -976,15 +1040,31 @@ bigIRT_score_test_items <- function(sc, zall, zlevel, parameters, form, by, item
       pc <- bigIRT_score_lm_pieces(G[uj, , drop = FALSE], matrix(1, length(uj), 1),
         S[uj, , drop = FALSE], info[uj, , drop = FALSE], test, nuis)
       Us <- Us + pc$Ustar; V <- V + pc$V
+      Vo <- Vo + bigIRT_score_lm_pieces(G[uj, , drop = FALSE], matrix(1, length(uj), 1),
+        S[uj, , drop = FALSE], info_opg[uj, , drop = FALSE], test, nuis)$V
     }
     if(!tests_ok || is.null(test_used)) next
     pv <- bigIRT_score_pinv(V)
     lm <- as.numeric(crossprod(Us, pv$inv %*% Us))
     est <- as.numeric(pv$inv %*% Us)
     se <- sqrt(pmax(diag(pv$inv), 0))
+    ## Is the efficient information determined? A single response's observed
+    ## information can be negative (its posterior variance exceeds its
+    ## curvature), so on a thin item -- a discrimination split by a factor
+    ## with few responses at one level, say -- the observed efficient
+    ## information can collapse while the scores still vary, and the statistic
+    ## explodes. Measured on 35 responses: 0.0007 observed against 0.46 from
+    ## the outer product, LM 1257. Below a fifth of the outer-product value
+    ## the comparison is reported as not determinable rather than tested.
+    ro <- bigIRT_score_pinv(Vo)$root
+    ratio <- if(all(ro == 0)) NA_real_ else
+      min(eigen(ro %*% ((V + t(V)) / 2) %*% ro, symmetric = TRUE, only.values = TRUE)$values[seq_len(max(1L, bigIRT_score_pinv(Vo)$rank))])
+    determined <- pv$rank > 0L && (!identical(information, "observed") || isTRUE(ratio >= 0.2))
+    if(!determined){ lm <- NA_real_; est[] <- NA_real_; se[] <- NA_real_ }
     tests[[g]] <- data.table::data.table(item = g, parameters = paste(slots[test_used], collapse = "+"),
       form = form, n = length(u), LM = lm, df = pv$rank,
-      p = stats::pchisq(lm, pv$rank, lower.tail = FALSE))
+      p = if(determined) stats::pchisq(lm, pv$rank, lower.tail = FALSE) else NA_real_,
+      info_ratio = ratio)
     coefs[[g]] <- data.table::data.table(item = g,
       parameter = rep(slots[test_used], each = ncol(G)),
       term = rep(colnames(G), times = length(test_used)),

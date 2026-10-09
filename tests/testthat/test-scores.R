@@ -246,3 +246,32 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     expect_lt(t1$tests[item %in% clean, sum(p_fdr < .05)], t0$tests[item %in% clean, sum(p_fdr < .05)])
   })
 }
+
+if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
+  ## The expected information rests on an identity: a response's marginal
+  ## score in its item's parameters is the score of the Bernoulli
+  ## p(y_r | y_-r), whose probability is the row's leave-one-out predictive
+  ## `ppred`. So s = (y - ppred) / (ppred (1 - ppred)) * d ppred / d psi, with
+  ## the derivative differenced through the kernel at fixed nodes. A wrong
+  ## `ppred` (the full posterior's mean, say) fails this by orders of
+  ## magnitude.
+  test_that("each row's score is the score of its leave-one-out Bernoulli (3PL)", {
+    skip_on_cran()
+    set.seed(31)
+    sim <- simIRT(Nsubs = 150, Nitems = 12, Nscales = 1, AMean = 1.2, ASD = .3,
+      BMean = 0, BSD = 1, logitCMean = -1.5, logitCSD = .3)
+    cs <- score_case(sim$dat, pl = 3)
+    R <- cs$sc$rows; sd <- cs$st$sdat; h <- 1e-5
+    for(j in c(2L, 7L)) for(sl in c("B", "A", "C")){
+      ix <- free_index(sd, j, sl); nm <- arg_of[[sl]]
+      up <- cs$st$args; dn <- cs$st$args
+      up[[nm]][ix] <- up[[nm]][ix] + h; dn[[nm]][ix] <- dn[[nm]][ix] - h
+      k <- length(cs$slots) + 2L
+      dp <- (cs$run(up, 1L)$row_scores[, k] - cs$run(dn, 1L)$row_scores[, k]) / (2 * h)
+      rows <- which(R$item == j)
+      pp <- R$ppred[rows]; y <- R$y[rows]
+      an <- (y - pp) / (pp * (1 - pp)) * dp[rows]
+      expect_lt(relerr(R[[sl]][rows], an), 1e-6, label = sprintf("item %d slot %s", j, sl))
+    }
+  })
+}

@@ -198,8 +198,9 @@ struct AgqWorker : public RcppParallel::Worker {
   BigirtBlockLayout bl;
   std::vector<double> blk;
   // Per-response output (scoreContributions(), R/scores.R), on request: for
-  // each row, its score in the slots listed in `slot_out` followed by its
-  // score in the linear predictor (row_score, Nobs x (n + 1)), and the Louis
+  // each row, its score in the slots listed in `slot_out`, its score in the
+  // linear predictor and its leave-one-out predictive probability
+  // (row_score, Nobs x (n + 2)), and the Louis
   // information of those slots (row_info, Nobs x n(n + 1)/2, the upper
   // triangle packed by column). Every row belongs to one person and is
   // written by the worker that has that person, so the writes are disjoint.
@@ -337,6 +338,9 @@ struct AgqWorker : public RcppParallel::Worker {
       const bool want_blocks = n_items > 0;
       const bool want_curv = want_blocks || row_info != nullptr;
       std::vector<double> buf_etav(want_curv ? buf_eta.size() : 0);
+      // With per-row output, each node's probability of a correct response,
+      // for the row's leave-one-out predictive probability (see pass 2).
+      std::vector<double> buf_p(row_score ? buf_eta.size() : 0);
       const bool grouped = rule.G > 1 || !rule.mnode.empty();
       for (long q = 0; q < nq; ++q) {
         // A grouped rule's weights belong to its memberships, not its nodes.
@@ -360,6 +364,10 @@ struct AgqWorker : public RcppParallel::Worker {
           }
           const AgqRow rt = agq_row(static_cast<double>(score[o]), eta, crow[oi], drow[oi]);
           if (want_curv) buf_etav[base + oi] = eta;
+          if (row_score) {
+            double pc = crow[oi] + (drow[oi] - crow[oi]) * agq_inv_logit(eta);
+            buf_p[base + oi] = std::min(std::max(pc, 1e-12), 1.0 - 1e-12);
+          }
           lp += rt.ll;
           buf_eta[base + oi] = rt.g_eta; buf_c[base + oi] = rt.g_c; buf_d[base + oi] = rt.g_d;
         }
@@ -451,6 +459,34 @@ struct AgqWorker : public RcppParallel::Worker {
             row_score[static_cast<std::size_t>(o) + no * c] = v;
           }
           row_score[static_cast<std::size_t>(o) + no * ns] = s_eta;
+          // The row's leave-one-out predictive probability of a correct
+          // response, P~ = E[P(theta) | the person's other responses]: the
+          // posterior weights with this row's likelihood divided back out.
+          // The row's score is exactly that of the Bernoulli p(y_r | y_-r)
+          // with probability P~, which gives each row an expected
+          // information that is positive semidefinite (R/scores.R). A
+          // grouped rule takes the conditional expectation group by group.
+          const double y = static_cast<double>(score[o]);
+          double pt = 0.0;
+          if (!grouped) {
+            double num = 0.0, den = 0.0;
+            for (long q = 0; q < nq; ++q) {
+              const double pq = buf_p[static_cast<std::size_t>(q) * n + oi];
+              const double w = pw[q] / (y > 0.5 ? pq : 1.0 - pq);
+              num += w * pq; den += w;
+            }
+            pt = num / den;
+          } else {
+            std::vector<double> num(static_cast<std::size_t>(G), 0.0), den(static_cast<std::size_t>(G), 0.0);
+            for (long j = 0; j < nm; ++j) {
+              const int g = mem_grp(j);
+              const double pq = buf_p[static_cast<std::size_t>(mem_node(j)) * n + oi];
+              const double w = std::exp(mem_val(j) - gse[g]) / (y > 0.5 ? pq : 1.0 - pq);
+              num[g] += w * pq; den[g] += w;
+            }
+            for (int g = 0; g < G; ++g) if (den[g] > 0.0) pt += rule.coef[g] * num[g] / den[g];
+          }
+          row_score[static_cast<std::size_t>(o) + no * (ns + 1)] = std::min(std::max(pt, 1e-12), 1.0 - 1e-12);
         }
       }
       for (int r = 0; r < K; ++r) for (int c = 0; c < K; ++c) S[static_cast<std::size_t>(r + K * c)] += Ett(r, c);
@@ -739,7 +775,7 @@ extern "C" SEXP _bigIRT_agq_fg_cpp_impl(
     w.Nobs_rows = Nobs;
   }
   const int ns_out = static_cast<int>(w.slot_out.size());
-  Rcpp::NumericMatrix row_scores(row_out >= 1 ? Nobs : 0, row_out >= 1 ? ns_out + 1 : 0);
+  Rcpp::NumericMatrix row_scores(row_out >= 1 ? Nobs : 0, row_out >= 1 ? ns_out + 2 : 0);
   Rcpp::NumericMatrix row_info(row_out >= 2 ? Nobs : 0, row_out >= 2 ? ns_out * (ns_out + 1) / 2 : 0);
   if (row_out >= 1) w.row_score = row_scores.begin();
   if (row_out >= 2 && ns_out > 0) w.row_info = row_info.begin();

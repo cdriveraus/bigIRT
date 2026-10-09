@@ -85,6 +85,23 @@ head(dif$coefficients[order(item)], 6)
 Uniform DIF that every item shares cannot be told apart from an effect on
 ability, and the ability model absorbs it; DIF is measured relative to it.
 
+## Purification
+
+The first screen flags the four DIF items, and also a few clean ones with
+positive slopes. That is contamination, not noise: four items easier for
+high `z` pull those persons' ability posteriors up, and the ability
+coefficient on `z` with them, so the clean items look harder for them.
+`purify = TRUE` anchors on the unflagged items -- every person's posterior and
+the ability coefficients are recomputed from those alone, the item
+parameters held -- and retests every item against that anchor, until the
+flagged set stops changing. It needs the fit rather than its scores, but no
+refit.
+
+```{r purify}
+pur <- scoreTest(fit, cov, parameters = "B", purify = TRUE)
+pur$tests[order(p)][1:8, .(item, p, p_fdr, anchor, stage)]
+```
+
 The same contributions test non-uniform DIF (`parameters = "A"`), both
 jointly (`c("B", "A")`), the asymptotes of a 3PL or 4PL (`"C"`, `"D"`), and
 other functional forms: `form = "spline"` for smooth nonlinear relations,

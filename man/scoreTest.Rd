@@ -22,6 +22,7 @@ scoreTest(
   purify = FALSE,
   purifyAlpha = 0.05,
   purifyMaxIter = 5L,
+  information = c("expected", "observed", "opg"),
   nodes = NULL,
   cores = 1L
 )
@@ -67,6 +68,24 @@ automatically when a p-value lies near the first batch's resolution).}
 \item{purify, purifyAlpha, purifyMaxIter}{Iterative purification against
 DIF contamination (see above), the adjusted-p threshold for flagging,
 and the maximum number of anchoring rounds. Item tests by item only.}
+
+\item{information}{Which information the item tests use.
+\code{"expected"} (default): each response's score is exactly the score of
+the Bernoulli for that response given the person's other responses (with
+probability \code{ppred}), and this is that Bernoulli's Fisher information --
+the score's variance given the other responses, never negative. On a
+simulated thin item bank with no DIF (50 to 200 responses an item) it
+held the nominal rate for intercepts and discriminations alike.
+\code{"observed"}: each response's Louis information. A single response's can
+be negative, and on thin items the observed efficient information of a
+comparison the item cannot support (a discrimination split by a factor
+with few responses at one level) can collapse while the scores still
+vary; such a test is withheld (\code{p = NA}) when that information is below a
+fifth of the outer-product one (\code{info_ratio}). \code{"opg"}: the outer
+product of the scores, the classical choice for fluctuation tests, but
+liberal on thin items (7 to 12 per cent at a nominal 5 in the same
+simulation). The ability tests always use the observed information of
+the ability mean, which is not subject to these problems.}
 
 \item{nodes, cores}{Passed to \code{\link[=scoreContributions]{scoreContributions()}} when \code{fit} is a fit.}
 }
