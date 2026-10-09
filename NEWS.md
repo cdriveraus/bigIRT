@@ -1,3 +1,44 @@
+# bigIRT (development version)
+
+## Score-based tests of covariate relations after a fit
+
+* `scoreContributions()` returns, for any fit, each response's contribution
+  to the score of the marginal likelihood in its item's parameters (B, every
+  free loading, C, D), its observed information, its leave-one-out
+  predictive probability, and each person's score in the ability mean. They
+  are posterior expectations of the complete-data score (the Fisher
+  identity), by adaptive Gauss-Hermite quadrature at each person's Laplace
+  mode -- the terms the quadrature kernel already formed for the fit's
+  gradient, now written out per row (`row_out` in `src/agq_backend.cpp`).
+  Checked person by person against finite differences of each person's
+  marginal (agreement 1e-10, where plug-in scores miss by 1e-2), on a 4PL
+  with covariates and a 2-D 3PL with some abilities fixed.
+* `scoreTest()` turns them into tests of whether an item parameter depends on
+  a covariate (DIF, uniform or not, in any of B, A, C, D) or whether ability
+  does, without refitting: score (LM) tests with linear, spline or factor
+  bases and a one-step estimate of each coefficient; nonparametric
+  fluctuation tests (double max, Cramer-von Mises, maxLM) with p-values
+  simulated from the process's exact covariance, so that information
+  accruing unevenly along the covariate (impact does this) does not
+  invalidate them; covariates per person or per response; one test per
+  item, per item group, or shared. Each item's other parameters are
+  projected out (Neyman's C(alpha)), so the small pull of the item priors is
+  handled. `purify = TRUE` anchors on unflagged items -- person posteriors
+  and ability coefficients re-estimated from those alone, items held -- and
+  retests, against DIF contamination, without a refit.
+* The item tests use each response's expected information by default: a
+  response's marginal score is exactly the score of the Bernoulli for that
+  response given the person's other responses, and that Bernoulli's Fisher
+  information is the score's conditional variance, never negative. The
+  observed (Louis) information of a single response can be negative, and on
+  thin items it made some discrimination tests explode (one statistic of 1257
+  on 35 responses). On a simulated thin bank without DIF (50 to 200 responses
+  an item) expected information held 3.8 to 5.5 per cent at a nominal 5,
+  and the outer product of the scores 7 to 12.
+* A covariate related to ability must be in the ability model for its DIF
+  test to be valid, and `scoreTest()` warns when a person-level covariate is
+  related to ability but absent from it. See `vignette("score-tests")`.
+
 # bigIRT 0.2.0
 
 ## Joint MAP in C++, and no more Stan

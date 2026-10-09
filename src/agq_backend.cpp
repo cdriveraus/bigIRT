@@ -53,6 +53,16 @@
 // each of the K dimensions, C and D; slots a row does not free are zero. They
 // are followed by the item's covariate coefficients, each row's slot block
 // carried into them by its own covariate values (src/bigirt_item_blocks.h).
+//
+// PER-RESPONSE OUTPUT, on request (`row_out`), for score-based tests
+// (R/scores.R): each row's score sum_q pi_iq s_rq in the slots asked for, its
+// score in the linear predictor, and its r = t Louis block, negated. These
+// are the terms the gradient and the item blocks above already sum, written
+// out row by row instead, so the per-row scores of an item sum exactly to the
+// kernel's gradient in it. Summed over a person's rows on one item, they are
+// that person's marginal score in the item's parameters -- rows on other
+// items do not involve them -- which is what makes them usable as independent
+// contributions across persons.
 
 #include <RcppEigen.h>
 #include <RcppParallel.h>
@@ -187,6 +197,23 @@ struct AgqWorker : public RcppParallel::Worker {
   int n_items = 0, S_slots = 0;
   BigirtBlockLayout bl;
   std::vector<double> blk;
+  // Per-response output (scoreContributions(), R/scores.R), on request: for
+  // each row, its score in the slots listed in `slot_out`, its score in the
+  // linear predictor and its leave-one-out predictive probability
+  // (row_score, Nobs x (n + 2)), and the Louis
+  // information of those slots (row_info, Nobs x n(n + 1)/2, the upper
+  // triangle packed by column). Every row belongs to one person and is
+  // written by the worker that has that person, so the writes are disjoint.
+  double* row_score = nullptr;
+  double* row_info = nullptr;
+  int Nobs_rows = 0;
+  std::vector<int> slot_out;
+  // Held-out rows (row_hold, 1 for held out; empty for none): left out of the
+  // posterior, the objective and the gradient, but still scored, with the
+  // nodes reweighted by the row's own likelihood: each held-out row is scored
+  // as if it were the person's only response beyond the rest. That is
+  // purification's anchoring (R/scores.R) in one pass.
+  AgqVec<int> row_hold;
   // outputs owned by R, written per subject (disjoint)
   double* eap;        // N x K
   double* post_cov;   // K x K x N
@@ -216,7 +243,8 @@ struct AgqWorker : public RcppParallel::Worker {
       logitDbeta(o.logitDbeta), prior_mean(o.prior_mean), prior_precision(o.prior_precision),
       free_mask(o.free_mask), rules(o.rules), K(o.K), P(o.P),
       want_person(o.want_person), block_items(o.block_items), n_items(o.n_items), S_slots(o.S_slots),
-      bl(o.bl), eap(o.eap), post_cov(o.post_cov), value_by_subj(o.value_by_subj),
+      bl(o.bl), row_score(o.row_score), row_info(o.row_info), Nobs_rows(o.Nobs_rows),
+      slot_out(o.slot_out), row_hold(o.row_hold), eap(o.eap), post_cov(o.post_cov), value_by_subj(o.value_by_subj),
       value(0.0), failure(0) { zero_like(o); }
 
   void zero_like(const AgqWorker& o) {
@@ -314,7 +342,12 @@ struct AgqWorker : public RcppParallel::Worker {
       std::vector<VectorXd> th(static_cast<std::size_t>(nq), m);
       std::vector<double> buf_eta(static_cast<std::size_t>(nq) * n), buf_c(buf_eta.size()), buf_d(buf_eta.size());
       const bool want_blocks = n_items > 0;
-      std::vector<double> buf_etav(want_blocks ? buf_eta.size() : 0);
+      const bool want_curv = want_blocks || row_info != nullptr;
+      std::vector<double> buf_etav(want_curv ? buf_eta.size() : 0);
+      // With per-row output, each node's probability of a correct response,
+      // for the row's leave-one-out predictive probability (see pass 2).
+      std::vector<double> buf_p(row_score ? buf_eta.size() : 0);
+      const bool has_hold = row_score && row_hold.count() > 0;
       const bool grouped = rule.G > 1 || !rule.mnode.empty();
       for (long q = 0; q < nq; ++q) {
         // A grouped rule's weights belong to its memberships, not its nodes.
@@ -337,8 +370,12 @@ struct AgqWorker : public RcppParallel::Worker {
             eta += arow(oi, k) * ab;
           }
           const AgqRow rt = agq_row(static_cast<double>(score[o]), eta, crow[oi], drow[oi]);
-          if (want_blocks) buf_etav[base + oi] = eta;
-          lp += rt.ll;
+          if (want_curv) buf_etav[base + oi] = eta;
+          if (row_score) {
+            double pc = crow[oi] + (drow[oi] - crow[oi]) * agq_inv_logit(eta);
+            buf_p[base + oi] = std::min(std::max(pc, 1e-12), 1.0 - 1e-12);
+          }
+          if (!(has_hold && row_hold[o] != 0)) lp += rt.ll;
           buf_eta[base + oi] = rt.g_eta; buf_c[base + oi] = rt.g_c; buf_d[base + oi] = rt.g_d;
         }
         lw[q] = lwq + lp;
@@ -378,18 +415,39 @@ struct AgqWorker : public RcppParallel::Worker {
         for (int k = 0; k < K; ++k) gMean[k] += gm(k);
       }
       VectorXd s_ab(K);
+      // A held-out row's node weights: the posterior without it, times its
+      // own likelihood, renormalised (group by group for a grouped rule).
+      std::vector<double> hold_w(has_hold ? static_cast<std::size_t>(nq) * n : 0, 0.0);
       for (int oi = 0; oi < n; ++oi) {
         const int o = obs[oi];
+        const bool hold = has_hold && row_hold[o] != 0;
+        const double* w = pw.data();
+        if (hold) {
+          const double y = static_cast<double>(score[o]);
+          double* rw = &hold_w[static_cast<std::size_t>(oi) * nq];
+          auto lik = [&](long q) { const double p = buf_p[static_cast<std::size_t>(q) * n + oi]; return y > 0.5 ? p : 1.0 - p; };
+          if (!grouped) {
+            double den = 0.0;
+            for (long q = 0; q < nq; ++q) { rw[q] = pw[q] * lik(q); den += rw[q]; }
+            for (long q = 0; q < nq; ++q) rw[q] /= den;
+          } else {
+            std::vector<double> den(static_cast<std::size_t>(G), 0.0);
+            for (long j = 0; j < nm; ++j) den[mem_grp(j)] += std::exp(mem_val(j) - gse[mem_grp(j)]) * lik(mem_node(j));
+            for (long j = 0; j < nm; ++j) { const int g = mem_grp(j);
+              if (den[g] > 0.0) rw[mem_node(j)] += rule.coef[g] * std::exp(mem_val(j) - gse[g]) * lik(mem_node(j)) / den[g]; }
+          }
+          w = rw;
+        }
         double s_eta = 0.0, s_c = 0.0, s_d = 0.0;
         s_ab.setZero();
         for (long q = 0; q < nq; ++q) {
           const std::size_t ix = static_cast<std::size_t>(q) * n + oi;
-          const double ge = pw[q] * buf_eta[ix];
-          s_eta += ge; s_c += pw[q] * buf_c[ix]; s_d += pw[q] * buf_d[ix];
+          const double ge = w[q] * buf_eta[ix];
+          s_eta += ge; s_c += w[q] * buf_c[ix]; s_d += w[q] * buf_d[ix];
           for (int k = 0; k < K; ++k)
             s_ab(k) += ge * (fixed_ability(o, k) != 0 ? fixed_ability_value(o, k) : th[q](k) + off(oi, k));
         }
-        for (int k = 0; k < K; ++k) {
+        if (!hold) for (int k = 0; k < K; ++k) {
           if (A_ref(o, k) > 0) {
             const double graw = s_ab(k) * amul(oi, k);
             gA[static_cast<std::size_t>(A_ref(o, k) - 1)] += graw;
@@ -399,25 +457,72 @@ struct AgqWorker : public RcppParallel::Worker {
             for (int j = 0; j < P; ++j)
               gAbil[static_cast<std::size_t>(k + K * j)] += s_eta * arow(oi, k) * person_pred(o, j);
         }
-        if (B_ref[o] > 0) {
+        if (!hold && B_ref[o] > 0) {
           gB[static_cast<std::size_t>(B_ref[o] - 1)] -= s_eta;
           beta_grad(gBb, B_pred, Bbeta, o, Bbeta.nr == 1 ? 1 : B_ref[o], -s_eta);
         }
-        if (C_ref[o] > 0) {
+        if (!hold && C_ref[o] > 0) {
           const double gc = s_c * cmul[oi];
           gC[static_cast<std::size_t>(C_ref[o] - 1)] += gc;
           beta_grad(gCb, C_pred, logitCbeta, o, logitCbeta.nr == 1 ? 1 : C_ref[o], gc);
         }
-        if (D_ref[o] > 0) {
+        if (!hold && D_ref[o] > 0) {
           const double gd = s_d * dmul[oi];
           gD[static_cast<std::size_t>(D_ref[o] - 1)] += gd;
           beta_grad(gDb, D_pred, logitDbeta, o, logitDbeta.nr == 1 ? 1 : D_ref[o], gd);
         }
+        // The row's own score, slot by slot: exactly the terms just scattered
+        // into the gradient, so per-row scores sum to it by construction. A
+        // slot the row does not free scores zero, as in row_slots().
+        if (row_score) {
+          const std::size_t no = static_cast<std::size_t>(Nobs_rows);
+          const int ns = static_cast<int>(slot_out.size());
+          for (int c = 0; c < ns; ++c) {
+            const int sl = slot_out[static_cast<std::size_t>(c)];
+            double v = 0.0;
+            if (sl == 0) v = B_ref[o] > 0 ? -s_eta : 0.0;
+            else if (sl <= K) v = A_ref(o, sl - 1) > 0 ? s_ab(sl - 1) * amul(oi, sl - 1) : 0.0;
+            else if (sl == K + 1) v = C_ref[o] > 0 ? s_c * cmul[oi] : 0.0;
+            else v = D_ref[o] > 0 ? s_d * dmul[oi] : 0.0;
+            row_score[static_cast<std::size_t>(o) + no * c] = v;
+          }
+          row_score[static_cast<std::size_t>(o) + no * ns] = s_eta;
+          // The row's leave-one-out predictive probability of a correct
+          // response, P~ = E[P(theta) | the person's other responses]: the
+          // posterior weights with this row's likelihood divided back out.
+          // The row's score is exactly that of the Bernoulli p(y_r | y_-r)
+          // with probability P~, which gives each row an expected
+          // information that is positive semidefinite (R/scores.R). A
+          // grouped rule takes the conditional expectation group by group.
+          const double y = static_cast<double>(score[o]);
+          double pt = 0.0;
+          if (hold) {
+            for (long q = 0; q < nq; ++q) pt += pw[q] * buf_p[static_cast<std::size_t>(q) * n + oi];
+          } else if (!grouped) {
+            double num = 0.0, den = 0.0;
+            for (long q = 0; q < nq; ++q) {
+              const double pq = buf_p[static_cast<std::size_t>(q) * n + oi];
+              const double w = pw[q] / (y > 0.5 ? pq : 1.0 - pq);
+              num += w * pq; den += w;
+            }
+            pt = num / den;
+          } else {
+            std::vector<double> num(static_cast<std::size_t>(G), 0.0), den(static_cast<std::size_t>(G), 0.0);
+            for (long j = 0; j < nm; ++j) {
+              const int g = mem_grp(j);
+              const double pq = buf_p[static_cast<std::size_t>(mem_node(j)) * n + oi];
+              const double w = std::exp(mem_val(j) - gse[g]) / (y > 0.5 ? pq : 1.0 - pq);
+              num[g] += w * pq; den[g] += w;
+            }
+            for (int g = 0; g < G; ++g) if (den[g] > 0.0) pt += rule.coef[g] * num[g] / den[g];
+          }
+          row_score[static_cast<std::size_t>(o) + no * (ns + 1)] = std::min(std::max(pt, 1e-12), 1.0 - 1e-12);
+        }
       }
       for (int r = 0; r < K; ++r) for (int c = 0; c < K; ++c) S[static_cast<std::size_t>(r + K * c)] += Ett(r, c);
-      if (want_blocks) item_blocks_impl(obs, n, nq, th, off, amul, crow, cmul, drow, dmul,
+      if (want_curv) item_blocks_impl(obs, n, nq, th, off, amul, crow, cmul, drow, dmul,
                                         buf_etav, pw, grouped, nm, gse, rule,
-                                        mem_node, mem_val, mem_grp);
+                                        mem_node, mem_val, mem_grp, has_hold ? &hold_w : nullptr);
       if (want_person) {
         for (int k = 0; k < K; ++k) eap[static_cast<std::size_t>(subj) + static_cast<std::size_t>(obs_by_subj.size()) * k] = Eth(k);
         const VectorXd dm = Eth - mu;
@@ -491,7 +596,10 @@ struct AgqWorker : public RcppParallel::Worker {
   // Each row's contribution to its item's block (the Louis identity; see the
   // header): the node-weighted sum of h + s s', less the outer product of the
   // weighted score, group by group for a grouped rule; then carried into the
-  // item's covariate coefficients by the row's covariate values.
+  // item's covariate coefficients by the row's covariate values. With
+  // `row_info` set, each row's block in the `slot_out` slots is also written
+  // out, negated (information rather than Hessian), whether or not item
+  // blocks were asked for.
   template <class MemNode, class MemVal, class MemGrp>
   void item_blocks_impl(const BigIRTObsSpan& obs, int n, long nq, const std::vector<VectorXd>& th,
                         const MatrixXd& off, const MatrixXd& amul, const std::vector<double>& crow,
@@ -499,17 +607,46 @@ struct AgqWorker : public RcppParallel::Worker {
                         const std::vector<double>& dmul, const std::vector<double>& buf_etav,
                         const std::vector<double>& pw, bool grouped, long nm,
                         const std::vector<double>& gse, const AgqRule& rule,
-                        MemNode mem_node, MemVal mem_val, MemGrp mem_grp) {
+                        MemNode mem_node, MemVal mem_val, MemGrp mem_grp,
+                        const std::vector<double>* hold_w = nullptr) {
     const int SS = S_slots;
+    const bool want_blocks = n_items > 0;
     std::vector<double> sv(SS), hv(static_cast<std::size_t>(SS) * SS), M(hv.size()), m(SS);
     std::vector<double> mg(grouped ? static_cast<std::size_t>(rule.G) * SS : 0);
-    std::vector<double> xv(static_cast<std::size_t>(bl.E - SS) + 1);
+    std::vector<double> xv(want_blocks ? static_cast<std::size_t>(bl.E - SS) + 1 : 0);
     const std::size_t EE = static_cast<std::size_t>(bl.E) * bl.E;
+    const int ns = static_cast<int>(slot_out.size());
+    const std::size_t no = static_cast<std::size_t>(Nobs_rows);
     for (int oi = 0; oi < n; ++oi) {
       const int o = obs[oi];
-      const int it = block_items[o];
-      if (it <= 0 || it > n_items) continue;
+      // A held-out row is not in the objective, so it adds nothing to the
+      // item blocks; its information takes its own node weights, the Louis
+      // identity for the posterior that includes it.
+      const bool hold = hold_w != nullptr && row_hold[o] != 0;
+      const int it = want_blocks ? block_items[o] : 0;
+      const bool to_block = !hold && want_blocks && it > 0 && it <= n_items;
+      if (!to_block && !row_info) continue;
       std::fill(M.begin(), M.end(), 0.0); std::fill(m.begin(), m.end(), 0.0);
+      if (hold) {
+        const double* rw = &(*hold_w)[static_cast<std::size_t>(oi) * nq];
+        for (long q = 0; q < nq; ++q) {
+          if (rw[q] == 0.0) continue;
+          row_slots(o, oi, buf_etav[static_cast<std::size_t>(q) * n + oi], th[q], off, crow, cmul,
+                    drow, dmul, amul, sv, &hv);
+          for (int a = 0; a < SS; ++a) {
+            m[a] += rw[q] * sv[a];
+            for (int b = 0; b < SS; ++b) M[a + SS * b] += rw[q] * (hv[a + SS * b] + sv[a] * sv[b]);
+          }
+        }
+        for (int a = 0; a < SS; ++a) for (int b = 0; b < SS; ++b) M[a + SS * b] -= m[a] * m[b];
+        if (row_info) {
+          int c = 0;
+          for (int bb = 0; bb < ns; ++bb) for (int aa = 0; aa <= bb; ++aa, ++c)
+            row_info[static_cast<std::size_t>(o) + no * c] =
+              -M[slot_out[static_cast<std::size_t>(aa)] + SS * slot_out[static_cast<std::size_t>(bb)]];
+        }
+        continue;
+      }
       for (long q = 0; q < nq; ++q) {
         if (pw[q] == 0.0) continue;
         row_slots(o, oi, buf_etav[static_cast<std::size_t>(q) * n + oi], th[q], off, crow, cmul,
@@ -537,6 +674,13 @@ struct AgqWorker : public RcppParallel::Worker {
             M[a + SS * b] -= rule.coef[g] * mgg[a] * mgg[b];
         }
       }
+      if (row_info) {
+        int c = 0;
+        for (int bb = 0; bb < ns; ++bb) for (int aa = 0; aa <= bb; ++aa, ++c)
+          row_info[static_cast<std::size_t>(o) + no * c] =
+            -M[slot_out[static_cast<std::size_t>(aa)] + SS * slot_out[static_cast<std::size_t>(bb)]];
+      }
+      if (!to_block) continue;
       bl.covariates(o, K, A_ref, B_ref, C_ref, D_ref, A_pred, B_pred, C_pred, D_pred, xv.data());
       bl.add(&blk[static_cast<std::size_t>(it - 1) * EE], M.data(), xv.data());
     }
@@ -579,7 +723,8 @@ extern "C" SEXP _bigIRT_agq_fg_cpp_impl(
     SEXP logitCparsSEXP, SEXP logitCbetaSEXP, SEXP logitDparsSEXP, SEXP logitDbetaSEXP,
     SEXP prior_meanSEXP, SEXP prior_precisionSEXP, SEXP free_maskSEXP,
     SEXP nodesSEXP, SEXP log_weightsSEXP, SEXP groupsSEXP, SEXP coefsSEXP,
-    SEXP want_personSEXP, SEXP grain_sizeSEXP, SEXP block_itemsSEXP) {
+    SEXP want_personSEXP, SEXP grain_sizeSEXP, SEXP block_itemsSEXP,
+    SEXP row_outSEXP, SEXP slot_outSEXP, SEXP row_holdSEXP) {
   BEGIN_RCPP
   Rcpp::IntegerVector id(idSEXP);
   Rcpp::NumericMatrix theta_mode(theta_modeSEXP);
@@ -668,10 +813,30 @@ extern "C" SEXP _bigIRT_agq_fg_cpp_impl(
     if (K > 61) Rcpp::stop("AGQ: item blocks support at most 61 dimensions.");
     int mx = 0;
     for (std::size_t i = 0; i < w.block_items.count(); ++i) mx = std::max(mx, w.block_items[i]);
-    w.n_items = mx; w.S_slots = K + 3;
+    w.n_items = mx;
     w.bl.init(K, w.B_pred.nc, w.A_pred.nc, w.C_pred.nc, w.D_pred.nc);
     w.blk.assign(static_cast<std::size_t>(w.bl.E) * w.bl.E * mx, 0.0);
   }
+  w.S_slots = K + 3;
+  // Per-response output: 0 none, 1 scores, 2 scores and information, in the
+  // slots listed (0-based: B, the loading on each dimension, C, D).
+  const int row_out = Rcpp::as<int>(row_outSEXP);
+  Rcpp::IntegerVector slot_out(slot_outSEXP);
+  if (row_out > 0) {
+    if (K > 61) Rcpp::stop("AGQ: per-response output supports at most 61 dimensions.");
+    for (int c = 0; c < slot_out.size(); ++c)
+      if (slot_out[c] < 0 || slot_out[c] >= K + 3) Rcpp::stop("AGQ: slot_out entries must lie in 0..K+2.");
+    w.slot_out.assign(slot_out.begin(), slot_out.end());
+    w.Nobs_rows = Nobs;
+  }
+  const int ns_out = static_cast<int>(w.slot_out.size());
+  Rcpp::NumericMatrix row_scores(row_out >= 1 ? Nobs : 0, row_out >= 1 ? ns_out + 2 : 0);
+  Rcpp::NumericMatrix row_info(row_out >= 2 ? Nobs : 0, row_out >= 2 ? ns_out * (ns_out + 1) / 2 : 0);
+  if (row_out >= 1) w.row_score = row_scores.begin();
+  w.row_hold = AgqVec_i(row_holdSEXP);
+  if (w.row_hold.count() > 0 && (row_out < 1 || static_cast<int>(w.row_hold.count()) != Nobs))
+    Rcpp::stop("AGQ: row_hold needs per-response output and one entry per row.");
+  if (row_out >= 2 && ns_out > 0) w.row_info = row_info.begin();
   w.gA.assign(w.invspApars.count(), 0.0); w.gB.assign(w.Bpars.count(), 0.0);
   w.gC.assign(w.logitCpars.count(), 0.0); w.gD.assign(w.logitDpars.count(), 0.0);
   w.gAb.assign(w.invspAbeta.count(), 0.0); w.gBb.assign(w.Bbeta.count(), 0.0);
@@ -698,6 +863,7 @@ extern "C" SEXP _bigIRT_agq_fg_cpp_impl(
     Rcpp::Named("grad_C_beta") = asv(w.gCb), Rcpp::Named("grad_D_beta") = asv(w.gDb),
     Rcpp::Named("grad_ability_beta") = gAbil, Rcpp::Named("grad_mean") = asv(w.gMean),
     Rcpp::Named("S") = S, Rcpp::Named("eap") = eap, Rcpp::Named("post_cov") = post_cov,
-    Rcpp::Named("item_blocks") = blocks_out(w));
+    Rcpp::Named("item_blocks") = blocks_out(w),
+    Rcpp::Named("row_scores") = row_scores, Rcpp::Named("row_info") = row_info);
   END_RCPP
 }

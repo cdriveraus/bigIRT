@@ -13,5 +13,7 @@ utils::globalVariables(c(
   ## convergence bookkeeping, in fitIRT
   "itemGradNorm", "strictCriterion", "strictStreak",
   ## columns fitIRT attaches to its working copy of the data
-  "__bigIRT_input_row__", "__bigIRT_training__"
+  "__bigIRT_input_row__", "__bigIRT_training__",
+  ## score-test tables, in scoreTest
+  "covariate", "p_fdr", "p_holm", "anchor", "stage", "item"
 ))
