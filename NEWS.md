@@ -36,8 +36,20 @@
   an item) expected information held 3.8 to 5.5 per cent at a nominal 5,
   and the outer product of the scores 7 to 12.
 * A covariate related to ability must be in the ability model for its DIF
-  test to be valid, and `scoreTest()` warns when a person-level covariate is
-  related to ability but absent from it. See `vignette("score-tests")`.
+  test to be valid, but it need not have been in the fit: given the fit,
+  `scoreTest(adjust = "auto")` (the default) adds a covariate the ability
+  model lacks after the fact -- a centred natural spline, or indicators,
+  with coefficients and the ability SD re-estimated and the item parameters
+  held -- and tests under that model. A covariate given per response enters
+  per response, so ability may also move with it within person. On the
+  2025 score-test paper's simulation grid the adjusted tests matched a refit
+  with the covariate item by item (median correlation of p values .999
+  under impact, the same decision for 99.3 per cent of items) and held 4.9
+  to 5.4 per cent under impact, where tests that ignore it reached 38 to 43;
+  with a covariate varying within person, 5.6 per cent against 69.
+  `adjust = "none"` tests the fit as it is, and then warns when a
+  person-level covariate is related to ability but absent from it. See
+  `vignette("score-tests")`.
 
 # bigIRT 0.2.0
 
