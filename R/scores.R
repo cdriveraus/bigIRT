@@ -465,6 +465,101 @@ bigIRT_score_refit_ability <- function(st, rule, maxit = 50L, tol = 1e-7, jitter
   st
 }
 
+## The fast post-hoc adjustment. The fit's own coefficients are held and only
+## the added ones estimated, by Newton on the quadrature marginal with each
+## person's Louis information: a regression of the posterior means on the
+## added basis, corrected for their shrinkage. Without that correction the
+## regression recovers only about the reliability's share of the impact (.71
+## of 1.01 with ten items per person, .87 of .96 with forty).
+##
+## The residual variance starts from a decomposition -- the held items fix the
+## metric, so the fit's residual variance is split between the added
+## covariate's fitted part and what remains -- and is then solved exactly:
+## its gradient is the Fisher identity's, sum_i (E[(theta_i - mu_i)^2 | y_i] -
+## s2) / (2 s2^2), from the same pass's posterior means and variances, and the
+## root is found by secant steps on it (the EM step when a secant step is not
+## safe). The decomposition alone was close at moderate impact (within .003 to
+## .006 SD of the full re-estimate at 1 SD of impact) but .07 to .10 off at
+## 3.5 SD with ten items, where the fit's normal ability distribution no longer
+## has the total variance the decomposition assumes, and the tests went with
+## it (40 per cent of clean items rejected, against 15 for the full one).
+## Newton and secant both converge superlinearly, so a few passes.
+##
+## Returns NULL -- the caller then takes the full re-estimation -- when the
+## added basis varies within person (no person-level Newton step), K > 1, or
+## the residual variance falls below a twentieth of the fit's.
+bigIRT_score_adjust_fast <- function(st, rule, q, maxit = 20L, tol = 1e-5){
+  K <- st$K; N <- st$N
+  if(K != 1L || q < 1L) return(NULL)
+  idx <- st$P_real - q + seq_len(q)
+  ap <- st$args_post
+  Xr <- as.matrix(ap$person_pred)[, idx, drop = FALSE]
+  if(any(bigIRT_laplace_person_pred_varies(Xr, ap$id))) return(NULL)
+  nresp <- tabulate(ap$id, N); has <- nresp > 0L
+  Xp <- matrix(0, N, q)
+  sm <- rowsum(Xr, ap$id, reorder = TRUE); ii <- as.integer(rownames(sm))
+  Xp[ii, ] <- sm / nresp[ii]
+  sdat <- st$sdat
+  bsc <- as.numeric(sdat$betaScale)
+  prec_b <- if(isTRUE(as.logical(sdat$dopriors)) && bsc > 0) 1 / bsc^2 else 0
+  p0_of <- function(pa) if(length(dim(pa)) == 3L) pa[1, 1, 1] else pa[1]
+  var_fit <- 1 / p0_of(st$prior_prec); var_cur <- var_fit
+
+  trace <- vector("list", maxit); conv <- FALSE
+  for(it in seq_len(maxit)){
+    aq <- do.call(bigIRT_agq_fg_cpp_impl, c(st$args_post, list(
+      theta_mode = st$posterior$theta_mode, precision = st$posterior$precision,
+      rule = rule, want_person = TRUE)))
+    sv <- var_cur
+    dev <- as.numeric(aq$eap) - st$args$prior_mean[, 1]
+    pv <- as.numeric(aq$post_cov)
+    gam <- st$args$Abilitybeta[1, idx]
+    ## Gradients, exact by the Fisher identity: the added coefficients', and
+    ## the residual variance's (zero where EM would stop).
+    U <- colSums(Xp * dev) / sv - prec_b * gam
+    g <- sum(dev^2 + pv - sv) / (2 * sv^2)
+    ## Curvature by Louis: the coefficients' block exactly; the variance's and
+    ## the cross term need the posterior's third and fourth moments, taken from
+    ## a normal posterior with the same mean and variance. Only the curvature
+    ## is approximate, so the iteration still stops at the exact maximum.
+    Hgg <- -crossprod(Xp * (1 / sv - pv / sv^2), Xp) - diag(prec_b, q)
+    Hgs <- colSums(Xp * (dev * pv / sv^3 - dev / sv^2))
+    Hss <- sum(1 / (2 * sv^2) - (dev^2 + pv) / sv^3 + (dev^2 * pv + pv^2 / 2) / sv^4)
+    H <- rbind(cbind(Hgg, Hgs), c(Hgs, Hss))
+    joint <- it > 1L && all(is.finite(H)) && max(eigen(H, symmetric = TRUE, only.values = TRUE)$values) < 0
+    if(joint){
+      d <- -as.numeric(solve(H, c(U, g)))
+      step <- d[seq_len(q)]; dv <- d[q + 1L]
+    } else {
+      step <- -as.numeric(solve(Hgg, U))
+      dv <- if(it == 1L) NA_real_ else sum(dev^2 + pv) / N - sv
+    }
+    if(it > 1L && max(abs(step)) < tol && abs(dv) / sv < tol){ conv <- TRUE; break }
+    gam <- gam + step
+    st$args$Abilitybeta[1, idx] <- gam
+    var_new <- if(it == 1L){
+      ## The first value by decomposition, a close start at moderate impact.
+      f <- as.numeric(Xp %*% gam)[has]
+      var_fit - mean((f - mean(f))^2)
+    } else sv + sign(dv) * min(abs(dv), sv / 2)
+    if(!is.finite(var_new) || var_new < var_fit / 20) return(NULL)
+    var_cur <- var_new
+    h <- if(is.na(dv)) 0 else dv
+    pa <- bigIRT_prior_precision_array(matrix(1 / var_cur, 1, 1), Nsubs = N, K = 1L)
+    st$prior_prec <- pa; st$args$prior_precision <- pa; st$args_post$prior_precision <- pa
+    st$args_post$Abilitybeta <- st$args$Abilitybeta
+    st$posterior <- do.call(bigIRT_laplace_person_step_block_cpp_impl, c(st$args_post, list(
+      theta_init = st$posterior$theta_mode, jitter = 1e-6, max_attempts = 8L, max_iter = 100L,
+      tol = 1e-10, keep_covariance = FALSE)))
+    trace[[it]] <- c(step = max(abs(step)), h_rel = h / var_cur, sd = sqrt(var_cur))
+  }
+  st$prior_mean <- st$args$prior_mean
+  st$ability_sd <- sqrt(var_cur)
+  st$refit_iter <- it; st$refit_converged <- conv; st$refit_accel <- 0L
+  st$refit_trace <- do.call(rbind, trace[seq_len(it - conv)])
+  st
+}
+
 #' Score contributions of a fitted model
 #'
 #' Each response's contribution to the score of the marginal likelihood in
@@ -551,7 +646,7 @@ scoreContributions <- function(fit, nodes = NULL, information = TRUE, cores = 1L
 ## The work of scoreContributions(); `refit` re-estimates the ability side on
 ## the rows that are not held out.
 bigIRT_score_compute <- function(fit, nodes = NULL, information = TRUE, cores = 1L,
-  exclude = NULL, refit = FALSE, add_preds = NULL){
+  exclude = NULL, refit = FALSE, add_preds = NULL, adjust_method = "full"){
   item_labels <- rownames(fit$pars$B) %||% as.character(seq_len(fit$prepared$Nitems))
   ex <- NULL
   if(length(exclude)){
@@ -562,8 +657,13 @@ bigIRT_score_compute <- function(fit, nodes = NULL, information = TRUE, cores = 
   sdat <- st$sdat; K <- st$K; N <- st$N
   slots <- bigIRT_score_free_slots(sdat)
   rule <- bigIRT_score_rule(fit, K, nodes)
-  if(isTRUE(refit) || length(add_preds))
-    st <- bigIRT_score_refit_ability(st, rule, est_sd = length(add_preds) > 0L)
+  method_used <- NA_character_
+  if(isTRUE(refit) || length(add_preds)){
+    stf <- if(!isTRUE(refit) && length(add_preds) && identical(adjust_method, "fast"))
+      bigIRT_score_adjust_fast(st, rule, ncol(as.matrix(add_preds))) else NULL
+    st <- stf %||% bigIRT_score_refit_ability(st, rule, est_sd = length(add_preds) > 0L)
+    if(length(add_preds)) method_used <- if(is.null(stf)) "full" else "fast"
+  }
   rc <- st$rc
   aq <- do.call(bigIRT_agq_fg_cpp_impl, c(st$args, list(
     theta_mode = st$posterior$theta_mode, precision = st$posterior$precision,
@@ -622,6 +722,7 @@ bigIRT_score_compute <- function(fit, nodes = NULL, information = TRUE, cores = 
       st$prior_prec[, , 1] else st$prior_prec, K, K)))),
     adjusted = colnames(add_preds) %||% character(0),
     refit_iter = st$refit_iter %||% NA_integer_, refit_converged = st$refit_converged %||% NA,
+    adjust_method = method_used,
     value = aq$value),
     class = "bigIRT_scores")
 }
@@ -1005,6 +1106,15 @@ bigIRT_score_fluct <- function(z, S, info, Nb, test, nuis, ngrid, trim, nsim){
 #'   `adjustDf` degrees of freedom (indicators for a factor or a covariate
 #'   with few values), items held; `"none"` does not. Needs `fit` to be a
 #'   fit; the result records it in `ability_adjusted`.
+#' @param adjustMethod How the added covariate's coefficients and the
+#'   residual ability SD are estimated. `"fast"` (default) holds the fit's own
+#'   coefficients and takes Newton steps for the added ones -- a regression of
+#'   the posterior means on the basis, corrected for their shrinkage -- with
+#'   the residual SD by variance decomposition; a few quadrature passes. It
+#'   needs a covariate constant within person and a one-dimensional model, and
+#'   otherwise falls back to `"full"`: every coefficient and the SD
+#'   re-estimated jointly to convergence, which can take dozens of passes
+#'   over the data.
 #' @param nodes,cores Passed to [scoreContributions()] when `fit` is a fit.
 #'
 #' @return An object of class `bigIRT_scoretest`: a list with `tests`, a
@@ -1029,8 +1139,10 @@ scoreTest <- function(fit, covariates, parameters = "B",
   ngrid = 50L, trim = 0.1, nsim = 1000L, seed = NULL, minN = 20L,
   purify = FALSE, purifyAlpha = 0.05, purifyMaxIter = 5L,
   information = c("expected", "observed", "opg"),
-  adjust = c("auto", "none"), adjustDf = 3L, nodes = NULL, cores = 1L){
+  adjust = c("auto", "none"), adjustDf = 3L, adjustMethod = c("fast", "full"),
+  nodes = NULL, cores = 1L){
   information <- match.arg(information); adjust <- match.arg(adjust)
+  adjustMethod <- match.arg(adjustMethod)
   form <- match.arg(form); level <- match.arg(level)
   if(isTRUE(purify) && !inherits(fit, "bigIRT_fit"))
     stop("purify needs the fit itself, to recompute the person side; pass the fit, not its scores.")
@@ -1058,7 +1170,8 @@ scoreTest <- function(fit, covariates, parameters = "B",
       adj <- identical(adjust, "auto") && inherits(fit, "bigIRT_fit") && !(v %in% sc$person_preds)
       Badj <- if(adj) bigIRT_score_adjust_basis(zall, cv$level, sc, adjustDf, v) else NULL
       if(adj && is.null(Badj)) adj <- FALSE
-      scv <- if(adj) bigIRT_score_compute(fit, nodes = nodes, cores = cores, add_preds = Badj) else sc
+      scv <- if(adj) bigIRT_score_compute(fit, nodes = nodes, cores = cores, add_preds = Badj,
+        adjust_method = adjustMethod) else sc
       if(adj){
         if(!isTRUE(scv$refit_converged))
           warning(sprintf("Adding %s to the ability model did not converge in %d iterations; its tests may be miscalibrated.",
@@ -1068,7 +1181,7 @@ scoreTest <- function(fit, covariates, parameters = "B",
           dim = rep(seq_len(nrow(ab)), ncol(ab)), estimate = as.numeric(ab),
           ability_sd = scv$ability_sd[rep(seq_len(nrow(ab)), ncol(ab))],
           fit_ability_sd = sc$ability_sd[rep(seq_len(nrow(ab)), ncol(ab))],
-          iterations = scv$refit_iter, converged = scv$refit_converged)
+          method = scv$adjust_method, iterations = scv$refit_iter, converged = scv$refit_converged)
       }
       if(!adj && cv$level == "person" && !(v %in% sc$person_preds))
         bigIRT_score_impact_check(sc, zall, v)
@@ -1115,9 +1228,10 @@ print.bigIRT_scoretest <- function(x, n = 10L, ...){
       suppressWarnings(min(tv[[pcol]], na.rm = TRUE))))
     av <- x$adjustment[x$adjustment$covariate == v]
     if(!is.null(av) && nrow(av))
-      cat(sprintf("    added to the ability model after the fit: %d terms, ability SD %s (fit: %s), %d iterations%s\n",
+      cat(sprintf("    added to the ability model after the fit: %d terms, ability SD %s (fit: %s), %s, %d %s%s\n",
         data.table::uniqueN(av$term), paste(sprintf("%.3f", unique(av$ability_sd)), collapse = ", "),
-        paste(sprintf("%.3f", unique(av$fit_ability_sd)), collapse = ", "), av$iterations[1],
+        paste(sprintf("%.3f", unique(av$fit_ability_sd)), collapse = ", "), av$method[1], av$iterations[1],
+        if(identical(av$method[1], "fast")) "steps" else "passes",
         if(isTRUE(av$converged[1])) "" else ", NOT converged"))
   }
   o <- order(t[[pcol]])

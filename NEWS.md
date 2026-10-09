@@ -54,6 +54,17 @@
   whole parameter vector is extrapolated jointly (SQUAREM): on the
   Mindsteps mathematics fit 19 and 35 passes where plain iteration took 35
   and 93, to the same point.
+* `scoreTest(adjustMethod = "fast")`, the default, holds the fit's own
+  ability coefficients and estimates only the added covariate's and the
+  residual SD, by a joint Newton step (each person's Louis information for
+  the coefficients, a normal posterior's moments for the SD's curvature;
+  exact gradients, so the same maximum). Regressing the fit's posterior
+  means on the covariate instead recovers only about the reliability's share
+  of the impact. On the 2025 paper's grid (14,400 replications) it agreed
+  with `"full"` to 5.5e-5 in every item's p value, with the same decisions,
+  in a median 4 passes against 8; on the Mindsteps fit 93 s against 232 s,
+  the same 34 items flagged. Covariates given per response (no person-level
+  Newton step) and multidimensional models use `"full"`.
   `adjust = "none"` tests the fit as it is, and then warns when a
   person-level covariate is related to ability but absent from it. See
   `vignette("score-tests")`.

@@ -393,7 +393,14 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     ## The group difference implied by the adjusted ability regression, against
     ## a refit with the same basis in the ability model.
     B <- bigIRT:::bigIRT_score_adjust_basis(cv$z, "person", scoreContributions(f0), 3L, "z")
-    sc <- bigIRT:::bigIRT_score_compute(f0, add_preds = B)
+    sc <- bigIRT:::bigIRT_score_compute(f0, add_preds = B, adjust_method = "fast")
+    ## The fast route (the default) and the full joint re-estimation solve the
+    ## same problem here, the fit having no coefficients of its own to hold.
+    sc_full <- bigIRT:::bigIRT_score_compute(f0, add_preds = B, adjust_method = "full")
+    expect_identical(c(sc$adjust_method, sc_full$adjust_method), c("fast", "full"))
+    expect_lt(sc$refit_iter, sc_full$refit_iter)
+    expect_equal(sc$ability_beta, sc_full$ability_beta, tolerance = 1e-4)
+    expect_equal(sc$ability_sd, sc_full$ability_sd, tolerance = 1e-5)
     zp <- cv$z
     Bp <- splines::ns(zp, df = 3); Bp <- sweep(Bp, 2, colMeans(Bp))
     gap_adj <- diff(tapply(as.numeric(Bp %*% sc$ability_beta[1, ]), zp > .5, mean)) / sc$ability_sd[1]
@@ -417,6 +424,39 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     ## why the comparison is against the refit, not against .05.)
     t_ref <- suppressWarnings(scoreTest(f1, cv, parameters = "B", adjust = "none"))$tests
     expect_gt(cor(t_adj$p, t_ref$p[match(t_adj$item, t_ref$item)]), .99)
+    expect_identical(ra$method[1], "fast")
+    t_full <- scoreTest(f0, cv, parameters = "B", adjustMethod = "full")$tests
+    expect_lt(max(abs(t_adj$p - t_full$p[match(t_adj$item, t_full$item)])), 1e-3)
+  })
+
+  ## The fast route holds the fit's own coefficients, which here vary within
+  ## person; the full route re-estimates them with the added ones. Holding
+  ## them changes little when the added covariate is unrelated to them. A
+  ## covariate given per response has no person-level Newton step, so it
+  ## takes the full route.
+  test_that("the fast adjustment holds the fit's coefficients; per-response covariates go full", {
+    skip_on_cran()
+    set.seed(53)
+    N <- 2000; J <- 40; per <- 20
+    z <- stats::rbinom(N, 1, .5); th <- stats::rnorm(N) + z
+    a <- stats::runif(J, .8, 1.6); b <- stats::rnorm(J)
+    jj <- as.vector(replicate(N, sample.int(J, per))); ii <- rep(seq_len(N), each = per)
+    ctx <- stats::rbinom(N * per, 1, .5); w <- stats::rnorm(N * per)
+    y <- stats::rbinom(N * per, 1, stats::plogis(a[jj] * (th[ii] + .3 * ctx) - b[jj]))
+    d <- data.frame(id = ii, Item = jj, Scale = 1, score = y, ctx = ctx)
+    d$ctx_bar <- stats::ave(ctx, ii); d$ctx_dev <- ctx - d$ctx_bar
+    f0 <- suppressWarnings(fitIRT(d, pl = 2, personPreds = c("ctx_bar", "ctx_dev"), laplaceRefine = "agq",
+      cores = 1, verbose = 0, laplaceCertify = FALSE, dropPerfectScores = FALSE))
+    cv <- data.frame(id = rownames(f0$pars$Ability)); cv$z <- factor(z[as.integer(cv$id)])
+    rf <- scoreTest(f0, cv, parameters = "B")
+    ru <- scoreTest(f0, cv, parameters = "B", adjustMethod = "full")
+    expect_identical(c(rf$adjustment$method[1], ru$adjustment$method[1]), c("fast", "full"))
+    expect_true(rf$adjustment$converged[1])
+    expect_lt(rf$adjustment$iterations[1], ru$adjustment$iterations[1])
+    expect_equal(rf$adjustment$estimate, ru$adjustment$estimate, tolerance = 1e-2)
+    expect_gt(cor(rf$tests$p, ru$tests$p[match(rf$tests$item, ru$tests$item)]), .999)
+    rw <- scoreTest(f0, data.frame(w = w), parameters = "B", form = "linear")
+    expect_identical(rw$adjustment$method[1], "full")
   })
 
   ## With few responses per person most of the SD's information is missing,
