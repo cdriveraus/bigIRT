@@ -26,13 +26,15 @@ information in its item's slots. Default TRUE.}
 
 \item{cores}{Integer. Threads for the person-level kernels.}
 
-\item{exclude}{Optional item labels whose responses are left out of every
+\item{exclude}{Optional item labels whose responses are held out of every
 person's posterior -- the anchoring step of DIF purification (see
 \code{purify} in \code{\link[=scoreTest]{scoreTest()}}). The ability distribution's mean (if the fit
 estimated it) and the person-covariate coefficients are then
 re-estimated on the remaining items, the item parameters held, since the
-excluded items' DIF pulled on them too. Scores are returned for the
-remaining responses only.}
+excluded items' DIF pulled on them too. Held-out responses are still
+scored (column \code{held}), each against the posterior from the remaining
+items with its own likelihood added, as if it were the person's only
+other response.}
 }
 \value{
 An object of class \code{bigIRT_scores}, a list with

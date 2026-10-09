@@ -275,3 +275,54 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     }
   })
 }
+
+if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
+  ## Purification holds items' responses out of the posterior and scores them
+  ## against the rest with their own likelihood added. Three properties pin it:
+  ## a held-out row's score is the score of its Bernoulli given the other
+  ## responses (probability ppred, differenced through the kernel); its
+  ## information is its score differenced; and holding rows out leaves every
+  ## other row's score exactly as if those rows did not exist.
+  test_that("held-out rows are scored against the rest, and the rest ignore them (3PL)", {
+    skip_on_cran()
+    set.seed(41)
+    sim <- simIRT(Nsubs = 150, Nitems = 12, Nscales = 1, AMean = 1.2, ASD = .3,
+      BMean = 0, BSD = 1, logitCMean = -1.5, logitCSD = .3)
+    cs <- score_case(sim$dat, pl = 3)
+    st <- cs$st; sd <- st$sdat; h <- 1e-5
+    held_items <- c(3L, 8L)
+    hold <- as.integer(st$rc$items %in% held_items)
+    post_args <- bigIRT:::bigIRT_score_args_rows(st$args, hold == 0L)
+    post <- do.call(bigIRT:::bigIRT_laplace_person_step_block_cpp_impl, c(post_args, list(
+      theta_init = st$posterior$theta_mode, jitter = 1e-6, max_attempts = 8L, max_iter = 200L,
+      tol = 1e-12, keep_covariance = FALSE)))
+    runh <- function(a, out = 2L) do.call(bigIRT:::bigIRT_agq_fg_cpp_impl, c(a, list(
+      theta_mode = post$theta_mode, precision = post$precision, rule = cs$rule, want_person = TRUE,
+      row_out = out, slot_out = as.integer(cs$slots), row_hold = hold)))
+    r0 <- runh(st$args)
+    k <- length(cs$slots) + 2L
+    for(j in held_items) for(sl in c("B", "A", "C")){
+      ix <- free_index(sd, j, sl); nm <- arg_of[[sl]]
+      up <- st$args; dn <- st$args
+      up[[nm]][ix] <- up[[nm]][ix] + h; dn[[nm]][ix] <- dn[[nm]][ix] - h
+      ru <- runh(up, 1L)$row_scores; rd <- runh(dn, 1L)$row_scores
+      rows <- which(st$rc$items == j)
+      y <- st$args$score[rows]; pp <- r0$row_scores[rows, k]
+      dp <- (ru[rows, k] - rd[rows, k]) / (2 * h)
+      cb <- match(sl, names(cs$slots))
+      expect_lt(relerr(r0$row_scores[rows, cb], (y - pp) / (pp * (1 - pp)) * dp), 1e-6,
+        label = sprintf("held item %d slot %s score", j, sl))
+      fd_info <- -(ru[rows, cb] - rd[rows, cb]) / (2 * h)
+      expect_lt(relerr(r0$row_info[rows, bigIRT:::bigIRT_score_pack_index(cb, cb)], fd_info), 1e-6,
+        label = sprintf("held item %d slot %s information", j, sl))
+    }
+    ## The rest, against a pass on the remaining rows alone.
+    keep <- hold == 0L
+    r1 <- do.call(bigIRT:::bigIRT_agq_fg_cpp_impl, c(post_args, list(
+      theta_mode = post$theta_mode, precision = post$precision, rule = cs$rule, want_person = TRUE,
+      row_out = 2L, slot_out = as.integer(cs$slots))))
+    expect_equal(r0$row_scores[keep, ], r1$row_scores, tolerance = 1e-12)
+    expect_equal(r0$row_info[keep, ], r1$row_info, tolerance = 1e-12)
+    expect_equal(r0$value, r1$value, tolerance = 1e-12)
+  })
+}

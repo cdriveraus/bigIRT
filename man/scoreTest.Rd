@@ -149,9 +149,9 @@ Benjamini-Hochberg adjusted p is below \code{purifyAlpha}, recomputes the score
 contributions with the flagged items' responses left out of every person's
 posterior and the ability coefficients re-estimated on the rest
 (\code{exclude} in \code{\link[=scoreContributions]{scoreContributions()}}), and retests the rest against that
-anchor; flagged items are retested against the same anchor, each with its
-responders' posteriors from the anchor items and its own responses. It
-repeats until the flagged set stops changing. Only the person side is
+anchor; flagged items are retested against the same anchor, each response
+scored against the anchor posterior with its own likelihood added, in the
+same pass. It repeats until the flagged set stops changing. Only the person side is
 recomputed, so this needs the fit, not its score contributions, but no
 refit.
 
