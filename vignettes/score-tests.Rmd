@@ -1,0 +1,122 @@
+---
+title: "Testing covariates after a fit: score-based DIF and ability screening"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Testing covariates after a fit: score-based DIF and ability screening}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
+library(bigIRT)
+```
+
+A large fit is expensive, and the questions asked of it afterwards are many:
+does this item behave differently for girls and boys, does that one drift
+with age, does school type predict ability once the rest is accounted for?
+Refitting for each question does not scale. Score-based tests answer them
+from one fit: each person's contribution to the score of the marginal
+likelihood says which way, and how strongly, that person's responses pull on
+every parameter, and a covariate that orders those pulls is evidence that the
+parameter depends on it.
+
+`scoreContributions()` computes the contributions, and `scoreTest()` turns
+them into tests: parametric score (LM) tests with a one-step estimate of the
+effect, and nonparametric fluctuation tests that need no functional form.
+
+## Data with impact and DIF
+
+The covariate `z` raises ability (impact), and makes items 1 to 4 easier
+for persons with high `z` (uniform DIF).
+
+```{r data}
+set.seed(1)
+N <- 1500; J <- 20
+a <- rlnorm(J, 0, .2); b <- rnorm(J)
+z <- runif(N)
+theta <- rnorm(N) + (z > .5)
+B <- matrix(b, N, J, byrow = TRUE)
+B[, 1:4] <- B[, 1:4] - 1.2 * (z - .5)
+P <- plogis(matrix(a, N, J, byrow = TRUE) * theta - B)
+dat <- data.frame(id = rep(1:N, J), Item = rep(1:J, each = N), Scale = 1,
+  score = rbinom(N * J, 1, P))
+dat$z <- z[dat$id]
+```
+
+## The covariate belongs in the ability model
+
+Score contributions have mean zero, for every person and conditionally on
+the person's covariates, when the model is right. A covariate that is
+related to ability is therefore part of the model: left out, its effect on
+ability shows up as DIF in every item. So it goes into `personPreds`, in a
+form flexible enough to carry the relation -- here a spline, since the
+impact is a step that a linear term would not capture.
+
+```{r fit}
+Bz <- splines::ns(z, df = 3)
+dat[c("z1", "z2", "z3")] <- Bz[dat$id, ]
+fit <- fitIRT(dat, pl = 2, personPreds = c("z1", "z2", "z3"),
+  laplaceRefine = "agq", cores = 2, verbose = 0)
+```
+
+`laplaceRefine = "agq"` finishes the fit on the quadrature marginal, the
+same one the score contributions are computed from, so their sums vanish at
+the estimates. It matters most when each person answers few items.
+
+## DIF: one test per item
+
+```{r dif}
+sc <- scoreContributions(fit)
+cov <- data.frame(id = rownames(fit$pars$Ability))
+cov$z <- z[as.integer(cov$id)]
+dif <- scoreTest(sc, cov, parameters = "B", form = "linear")
+dif
+```
+
+The `coefficients` are one-step estimates of each item's linear DIF slope on
+the intercept scale (positive is harder), with standard errors: what a refit
+with `BitemPreds = "z"` and `itemSpecificBetas = TRUE` would estimate.
+
+```{r epc}
+head(dif$coefficients[order(item)], 6)
+```
+
+Uniform DIF that every item shares cannot be told apart from an effect on
+ability, and the ability model absorbs it; DIF is measured relative to it.
+
+The same contributions test non-uniform DIF (`parameters = "A"`), both
+jointly (`c("B", "A")`), the asymptotes of a 3PL or 4PL (`"C"`, `"D"`), and
+other functional forms: `form = "spline"` for smooth nonlinear relations,
+`"factor"` for groups, and `"fluctuation"` for the nonparametric double-max,
+Cramer-von Mises and maxLM tests, whose p-values are simulated from the
+process's exact covariance (so they hold even though, with impact,
+information does not accrue evenly along `z`).
+
+```{r fluct}
+fl <- scoreTest(sc, cov, parameters = "B", form = "fluctuation", items = 1:6, seed = 1)
+fl$tests[, .(item, DM, p_DM, p_CvM, p_maxLM)]
+```
+
+## Covariates of ability
+
+`parameters = "Ability"` asks whether a covariate predicts ability beyond
+what the ability model already holds. `w` here is noise, and `z` is already
+in the model through its spline, so neither should be flagged.
+
+```{r ability}
+cov$w <- rnorm(nrow(cov))
+scoreTest(sc, cov[c("id", "w")], parameters = "Ability")$tests
+```
+
+## Covariates that vary within person
+
+Covariates can also be given per response -- one row per row of the data
+passed to `fitIRT()` -- for example age at the time of each response, or the
+item's position in the test. Then `by = "all"` tests one coefficient shared by
+every item, and a vector of item groups tests one per group.
+
+```{r rows}
+pos <- ave(dat$id, dat$id, FUN = function(x) sample(seq_along(x)))
+scoreTest(sc, data.frame(position = pos), parameters = "B", by = "all")$tests
+```

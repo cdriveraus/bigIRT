@@ -185,3 +185,64 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     expect_error(scoreContributions(f), "normalise")
   })
 }
+
+if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
+
+  ## Purification re-estimates the ability side with the items held. On the
+  ## full data that optimum is the fit's own (a quadrature-refined fit sits at
+  ## the optimum of the same marginal), so re-estimating from a perturbed start
+  ## must return the fitted coefficients and mean. A Newton step built on the
+  ## wrong score or information would not get back.
+  test_that("re-estimating the ability side with items held returns the fit's own", {
+    skip_on_cran()
+    set.seed(21)
+    N <- 600; J <- 15
+    z <- stats::runif(N); x <- stats::rnorm(N)
+    th <- stats::rnorm(N) + .8 * (z > .5) + .3 * x
+    P <- stats::plogis(matrix(stats::rlnorm(J, 0, .2), N, J, byrow = TRUE) * th -
+      matrix(stats::rnorm(J), N, J, byrow = TRUE))
+    d <- data.table::data.table(id = rep(seq_len(N), J), Item = rep(seq_len(J), each = N), Scale = 1L,
+      score = stats::rbinom(N * J, 1, P))
+    d[, `:=`(zz = z[id], x = x[id])]
+    f <- suppressWarnings(fitIRT(d, pl = 2, personPreds = c("zz", "x"), estMeans = c("ability", "A"),
+      laplaceRefine = "agq", cores = 1, verbose = 0, laplaceCertify = FALSE, laplaceTol = 1e-9))
+    st <- bigIRT:::bigIRT_score_setup(f)
+    rule <- bigIRT:::bigIRT_score_rule(f, 1L)
+    st0 <- st
+    st$args$Abilitybeta <- st$args$Abilitybeta + c(.3, -.2)
+    st$args$prior_mean <- st$args$prior_mean + .25
+    st$posterior <- do.call(bigIRT:::bigIRT_laplace_person_step_block_cpp_impl, c(st$args, list(
+      theta_init = st$posterior$theta_mode, jitter = 1e-6, max_attempts = 8L, max_iter = 100L,
+      tol = 1e-10, keep_covariance = FALSE)))
+    st1 <- bigIRT:::bigIRT_score_refit_ability(st, rule)
+    expect_lt(max(abs(st1$args$Abilitybeta - st0$args$Abilitybeta)), 1e-4)
+    expect_lt(max(abs(st1$args$prior_mean - st0$args$prior_mean)), 1e-4)
+  })
+
+  ## Four items with strong DIF in one direction contaminate the rest: the
+  ## clean items' one-step slopes shift the other way. Anchoring on the
+  ## unflagged items must pull them back towards zero and keep the DIF items.
+  test_that("purification removes contamination from the clean items", {
+    skip_on_cran()
+    set.seed(1)
+    N <- 1500; J <- 20
+    a <- stats::rlnorm(J, 0, .2); b <- stats::rnorm(J)
+    z <- stats::runif(N)
+    B <- matrix(b, N, J, byrow = TRUE); B[, 1:4] <- B[, 1:4] - 1.2 * (z - .5)
+    P <- stats::plogis(matrix(a, N, J, byrow = TRUE) * (stats::rnorm(N) + (z > .5)) - B)
+    d <- data.frame(id = rep(1:N, J), Item = rep(1:J, each = N), Scale = 1, score = stats::rbinom(N * J, 1, P))
+    Bz <- splines::ns(z, df = 3); d[c("z1", "z2", "z3")] <- Bz[d$id, ]
+    f <- suppressWarnings(fitIRT(d, pl = 2, personPreds = c("z1", "z2", "z3"), laplaceRefine = "agq",
+      cores = 1, verbose = 0, laplaceCertify = FALSE))
+    cv <- data.frame(id = rownames(f$pars$Ability)); cv$z <- z[as.integer(cv$id)]
+    t0 <- scoreTest(f, cv, parameters = "B")
+    t1 <- scoreTest(f, cv, parameters = "B", purify = TRUE)
+    clean <- as.character(5:20)
+    e0 <- t0$coefficients[item %in% clean, mean(estimate)]
+    e1 <- t1$coefficients[item %in% clean, mean(estimate)]
+    expect_gt(e0, .1)
+    expect_lt(abs(e1), abs(e0) / 3)
+    expect_true(all(as.character(1:4) %in% t1$tests[anchor == FALSE, item]))
+    expect_lt(t1$tests[item %in% clean, sum(p_fdr < .05)], t0$tests[item %in% clean, sum(p_fdr < .05)])
+  })
+}
