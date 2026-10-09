@@ -26,6 +26,7 @@ scoreTest(
   adjust = c("auto", "none"),
   adjustDf = 3L,
   adjustMethod = c("fast", "full"),
+  effects = TRUE,
   nodes = NULL,
   cores = 1L
 )
@@ -106,6 +107,15 @@ otherwise falls back to \code{"full"}: every coefficient and the SD
 re-estimated jointly to convergence, which can take dozens of passes
 over the data.}
 
+\item{effects}{Report DIF effect sizes (parametric forms). Each response's
+score is the score of a Bernoulli given the person's other responses, so
+the derivative of its predicted probability in the item's parameters is
+exact; applied to the one-step DIF estimate it gives the response's
+first-order change in the probability of a correct answer at the
+person's own ability. These are averaged per item (\code{effects}) and, for a
+person-level covariate, summed per person over the items they answered
+(\code{dtf}).}
+
 \item{nodes, cores}{Passed to \code{\link[=scoreContributions]{scoreContributions()}} when \code{fit} is a fit.}
 }
 \value{
@@ -121,6 +131,19 @@ parameter and basis column; and, when a covariate was added to the
 ability model (\code{adjust}), \code{adjustment}: its basis terms' estimated
 coefficients, the re-estimated ability SD against the fit's, and the
 iterations taken and whether they converged (a warning is given if not).
+With \code{effects}: \code{effects}, per item and contrast (a factor level against
+the reference level; a continuous covariate's 90th against its 10th
+percentile over responses), the mean change in the probability of a
+correct answer over the item's responses at equal ability, signed (\code{dP})
+and unsigned (\code{dP_abs}); and \code{dtf}, per level or covariate quintile, the
+mean change in a person's expected number correct over the items they
+answered (\code{dT}, and \code{dprop} per item), relative to the reference level or
+the median covariate value, and the ability shift that would change
+their expected score as much (\code{dtheta}, one-dimensional models): how far
+DIF in the tested items moves the group's ability estimates, to first
+order. \code{dT_flagged} and \code{dtheta_flagged} use only the items flagged
+after FDR. Effects are first-order in the DIF estimate and, with
+\code{purify}, come from the unpurified stage.
 }
 \description{
 Tests whether item parameters depend on a covariate (differential item

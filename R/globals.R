@@ -15,5 +15,7 @@ utils::globalVariables(c(
   ## columns fitIRT attaches to its working copy of the data
   "__bigIRT_input_row__", "__bigIRT_training__",
   ## score-test tables, in scoreTest
-  "covariate", "p_fdr", "p_holm", "anchor", "stage", "item", "ability_adjusted"
+  "covariate", "p_fdr", "p_holm", "anchor", "stage", "item", "ability_adjusted",
+  ## score-test effect tables, in scoreTest
+  "dP", "dpdtheta", "person", "items", "dT", "slope"
 ))
