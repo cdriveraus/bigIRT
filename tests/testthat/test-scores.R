@@ -447,6 +447,39 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     expect_equal(s1$args$Abilitybeta, s0$args$Abilitybeta, tolerance = 1e-5)
   })
 
+  ## A per-response covariate that depends on the response itself, like time
+  ## on the item, added to an ability model whose predictors already vary
+  ## within person: outer-product steps far from the curvature, capped at
+  ## first. Extrapolating capped steps once sent this to an SD of 59 and
+  ## never converged (plain iteration: 26). The acceleration must not lose
+  ## to plain iteration, and must land on the same point.
+  test_that("the adjustment's acceleration is safe far from the optimum", {
+    skip_on_cran()
+    set.seed(11)
+    N <- 2000; J <- 60; per <- 30
+    th <- stats::rnorm(N); a <- stats::runif(J, .8, 1.6); b <- stats::rnorm(J)
+    jj <- as.vector(replicate(N, sample.int(J, per))); ii <- rep(seq_len(N), each = per)
+    ctx <- stats::rbinom(N * per, 1, .5)
+    y <- stats::rbinom(N * per, 1, .15 + .85 * stats::plogis(a[jj] * (th[ii] + .3 * ctx) - b[jj]))
+    vt <- stats::rnorm(N * per, 3 - .6 * y + .3 * th[ii], .7)
+    d <- data.frame(id = ii, Item = jj, Scale = 1, score = y, ctx = ctx)
+    d$ctx_bar <- stats::ave(ctx, ii); d$ctx_dev <- ctx - d$ctx_bar
+    f0 <- suppressWarnings(fitIRT(d, pl = 2, personPreds = c("ctx_bar", "ctx_dev"), laplaceRefine = "agq",
+      cores = 1, verbose = 0, laplaceCertify = FALSE, dropPerfectScores = FALSE))
+    sc <- scoreContributions(f0)
+    cvv <- bigIRT:::bigIRT_score_covariates(sc, data.frame(vt = vt), "auto")
+    B <- bigIRT:::bigIRT_score_adjust_basis(cvv$values$vt, cvv$level, sc, 3L, "vt")
+    st <- bigIRT:::bigIRT_score_setup(f0, cores = 1L, add_preds = B)
+    rule <- bigIRT:::bigIRT_score_rule(f0, st$K, NULL)
+    s0 <- bigIRT:::bigIRT_score_refit_ability(st, rule, maxit = 200L, est_sd = TRUE, accelerate = FALSE)
+    s1 <- bigIRT:::bigIRT_score_refit_ability(st, rule, maxit = 200L, est_sd = TRUE)
+    expect_true(s0$refit_converged); expect_true(s1$refit_converged)
+    expect_lte(s1$refit_iter, s0$refit_iter)
+    expect_lt(max(s1$refit_trace[, "sd"]), 2)
+    expect_equal(s1$args$Abilitybeta, s0$args$Abilitybeta, tolerance = 1e-5)
+    expect_equal(s1$ability_sd, s0$ability_sd, tolerance = 1e-5)
+  })
+
   ## A covariate that takes most of the variance leaves a small residual SD.
   ## The SD's update once added a jitter of 1e-6 to the variance, which put a
   ## floor of 1e-6 / (2 SD^2) under its change: above the tolerance for any
