@@ -293,8 +293,16 @@ bigIRT_score_person_terms <- function(aq, st){
 ## after a fit without it, put the residual SD at .89 to .91 over six
 ## datasets, against sqrt(1 / 1.25) = .894; the adjusted tests matched those
 ## of a refit with the covariate (p values correlating 1.000).
+##
+## EM for the SD converges linearly, at the fraction of its information that
+## is missing: successive changes shrank by a constant .69 with eight
+## responses per person, and on Mindsteps 30 iterations were not enough. The
+## coefficients only follow the SD. So once three EM updates have changed
+## each SD in the same direction, Aitken's extrapolation jumps to the limit
+## of the geometric sequence (ratio capped at .95, so a jump is at most 19
+## times the last change); the EM updates that follow check it.
 bigIRT_score_refit_ability <- function(st, rule, maxit = 30L, tol = 1e-7, jitter = 1e-6,
-  est_sd = FALSE){
+  est_sd = FALSE, accelerate = TRUE){
   sdat <- st$sdat; K <- st$K; N <- st$N
   free_mean <- as.integer(sdat$fixedAbilityMean) == 0L
   P <- as.integer(st$P_real %||% 0L)
@@ -328,7 +336,7 @@ bigIRT_score_refit_ability <- function(st, rule, maxit = 30L, tol = 1e-7, jitter
   bsc <- as.numeric(sdat$betaScale)
   P0_of <- function(pa) if(length(dim(pa)) == 3L) matrix(pa[, , 1], K, K) else matrix(pa, K, K)
   R0 <- stats::cov2cor(solve(P0_of(st$prior_prec)))
-  sd_change <- 0
+  sd_change <- 0; sd_hist <- NULL; n_accel <- 0L
   for(it in seq_len(maxit)){
     if(!varies){
       aq <- do.call(bigIRT_agq_fg_cpp_impl, c(st$args_post, list(
@@ -379,6 +387,19 @@ bigIRT_score_refit_ability <- function(st, rule, maxit = 30L, tol = 1e-7, jitter
       sd_old <- sqrt(diag(solve(P0_of(st$prior_prec))))
       sd_new <- sqrt(pmax(diag(Mv), 1e-6))
       sd_change <- max(abs(sd_new / sd_old - 1))
+      jumped <- FALSE
+      if(isTRUE(accelerate)){
+        sd_hist <- rbind(sd_hist, sd_new)
+        if(nrow(sd_hist) >= 3L){
+          h <- utils::tail(sd_hist, 3L); d1 <- h[2, ] - h[1, ]; d2 <- h[3, ] - h[2, ]
+          r <- d2 / d1
+          if(all(is.finite(r) & r > 0 & d1 != 0) && sd_change > 10 * tol){
+            r <- pmin(r, .95)
+            sd_new <- sd_new + d2 * r / (1 - r)
+            sd_hist <- NULL; jumped <- TRUE; n_accel <- n_accel + 1L
+          }
+        }
+      }
       Sig <- diag(sd_new, K) %*% R0 %*% diag(sd_new, K)
       pa <- bigIRT_prior_precision_array(solve(Sig + diag(jitter, K)), Nsubs = N, K = K)
       st$prior_prec <- pa; st$args$prior_precision <- pa; st$args_post$prior_precision <- pa
@@ -386,12 +407,12 @@ bigIRT_score_refit_ability <- function(st, rule, maxit = 30L, tol = 1e-7, jitter
     st$posterior <- do.call(bigIRT_laplace_person_step_block_cpp_impl, c(st$args_post, list(
       theta_init = st$posterior$theta_mode, jitter = jitter, max_attempts = 8L, max_iter = 100L,
       tol = 1e-10, keep_covariance = FALSE)))
-    conv <- max(abs(step)) < tol && sd_change < 10 * tol
+    conv <- max(abs(step)) < tol && sd_change < 10 * tol && !(isTRUE(est_sd) && jumped)
     if(conv) break
   }
   st$prior_mean <- st$args$prior_mean
   st$ability_sd <- sqrt(diag(solve(P0_of(st$prior_prec))))
-  st$refit_iter <- it; st$refit_converged <- conv
+  st$refit_iter <- it; st$refit_converged <- conv; st$refit_accel <- n_accel
   st
 }
 
