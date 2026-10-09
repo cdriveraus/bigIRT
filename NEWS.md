@@ -50,9 +50,10 @@
   per cent against 70. The result's `adjustment` records the coefficients,
   the re-estimated ability SD, and the iterations taken, and a warning is
   given if they did not converge. Both the SD's EM and the outer-product
-  steps used when predictors vary within person converge linearly, and
-  are extrapolated (Aitken) once their steps settle: on the Mindsteps
-  mathematics fit, 19 iterations where plain iteration took 35.
+  steps used when predictors vary within person converge linearly, so the
+  whole parameter vector is extrapolated jointly (SQUAREM): on the
+  Mindsteps mathematics fit 19 and 35 passes where plain iteration took 35
+  and 93, to the same point.
   `adjust = "none"` tests the fit as it is, and then warns when a
   person-level covariate is related to ability but absent from it. See
   `vignette("score-tests")`.
