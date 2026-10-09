@@ -326,3 +326,90 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     expect_equal(r0$value, r1$value, tolerance = 1e-12)
   })
 }
+
+if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
+  ## The within-person path of the ability re-estimation scores each person
+  ## by summing their responses' linear-predictor scores times loading times
+  ## covariate value. A fit with a predictor that varies within person sits at
+  ## the optimum of the same objective, so from a perturbed start the
+  ## re-estimation must come back to the fit's own coefficients. Wrong
+  ## loadings, a covariate taken at its person mean, or a fixed ability left
+  ## in the sum would all stop it short.
+  test_that("ability re-estimation with a within-person predictor returns the fit's own", {
+    skip_on_cran()
+    set.seed(22)
+    N <- 500; J <- 30; per <- 3; ni <- 8
+    age0 <- stats::runif(N, 8, 12)
+    a <- stats::rlnorm(J, 0, .2); b <- stats::rnorm(J)
+    th0 <- stats::rnorm(N)
+    d <- data.table::rbindlist(lapply(seq_len(N), function(i){
+      s <- rep(seq_len(per), each = ni); age <- age0[i] + (s - 1) * .5
+      it <- sample.int(J, per * ni)
+      th <- th0[i] + .4 * (age - 10)
+      data.table::data.table(id = i, Item = it, Scale = 1L, age = age,
+        score = stats::rbinom(per * ni, 1, stats::plogis(a[it] * th - b[it])))
+    }))
+    d[, agec := age - 10]
+    f <- suppressWarnings(fitIRT(d, pl = 2, personPreds = "agec", estMeans = c("ability", "A"),
+      laplaceRefine = "agq", cores = 1, verbose = 0, laplaceCertify = FALSE, laplaceTol = 1e-9))
+    st <- bigIRT:::bigIRT_score_setup(f)
+    expect_true(any(bigIRT:::bigIRT_laplace_person_pred_varies(st$args$person_pred, st$args$id)))
+    rule <- bigIRT:::bigIRT_score_rule(f, 1L)
+    st0 <- st
+    st$args$Abilitybeta <- st$args$Abilitybeta + .2; st$args_post$Abilitybeta <- st$args$Abilitybeta
+    st$args$prior_mean <- st$args$prior_mean - .2; st$args_post$prior_mean <- st$args$prior_mean
+    st$posterior <- do.call(bigIRT:::bigIRT_laplace_person_step_block_cpp_impl, c(st$args_post, list(
+      theta_init = st$posterior$theta_mode, jitter = 1e-6, max_attempts = 8L, max_iter = 100L,
+      tol = 1e-10, keep_covariance = FALSE)))
+    st1 <- bigIRT:::bigIRT_score_refit_ability(st, rule, maxit = 200L, tol = 1e-9)
+    expect_lt(max(abs(st1$args$Abilitybeta - st0$args$Abilitybeta)), 1e-4)
+    expect_lt(max(abs(st1$args$prior_mean - st0$args$prior_mean)), 1e-4)
+  })
+
+  ## A covariate related to ability but missing from the fit: tested as the
+  ## fit stands, impact reads as DIF in every item; adjusted after the fact,
+  ## it does not, and the group difference the adjustment estimates matches a
+  ## refit with the covariate. The two sit on different metrics (the fit
+  ## without the covariate scales the total ability variance to one, the
+  ## refit the residual), so they are compared as the group difference over
+  ## the residual SD, in which the metric cancels.
+  test_that("post-hoc adjustment for a covariate the ability model lacks", {
+    skip_on_cran()
+    set.seed(23)
+    N <- 3000; J <- 20
+    z <- stats::runif(N); a <- stats::rlnorm(J, 0, .2); b <- stats::rnorm(J)
+    th <- stats::rnorm(N) + (z > .5)
+    P <- stats::plogis(matrix(a, N, J, byrow = TRUE) * th - matrix(b, N, J, byrow = TRUE))
+    d <- data.frame(id = rep(1:N, J), Item = rep(1:J, each = N), Scale = 1,
+      score = stats::rbinom(N * J, 1, P))
+    f0 <- suppressWarnings(fitIRT(d, pl = 2, laplaceRefine = "agq", cores = 1, verbose = 0,
+      laplaceCertify = FALSE))
+    cv <- data.frame(id = rownames(f0$pars$Ability)); cv$z <- z[as.integer(cv$id)]
+    t_none <- suppressWarnings(scoreTest(f0, cv, parameters = "B", adjust = "none"))$tests
+    t_adj <- scoreTest(f0, cv, parameters = "B")$tests
+    expect_true(all(t_adj$ability_adjusted)); expect_false(any(t_none$ability_adjusted))
+    expect_gt(mean(t_none$p < .05), .3)
+    expect_warning(scoreTest(f0, cv, parameters = "B", adjust = "none"), "related to ability")
+    ## The group difference implied by the adjusted ability regression, against
+    ## a refit with the same basis in the ability model.
+    B <- bigIRT:::bigIRT_score_adjust_basis(cv$z, "person", scoreContributions(f0), 3L, "z")
+    sc <- bigIRT:::bigIRT_score_compute(f0, add_preds = B)
+    zp <- cv$z
+    Bp <- splines::ns(zp, df = 3); Bp <- sweep(Bp, 2, colMeans(Bp))
+    gap_adj <- diff(tapply(as.numeric(Bp %*% sc$ability_beta[1, ]), zp > .5, mean)) / sc$ability_sd[1]
+    d[c("b1", "b2", "b3")] <- Bp[match(d$id, as.integer(cv$id)), ]
+    f1 <- suppressWarnings(fitIRT(d, pl = 2, personPreds = c("b1", "b2", "b3"), laplaceRefine = "agq",
+      cores = 1, verbose = 0, laplaceCertify = FALSE))
+    gap_fit <- diff(tapply(as.numeric(Bp %*% f1$pars$Abilitybeta[1, ]), zp > .5, mean))
+    expect_lt(abs(gap_adj - gap_fit), .05)
+    ## 1 SD of impact on a step is a quarter of the total variance the fit
+    ## without it scaled to one, so the residual SD should come out near
+    ## sqrt(1 / 1.25) = .894.
+    expect_lt(abs(sc$ability_sd[1] - .894), .03)
+    ## And the tests themselves: the adjustment's against the refit's. (This
+    ## dataset happens to put 4 of 20 clean items under .05 in both, which is
+    ## why the comparison is against the refit, not against .05.)
+    t_ref <- suppressWarnings(scoreTest(f1, cv, parameters = "B", adjust = "none"))$tests
+    expect_gt(cor(t_adj$p, t_ref$p[match(t_adj$item, t_ref$item)]), .99)
+  })
+}

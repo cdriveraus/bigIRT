@@ -64,6 +64,10 @@ fit <- fitIRT(dat, pl = 2, personPreds = c("z1", "z2", "z3"),
 same one the score contributions are computed from, so their sums vanish at
 the estimates. It matters most when each person answers few items.
 
+Putting the covariate in the fit is the cleanest route, but not a
+requirement: given the fit, `scoreTest()` adds a covariate the ability model
+lacks after the fact (see below).
+
 ## DIF: one test per item
 
 ```{r dif}
@@ -98,9 +102,45 @@ flagged set stops changing. It needs the fit rather than its scores, but no
 refit.
 
 ```{r purify}
-pur <- scoreTest(fit, cov, parameters = "B", purify = TRUE)
+pur <- scoreTest(fit, cov, parameters = "B", purify = TRUE, adjust = "none")
 pur$tests[order(p)][1:8, .(item, p, p_fdr, anchor, stage)]
 ```
+
+(`adjust = "none"` because `z` is already in the ability model, as `z1` to
+`z3`; see the next section.)
+
+## A covariate the fit does not have
+
+A large fit is made once, and the covariates to screen keep coming. Given
+the fit, `scoreTest()` adds a covariate missing from the ability model after
+the fact: a natural spline of it (or indicators, for a factor) enters the
+ability regression, its coefficients and the ability SD are estimated with
+the item parameters held, and the scores are recomputed under that model
+before testing. Here the fit leaves `z` out entirely.
+
+```{r adjust}
+fit0 <- fitIRT(dat, pl = 2, laplaceRefine = "agq", cores = 2, verbose = 0)
+plain <- suppressWarnings(scoreTest(fit0, cov, parameters = "B", adjust = "none"))
+adjusted <- scoreTest(fit0, cov, parameters = "B")
+flag <- function(t) sort(as.integer(t$tests$item[t$tests$p_fdr < .05]))
+list(unadjusted = flag(plain), adjusted = flag(adjusted), refit = flag(dif))
+```
+
+With the adjustment the screen is the one on the fit that had `z` in its
+ability model, item for item -- including items 8, 11 and 14, the
+contamination the previous section removes. Without it the test is not
+valid: unmodelled impact makes every item look easier for high `z`. Here
+that happens to cancel the contamination, which makes the clean items look
+harder, so the unadjusted screen looks tidier than it is; in simulations
+with impact and no DIF, ignoring impact flagged 40 per cent of the items.
+Purification works on the adjusted model too:
+
+```{r adjust-purify}
+flag(scoreTest(fit0, cov, parameters = "B", purify = TRUE))
+```
+
+A covariate given per response (age at each response, say) enters per
+response, so ability may also change with it within person.
 
 The same contributions test non-uniform DIF (`parameters = "A"`), both
 jointly (`c("B", "A")`), the asymptotes of a 3PL or 4PL (`"C"`, `"D"`), and
