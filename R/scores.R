@@ -299,8 +299,8 @@ bigIRT_score_person_terms <- function(aq, st){
 ## responses per person and .85 with four (33 and 67 iterations). With exact
 ## Newton steps the coefficients only follow the SD. So once three EM updates
 ## have changed each SD in the same direction, Aitken's extrapolation jumps to
-## the limit of the geometric sequence (ratio capped at .95, so a jump is at
-## most 19 times the last change); the EM updates that follow check it.
+## the limit of the geometric sequence (only at ratios up to .95, and by at
+## most a tenth of the SD); the EM updates that follow check it.
 ## Outer-product steps have a slow mode of their own, extrapolated the same
 ## way (below). On Mindsteps the two together took 19 iterations where plain
 ## iteration had not converged in 30; the cap is 50, and the result records
@@ -375,23 +375,27 @@ bigIRT_score_refit_ability <- function(st, rule, maxit = 50L, tol = 1e-7, jitter
     step <- if(nc > 0L) as.numeric(bigIRT_score_pinv(H)$inv %*% U) else 0
     ## The outer-product step is not exact Newton; keep an early one from
     ## overshooting on an ability scale.
-    if(varies && max(abs(step)) > 1) step <- step / max(abs(step))
+    capped <- varies && max(abs(step)) > 1
+    if(capped) step <- step / max(abs(step))
     ## Nor does it converge quadratically: on Mindsteps, where the outer
     ## product and the curvature disagree, the steps settled into a fixed
     ## direction shrinking by .84 each time. When two successive steps point
     ## the same way, jump to the limit of that geometric sequence. (Exact
     ## Newton steps need no help: their slow part follows the SD, which the
-    ## SD's own extrapolation already takes; jumping both overshoots.)
+    ## SD's own extrapolation already takes; jumping both overshoots.) Only
+    ## in that asymptotic regime: two capped steps also point the same way,
+    ## at a ratio near one, and extrapolating them threw the SD to 16 on
+    ## simulated data (57 iterations where plain iteration took 28).
     jumped_b <- FALSE
     if(isTRUE(accelerate) && varies && nc > 0L){
-      if(!is.null(prev_step)){
+      if(!is.null(prev_step) && !capped){
         n1 <- sqrt(sum(prev_step^2)); n2 <- sqrt(sum(step^2))
         cosv <- sum(step * prev_step) / (n1 * n2); rb <- n2 / n1
-        if(is.finite(cosv) && cosv > .99 && rb < 1 && n2 > tol){
-          step <- step / (1 - min(rb, .95))
+        if(is.finite(cosv) && cosv > .99 && rb <= .95 && n2 > tol){
+          step <- step / (1 - rb)
           jumped_b <- TRUE; n_accel <- n_accel + 1L; prev_step <- NULL
         } else prev_step <- step
-      } else prev_step <- step
+      } else prev_step <- if(capped) NULL else step
     }
     if(nc > 0L) for(k in seq_len(K)){
       d <- step[(k - 1L) * nc + seq_len(nc)]
@@ -415,9 +419,10 @@ bigIRT_score_refit_ability <- function(st, rule, maxit = 50L, tol = 1e-7, jitter
         if(nrow(sd_hist) >= 3L){
           h <- utils::tail(sd_hist, 3L); d1 <- h[2, ] - h[1, ]; d2 <- h[3, ] - h[2, ]
           r <- d2 / d1
-          if(all(is.finite(r) & r > 0 & d1 != 0) && sd_change > tol){
-            r <- pmin(r, .95)
-            sd_new <- sd_new + d2 * r / (1 - r)
+          if(all(is.finite(r) & r > 0 & r <= .95 & d1 != 0) && sd_change > tol && !capped){
+            ## At most a tenth of the SD in one jump.
+            jmp <- d2 * r / (1 - r)
+            sd_new <- sd_new + sign(jmp) * pmin(abs(jmp), .1 * sd_new)
             sd_hist <- NULL; jumped <- TRUE; n_accel <- n_accel + 1L
           }
         }
