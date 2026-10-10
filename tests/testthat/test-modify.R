@@ -116,6 +116,21 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
       sum(bigIRT:::bigIRT_modify_vc_scores(f, soi, nodes = 41L)), tolerance = 1e-8)
   })
 
+  ## Overlapping sets (a subdomain and a competence area within it) are
+  ## tested as if each were alone. One pass once let the last set take every
+  ## shared item.
+  test_that("overlapping item sets are each tested whole", {
+    skip_on_cran()
+    d <- sim3(9)
+    f <- suppressWarnings(fitIRT(d, pl = 2, laplaceRefine = "agq", cores = 1, verbose = 0,
+      laplaceCertify = FALSE, normalise = FALSE))
+    sc <- scoreContributions(f)
+    both <- bigIRT:::bigIRT_modify_groups(f, sc, list(A = as.character(1:4), B = as.character(3:6)))
+    a <- bigIRT:::bigIRT_modify_groups(f, sc, list(A = as.character(1:4)))
+    b <- bigIRT:::bigIRT_modify_groups(f, sc, list(B = as.character(3:6)))
+    expect_equal(both$z, c(a$z, b$z), tolerance = 1e-10)
+  })
+
   test_that("heldoutLogLik is the held-out persons' exact marginal log-likelihood", {
     skip_on_cran()
     d <- sim3(9)
