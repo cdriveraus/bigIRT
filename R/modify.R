@@ -86,13 +86,25 @@ bigIRT_modify_gain <- function(a, b){
 ## responses, and its expected information follows (R/scores.R); the item's
 ## own free parameters are projected out. One-sided: an asymptote can only
 ## move inward, c up and d down. Returns item, side, n, z, p, one-step
-## estimate (on the probability scale).
+## estimate (on the probability scale), and `identified`: the share of the
+## asymptote's information left once the item's own parameters are projected
+## out. Where an item is only ever answered near its difficulty (adaptive
+## designs do this) the asymptote is nearly collinear with the slope and
+## intercept, the share is small, and both the test and the one-step
+## estimate rest on what little is left.
 bigIRT_modify_asymptotes <- function(fit, sc, sides = c("lower", "upper"), minN = 50L){
   sdat <- fit$prepared
   R <- sc$rows; slots <- names(sc$slots)
-  S <- as.matrix(R[, slots, with = FALSE])
+  ## A fit with every item fixed has no item slots; as.matrix() of an empty
+  ## data.table would drop the rows too.
+  S <- if(length(slots)) as.matrix(R[, slots, with = FALSE]) else matrix(0, nrow(R), 0L)
   cfix <- as.integer(sdat$fixedClogit) == 1L; dfix <- as.integer(sdat$fixedDlogit) == 1L
   cval <- as.numeric(sdat$Cdata); dval <- as.numeric(sdat$Ddata)
+  ## The fit's asymptotes, for an item whose other asymptote is free.
+  ip <- data.table::as.data.table(fit$itemPars)
+  m <- match(sc$item_labels, as.character(ip[[1L]]))
+  cfit <- if("C" %in% names(ip)) ip$C[m] else rep(0, length(m))
+  dfit <- if("D" %in% names(ip)) ip$D[m] else rep(1, length(m))
   by_item <- split(seq_len(nrow(R)), R$item)
   out <- list()
   for(side in sides){
@@ -101,24 +113,26 @@ bigIRT_modify_asymptotes <- function(fit, sc, sides = c("lower", "upper"), minN 
       if(length(u) < minN) next
       if(side == "lower" && !cfix[j]) next
       if(side == "upper" && !dfix[j]) next
-      c0 <- if(cfix[j]) cval[j] else NA_real_; d0 <- if(dfix[j]) dval[j] else NA_real_
-      ## The other asymptote at its fitted value when it is free.
+      c0 <- if(cfix[j]) cval[j] else cfit[j]
+      d0 <- if(dfix[j]) dval[j] else dfit[j]
       if(!is.finite(c0)) c0 <- 0
       if(!is.finite(d0)) d0 <- 1
       pp <- R$ppred[u]; y <- R$y[u]
       dpi <- if(side == "lower") (d0 - pp) / (d0 - c0) else -(pp - c0) / (d0 - c0)
       s_new <- (y - pp) / (pp * (1 - pp)) * dpi
-      nuis <- which(sc$item_free[j, ])
+      nuis <- if(ncol(S)) which(sc$item_free[j, ]) else integer(0)
       Sa <- cbind(S[u, nuis, drop = FALSE], s_new)
       info <- bigIRT_score_expected_info(Sa, y, pp)
       tst <- ncol(Sa)
       pc <- bigIRT_score_lm_pieces(matrix(1, length(u), 1), matrix(1, length(u), 1), Sa, info,
         tst, seq_len(tst - 1L))
       V <- as.numeric(pc$V)
+      ## `info` is per response; the asymptote's own information is its sum.
+      Itt <- as.numeric(bigIRT_score_kron(matrix(1, length(u), 1), matrix(1, length(u), 1), info, tst, tst))
       z <- if(V > 0) pc$Ustar / sqrt(V) else NA_real_
       out[[length(out) + 1L]] <- data.table::data.table(item = sc$item_labels[j], side = side,
         n = length(u), z = z, p = stats::pnorm(z, lower.tail = FALSE),
-        estimate = if(V > 0) pc$Ustar / V else NA_real_)
+        estimate = if(V > 0) pc$Ustar / V else NA_real_, identified = V / Itt)
     }
   }
   data.table::rbindlist(out)
@@ -559,6 +573,10 @@ modificationTests <- function(fit, dat, personCovariates = character(), response
 #' @param cores Threads.
 #' @param verbose Print progress.
 #' @param fitArgs Further [fitIRT()] arguments (default `laplaceRefine = "agq"`).
+#'   Unlike [fitIRT()], perfect and zero scores are kept unless
+#'   `dropPerfectScores = TRUE` is given here: dropping all-correct persons
+#'   biases the upper-asymptote screen (null size 15 per cent on a simulated
+#'   adaptive bank, against 5 with them kept).
 #' @param checkpoint A directory to keep completed steps in, so that an
 #'   interrupted run resumes; `NULL` (default) keeps nothing.
 #' @return A `bigIRT_improved` object: `fit` (final model, all persons),
@@ -582,8 +600,14 @@ improveModel <- function(dat, score = "score", id = "id", item = "Item", scale =
     on.exit(if(!is.null(old)) assign(".Random.seed", old, globalenv())); set.seed(seed) }
     sample(persons, round(holdout * length(persons))) })
   train <- which(!dat[[id]] %in% ho)
-  base <- list(score = score, id = id, item = item, scale = scale, pl = as.integer(pl),
-    fitArgs = utils::modifyList(list(cores = cores, verbose = 0, laplaceCertify = FALSE), fitArgs))
+  ## Perfect and zero scores are kept unless asked otherwise: a marginal fit
+  ## needs no dropping, and dropping all-correct persons biases the
+  ## upper-asymptote screen (null size 15 per cent on a simulated adaptive
+  ## bank, 5 with them kept; diag_asymptote_bias.R in the model-building
+  ## study).
+  fa <- utils::modifyList(list(cores = cores, verbose = 0, laplaceCertify = FALSE), fitArgs)
+  if(is.null(fa$dropPerfectScores)) fa$dropPerfectScores <- FALSE
+  base <- list(score = score, id = id, item = item, scale = scale, pl = as.integer(pl), fitArgs = fa)
   fit_spec <- function(spec, rows){
     a <- bigIRT_modify_build(dat, spec, base)
     if(!is.null(rows)) a$trainingRows <- rows
@@ -654,16 +678,8 @@ improveModel <- function(dat, score = "score", id = "id", item = "Item", scale =
     }
     gr <- screens$groups
     if(!is.null(gr) && nrow(gr) && length(spec$groups) < maxGroups){
-      used <- unlist(lapply(spec$groups, `[[`, "items"))
-      sets <- attr(gr, "sets")
-      gr <- gr[p_fdr < alpha & sqrt(tau2) >= minGroupSD][order(-z)]
-      keep <- list()
-      for(k in seq_len(nrow(gr))){
-        its <- sets[[gr$set[k]]]
-        if(length(keep) + length(spec$groups) >= maxGroups) break
-        if(any(its %in% c(used, unlist(lapply(keep, `[[`, "items"))))) next
-        keep[[length(keep) + 1L]] <- list(name = gr$set[k], items = its)
-      }
+      keep <- bigIRT_modify_pick_groups(gr, attr(gr, "sets"), unlist(lapply(spec$groups, `[[`, "items")),
+        maxGroups - length(spec$groups), alpha, minGroupSD)
       if(length(keep)) cand$groups <- keep
     }
     cand <- cand[intersect(names(cand), live)]
@@ -709,6 +725,26 @@ improveModel <- function(dat, score = "score", id = "id", item = "Item", scale =
   timing$final <- fin$seconds
   structure(list(fit = fin$fit, spec = spec, path = data.table::rbindlist(path, fill = TRUE), screens = screens,
     base_fit = base_fit, holdout_persons = ho, timing = unlist(timing)), class = "bigIRT_improved")
+}
+
+## Group dimensions to try: significant sets above the size floor that share
+## no item with a group already in the model or with one picked before them,
+## at most `slots` of them. Named sets (from item labels) come first, by z,
+## then sets found from the scores alone: a labelled set was specified in
+## advance and says what the dimension is, and the exploratory route is for
+## structure the labels miss. Under adaptive designs the leading direction
+## can single out part of a named set with a larger z than the whole.
+bigIRT_modify_pick_groups <- function(gr, sets, used, slots, alpha, minGroupSD){
+  gr <- gr[p_fdr < alpha & sqrt(tau2) >= minGroupSD]
+  gr <- gr[order(source == "eigen", -z)]
+  keep <- list()
+  for(k in seq_len(nrow(gr))){
+    if(length(keep) >= slots) break
+    its <- sets[[gr$set[k]]]
+    if(any(its %in% c(used, unlist(lapply(keep, `[[`, "items"))))) next
+    keep[[length(keep) + 1L]] <- list(name = gr$set[k], items = its)
+  }
+  keep
 }
 
 ## A step runner for improveModel(): with no directory, runs the step; with

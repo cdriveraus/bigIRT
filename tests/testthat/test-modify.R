@@ -85,6 +85,39 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     expect_true(all(at$p >= 0 & at$p <= 1))
   })
 
+  ## With the lower asymptote free (a 3PL fit), the upper asymptote's score
+  ## depends on the fitted c: dpi/dd = (pi - c)/(d - c). The test statistic
+  ## built from finite-difference scores of the exact marginal must equal the
+  ## function's (an earlier version used c = 0 there). Also: a fit with every
+  ## item fixed has no item slots and must still be testable.
+  test_that("upper-asymptote tests use the fitted lower asymptote, and work with every item fixed", {
+    skip_on_cran()
+    d <- sim3(9)
+    G1 <- gh_rule(80)
+    f <- suppressWarnings(fitIRT(d, pl = 3, laplaceRefine = "agq", cores = 1, verbose = 0,
+      laplaceCertify = FALSE, normalise = FALSE))
+    ex <- exact_setup(f)
+    sc <- scoreContributions(f, nodes = 41L)
+    at <- bigIRT:::bigIRT_modify_asymptotes(f, sc, sides = "upper", minN = 10L)
+    R <- sc$rows; j <- 3L; u <- which(R$item == j)
+    e2 <- 1e-6
+    s_fd <- vapply(R$person[u], function(i) (logp(ex, i, G1, j0 = j, dd = e2) - logp(ex, i, G1)) / e2, 0)
+    expect_gt(f$itemPars$C[j], .03)
+    S <- as.matrix(R[u, names(sc$slots), with = FALSE])
+    Sa <- cbind(S[, which(sc$item_free[j, ]), drop = FALSE], s_fd)
+    info <- bigIRT:::bigIRT_score_expected_info(Sa, R$y[u], R$ppred[u])
+    pc <- bigIRT:::bigIRT_score_lm_pieces(matrix(1, length(u), 1), matrix(1, length(u), 1), Sa, info,
+      ncol(Sa), seq_len(ncol(Sa) - 1L))
+    expect_equal(at[item == sc$item_labels[j], z], pc$Ustar / sqrt(as.numeric(pc$V)), tolerance = 1e-3)
+    ## Every item fixed.
+    ip <- f$itemPars
+    f0 <- suppressWarnings(fitIRT(d, pl = 2, itemDat = data.frame(Item = ip$Item, A = ip$A, B = ip$B, C = 0),
+      cores = 1, verbose = 0, laplaceCertify = FALSE, normalise = FALSE, laplaceRefine = "agq"))
+    a0 <- bigIRT:::bigIRT_modify_asymptotes(f0, scoreContributions(f0), minN = 10L)
+    expect_identical(nrow(a0), 14L)
+    expect_true(all(a0$identified > .999))
+  })
+
   test_that("the residual-covariance product M v matches M built by integration", {
     skip_on_cran()
     d <- sim3(4); d <- d[stats::runif(nrow(d)) > .2, ]
@@ -187,12 +220,28 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     ii <- rep(seq_len(N), J); jj <- rep(seq_len(J), each = N)
     d <- data.frame(id = ii, Item = jj, Scale = 1, g = g[ii],
       score = stats::rbinom(N * J, 1, cc[jj] + (1 - cc[jj]) * stats::plogis(a[jj] * th[ii] - b[jj])))
+    ## alpha = .5 so that weak asymptotes become candidates (and are then
+    ## rejected by the held-out gate).
     r <- suppressMessages(improveModel(d, pl = 2, personCovariates = "g", dif = character(), asymptotes = "lower",
-      minAsymptote = 0, nsimDim = 0L, maxRounds = 2L, cores = 1, verbose = FALSE))
+      alpha = .5, minAsymptote = 0, nsimDim = 0L, maxRounds = 2L, cores = 1, verbose = FALSE))
     p <- r$path
     expect_identical(p$kind[p$round == 1], c("ability", "asymptotes"))
     expect_identical(p$accepted[p$round == 1], c(TRUE, FALSE))
     expect_false(any(p$round == 2 & p$kind == "asymptotes"))
+  })
+
+  ## When a named set and a set found from the scores overlap and both pass,
+  ## the named one is tried, even with the smaller z; a set from the scores
+  ## that overlaps nothing is still tried.
+  test_that("named item sets take precedence over overlapping exploratory sets", {
+    gr <- data.table::data.table(set = c("topic=T", "eigen1+", "eigen2+", "topic=A"),
+      z = c(5, 7, 6, 1), p = c(1e-7, 1e-3, 1e-3, .2), tau2 = c(.3, .4, .3, .2),
+      source = c("topic", "eigen", "eigen", "topic"))
+    gr[, p_fdr := p]
+    sets <- list(`topic=T` = as.character(11:15), `eigen1+` = as.character(12:14),
+      `eigen2+` = as.character(21:24), `topic=A` = as.character(1:10))
+    k <- bigIRT:::bigIRT_modify_pick_groups(gr, sets, used = character(), slots = 2L, alpha = .05, minGroupSD = .3)
+    expect_identical(vapply(k, `[[`, "", "name"), c("topic=T", "eigen2+"))
   })
 
   ## A checkpoint directory is reused only under the same settings. The test
@@ -202,17 +251,22 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
   test_that("improveModel resumes from a checkpoint, and only under the same settings", {
     skip_on_cran()
     set.seed(5); N <- 1500; J <- 10
-    th <- stats::rnorm(N); a <- stats::runif(J, .9, 1.6); b <- stats::rnorm(J, 0, .8)
+    g <- stats::rbinom(N, 1, .5)
+    th <- stats::rnorm(N) + .8 * g; a <- stats::runif(J, .9, 1.6); b <- stats::rnorm(J, 0, .8)
     cc <- c(.3, .3, rep(0, J - 2))
     ii <- rep(seq_len(N), J); jj <- rep(seq_len(J), each = N)
-    d <- data.frame(id = ii, Item = jj, Scale = 1,
+    d <- data.frame(id = ii, Item = jj, Scale = 1, g = g[ii],
       score = stats::rbinom(N * J, 1, cc[jj] + (1 - cc[jj]) * stats::plogis(a[jj] * th[ii] - b[jj])))
     ck <- file.path(tempdir(), "improve_ck")
     unlink(ck, recursive = TRUE)
-    run <- function(...) suppressMessages(improveModel(d, pl = 2, dif = character(), asymptotes = "lower",
-      nsimDim = 0L, maxRounds = 1L, cores = 1, verbose = FALSE, checkpoint = ck, ...))
+    run <- function(...) suppressMessages(improveModel(d, pl = 2, personCovariates = "g", dif = character(),
+      asymptotes = "lower", nsimDim = 0L, maxRounds = 1L, cores = 1, verbose = FALSE, checkpoint = ck, ...))
     r1 <- run()
     expect_gt(nrow(r1$path), 0L)
+    ## Perfect scorers are kept by default (dropping all-correct persons biases
+    ## the upper-asymptote screen); this design has some.
+    expect_gt(sum(tapply(d$score, d$id, mean) %in% c(0, 1)), 0)
+    expect_identical(as.integer(r1$base_fit$prepared$Nsubs), length(unique(d$id)))
     expect_true(all(file.exists(file.path(ck, c("base.rds", "round1_screens.rds", "final.rds")))))
     f <- file.path(ck, "base.rds"); x <- readRDS(f)
     x$value$h$loglik <- x$value$h$loglik + 1000

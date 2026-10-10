@@ -117,6 +117,22 @@
   per batch and `timing` for the fits and screens.
 * `difCovariates` (in `modificationTests()` and `improveModel()`) chooses
   which covariates get the purified DIF screen; by default all of them.
+* `improveModel()` tries a kind again in a later round only if it, or a kind
+  after it, was kept in the round before; a rejected kind was already judged
+  against everything kept before it, and retrying refitted the same batch.
+* `improveModel()` keeps perfect and zero scores unless `fitArgs` says
+  otherwise. With `fitIRT()`'s default of dropping them, the upper-asymptote
+  screen rejected 15 per cent of true nulls on a simulated adaptive bank (7
+  with random selection): all-correct persons are exactly the responses that
+  pull the upper score down. Kept, it holds 5.
+* Named item sets now take precedence over overlapping sets found from the
+  scores alone; on a simulated adaptive bank the leading direction picked out
+  half a topic with a larger z than the whole.
+* Asymptote tests: an item whose other asymptote is free now uses its fitted
+  value (it used 0 or 1, so a second round after freeing c tested d with the
+  wrong derivative); a fit with every item fixed no longer errors; and each
+  test reports `identified`, the share of the asymptote's information left
+  once the item's own parameters are projected out.
 
 # bigIRT 0.2.0
 
