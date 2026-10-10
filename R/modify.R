@@ -12,9 +12,9 @@
 ## g and h the set's rows' first and second derivatives in their linear
 ## predictors (src/agq_backend.cpp). `set_of_item` gives each item index its
 ## set (1..G, 0 for none). Returns an N x G matrix.
-bigIRT_modify_vc_scores <- function(fit, set_of_item, cores = 1L, nodes = NULL){
-  st <- bigIRT_score_setup(fit, cores = cores)
-  rule <- bigIRT_score_rule(fit, st$K, nodes)
+bigIRT_modify_vc_scores <- function(fit, set_of_item, cores = 1L, nodes = NULL, st = NULL, rule = NULL){
+  if(is.null(st)) st <- bigIRT_score_setup(fit, cores = cores)
+  if(is.null(rule)) rule <- bigIRT_score_rule(fit, st$K, nodes)
   G <- max(0L, as.integer(set_of_item))
   if(G < 1L) return(matrix(0, st$N, 0))
   aq <- do.call(bigIRT_agq_fg_cpp_impl, c(st$args, list(
@@ -207,9 +207,29 @@ bigIRT_modify_basis <- function(z, kind, id = NULL){
 ## negative. Returns set, items, persons, z, p, one-step tau^2.
 bigIRT_modify_groups <- function(fit, sc, sets, cores = 1L, nodes = NULL, max_proj = 200L){
   if(!length(sets)) return(NULL)
-  set_of_item <- integer(length(sc$item_labels))
-  for(k in seq_along(sets)) set_of_item[match(sets[[k]], sc$item_labels)] <- k
-  Tm <- bigIRT_modify_vc_scores(fit, set_of_item, cores = cores, nodes = nodes)
+  ## The kernel takes one set per response, so overlapping sets (a subdomain
+  ## and a competence area within it) cannot share a pass: labelling them in
+  ## one pass let the last set take every shared item, and on Mindsteps left
+  ## the three subdomains empty. Sets are dealt into layers of disjoint sets,
+  ## one pass per layer.
+  ni <- length(sc$item_labels)
+  layer_of <- integer(length(sets)); used <- list()
+  for(k in seq_along(sets)){
+    idx <- match(sets[[k]], sc$item_labels)
+    L <- 1L
+    while(L <= length(used) && any(used[[L]][idx])) L <- L + 1L
+    if(L > length(used)) used[[L]] <- logical(ni)
+    used[[L]][idx] <- TRUE; layer_of[k] <- L
+  }
+  st <- bigIRT_score_setup(fit, cores = cores)
+  rule <- bigIRT_score_rule(fit, st$K, nodes)
+  Tm <- matrix(0, st$N, length(sets))
+  for(L in seq_along(used)){
+    ks <- which(layer_of == L)
+    soi <- integer(ni)
+    for(j in seq_along(ks)) soi[match(sets[[ks[j]]], sc$item_labels)] <- j
+    Tm[, ks] <- bigIRT_modify_vc_scores(fit, soi, st = st, rule = rule)
+  }
   out <- list()
   for(k in seq_along(sets)){
     t <- Tm[, k]
