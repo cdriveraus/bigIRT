@@ -104,6 +104,19 @@
   each it added the two ability covariates and not the null one, DIF on
   exactly the three DIF items, and the testlet, with or without the topic
   that defines it.
+* `improveModel()` now tries the kinds of change in turn within a round --
+  ability, DIF, asymptotes, group dimensions -- each against the model as it
+  stands after the batches kept before it. Before, every kind was judged
+  against the round's starting model and the kept batches combined, so DIF
+  along a covariate could be judged without that covariate's effect on
+  ability, which DIF then absorbs; the combined refit is gone too.
+* `improveModel(checkpoint = dir)` keeps each completed step (base fit, each
+  round's screens, each batch, the final fit) and a rerun resumes from them,
+  reusing a step only under the same data size, holdout, settings and
+  specification; on large data a run is hours. The result records seconds
+  per batch and `timing` for the fits and screens.
+* `difCovariates` (in `modificationTests()` and `improveModel()`) chooses
+  which covariates get the purified DIF screen; by default all of them.
 
 # bigIRT 0.2.0
 

@@ -16,6 +16,7 @@ improveModel(
   responseCovariates = character(),
   itemSets = character(),
   dif = c("B", "A"),
+  difCovariates = NULL,
   asymptotes = c("lower", "upper"),
   holdout = 0.2,
   alpha = 0.05,
@@ -30,7 +31,8 @@ improveModel(
   seed = 1L,
   cores = 1L,
   verbose = TRUE,
-  fitArgs = list(laplaceRefine = "agq")
+  fitArgs = list(laplaceRefine = "agq"),
+  checkpoint = NULL
 )
 }
 \arguments{
@@ -41,8 +43,7 @@ improveModel(
 \item{personPreds}{Person predictors in the base model's ability
 regression.}
 
-\item{personCovariates, responseCovariates, itemSets, dif, asymptotes}{What to
-test; see \code{\link[=modificationTests]{modificationTests()}}.}
+\item{personCovariates, responseCovariates, itemSets, dif, difCovariates, asymptotes}{What to test; see \code{\link[=modificationTests]{modificationTests()}}.}
 
 \item{holdout}{Share of persons held out to judge changes.}
 
@@ -70,12 +71,17 @@ turns them off); see \code{\link[=modificationTests]{modificationTests()}}.}
 \item{verbose}{Print progress.}
 
 \item{fitArgs}{Further \code{\link[=fitIRT]{fitIRT()}} arguments (default \code{laplaceRefine = "agq"}).}
+
+\item{checkpoint}{A directory to keep completed steps in, so that an
+interrupted run resumes; \code{NULL} (default) keeps nothing.}
 }
 \value{
 A \code{bigIRT_improved} object: \code{fit} (final model, all persons),
 \code{spec} (the terms added), \code{path} (each batch tried: round, kind, terms,
-held-out log-likelihood before and after, accepted), \code{screens} (the last
-round's tests), \code{base_fit} (the base model on the training persons).
+held-out log-likelihood before and after, gain and its z, accepted,
+seconds to fit and evaluate), \code{screens} (the last round's tests),
+\code{base_fit} (the base model on the training persons), \code{holdout_persons},
+\code{timing} (seconds: base fit, each round's screens, final fit).
 }
 \description{
 Starting from a base model, repeatedly tests candidate changes at the
@@ -91,14 +97,27 @@ rest). A candidate must be significant after Benjamini-Hochberg within its
 kind and large enough to matter (\code{minEffect} change in the probability of
 a correct answer for DIF, \code{minAsymptote} for an asymptote, \code{minGroupSD} for
 a group dimension's SD on the logit scale); a batch must raise the held-out
-log-likelihood by at least \code{minGain}. Accepted batches are combined and the
-next round tests the combined model. The final model is refitted on all
-persons.
+log-likelihood by at least \code{minGain}.
 }
 \details{
+Within a round the kinds are tried in turn -- ability, then DIF, then
+asymptotes, then group dimensions -- each against the model as it stands
+after the batches kept before it, so a covariate's effect on ability is in
+the model before DIF along it is judged (DIF absorbs impact otherwise). The
+next round screens the result. A covariate tested for DIF only
+(\code{responseCovariates}) must have its ability effect in \code{personPreds}. The
+final model is refitted on all persons.
+
 Selection uses the data, so the final model's estimates and standard
 errors are conditional on it: the held-out gain is the honest measure of
 what the changes are worth, not the in-sample fit.
+
+On large data a run takes hours, so with \code{checkpoint} a directory keeps
+each completed step (the base fit, each round's screens, each batch's
+result and the fits kept) and a rerun resumes from them. A step is reused
+only when the data size, holdout, settings and model specification it was
+made under are identical; anything else is recomputed. Only completed steps
+are written. Fits are kept uncompressed and can be gigabytes.
 }
 \seealso{
 \code{\link[=modificationTests]{modificationTests()}}, \code{\link[=heldoutLogLik]{heldoutLogLik()}}

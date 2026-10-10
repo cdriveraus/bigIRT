@@ -11,6 +11,7 @@ modificationTests(
   responseCovariates = character(),
   itemSets = character(),
   dif = c("B", "A"),
+  difCovariates = NULL,
   asymptotes = c("lower", "upper"),
   purify = TRUE,
   exploratory = TRUE,
@@ -36,9 +37,20 @@ least \code{minSetItems} items is a candidate group dimension.}
 \item{dif}{Item parameters tested for DIF: \code{"B"} (intercept), \code{"A"}
 (slope), or none.}
 
+\item{difCovariates}{The covariates tested for DIF, among
+\code{personCovariates} and \code{responseCovariates}; \code{NULL} (default) tests all
+of them. Each is a purified screen over every item, the costly part on
+large data.}
+
 \item{asymptotes}{\code{"lower"}, \code{"upper"}, both or none.}
 
 \item{purify}{Purify the DIF tests (recommended: it sets the anchors).}
+
+\item{exploratory}{Look for group dimensions in the scores alone (the
+leading directions of residual covariance), as well as in \code{itemSets}.}
+
+\item{nsimDim}{Data sets simulated from the fit for the null distribution
+of the leading eigenvalue.}
 
 \item{minSetItems}{Smallest item set tested for a group dimension.}
 
@@ -47,7 +59,8 @@ least \code{minSetItems} items is a candidate group dimension.}
 \value{
 A list of data.tables: \code{ability}, \code{dif} (with effect sizes),
 \code{asymptotes}, \code{groups}; each with p-values adjusted by Benjamini-Hochberg
-(\code{p_fdr}) within its kind.
+(\code{p_fdr}) within its kind; and \code{dimensions}, the exploratory eigenpairs
+with their null draws.
 }
 \description{
 Tests candidate changes to a fit at the fit itself, without fitting any

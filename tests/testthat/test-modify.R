@@ -168,5 +168,39 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     expect_length(s$groups, 1L)
     expect_setequal(s$groups[[1]]$items, as.character(11:15))
     expect_true(all(r$path$accepted[r$path$kind %in% c("ability", "dif", "groups")]))
+    ## Kinds are judged in turn: DIF against the model that already has g's
+    ## effect on ability, not against the base (where DIF would absorb it).
+    p1 <- r$path[r$path$round == 1]
+    expect_equal(p1$heldout_before[p1$kind == "dif"], p1$heldout_after[p1$kind == "ability"])
+  })
+
+  ## A checkpoint directory is reused only under the same settings. The test
+  ## plants a wrong value in a stored step: a rerun with the same settings
+  ## must return it (the step was reused, not recomputed), one with different
+  ## settings must not.
+  test_that("improveModel resumes from a checkpoint, and only under the same settings", {
+    skip_on_cran()
+    set.seed(5); N <- 1500; J <- 10
+    th <- stats::rnorm(N); a <- stats::runif(J, .9, 1.6); b <- stats::rnorm(J, 0, .8)
+    cc <- c(.3, .3, rep(0, J - 2))
+    ii <- rep(seq_len(N), J); jj <- rep(seq_len(J), each = N)
+    d <- data.frame(id = ii, Item = jj, Scale = 1,
+      score = stats::rbinom(N * J, 1, cc[jj] + (1 - cc[jj]) * stats::plogis(a[jj] * th[ii] - b[jj])))
+    ck <- file.path(tempdir(), "improve_ck")
+    unlink(ck, recursive = TRUE)
+    run <- function(...) suppressMessages(improveModel(d, pl = 2, dif = character(), asymptotes = "lower",
+      nsimDim = 0L, maxRounds = 1L, cores = 1, verbose = FALSE, checkpoint = ck, ...))
+    r1 <- run()
+    expect_gt(nrow(r1$path), 0L)
+    expect_true(all(file.exists(file.path(ck, c("base.rds", "round1_screens.rds", "final.rds")))))
+    f <- file.path(ck, "base.rds"); x <- readRDS(f)
+    x$value$h$loglik <- x$value$h$loglik + 1000
+    saveRDS(x, f, compress = FALSE)
+    r2 <- run()
+    expect_equal(r2$path$heldout_before[1], r1$path$heldout_before[1] + 1000)
+    expect_identical(r2$spec, r1$spec)
+    r3 <- run(minAsymptote = .04)
+    expect_equal(r3$path$heldout_before[1], r1$path$heldout_before[1])
+    unlink(ck, recursive = TRUE)
   })
 }

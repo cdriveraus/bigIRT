@@ -379,18 +379,30 @@ bigIRT_modify_null_p <- function(x, null){
 #'   least `minSetItems` items is a candidate group dimension.
 #' @param dif Item parameters tested for DIF: `"B"` (intercept), `"A"`
 #'   (slope), or none.
+#' @param difCovariates The covariates tested for DIF, among
+#'   `personCovariates` and `responseCovariates`; `NULL` (default) tests all
+#'   of them. Each is a purified screen over every item, the costly part on
+#'   large data.
 #' @param asymptotes `"lower"`, `"upper"`, both or none.
 #' @param purify Purify the DIF tests (recommended: it sets the anchors).
+#' @param exploratory Look for group dimensions in the scores alone (the
+#'   leading directions of residual covariance), as well as in `itemSets`.
+#' @param nsimDim Data sets simulated from the fit for the null distribution
+#'   of the leading eigenvalue.
 #' @param minSetItems Smallest item set tested for a group dimension.
 #' @param cores Threads.
 #' @return A list of data.tables: `ability`, `dif` (with effect sizes),
 #'   `asymptotes`, `groups`; each with p-values adjusted by Benjamini-Hochberg
-#'   (`p_fdr`) within its kind.
+#'   (`p_fdr`) within its kind; and `dimensions`, the exploratory eigenpairs
+#'   with their null draws.
 #' @seealso [improveModel()], [scoreTest()]
 #' @export
 modificationTests <- function(fit, dat, personCovariates = character(), responseCovariates = character(),
-  itemSets = character(), dif = c("B", "A"), asymptotes = c("lower", "upper"), purify = TRUE,
+  itemSets = character(), dif = c("B", "A"), difCovariates = NULL, asymptotes = c("lower", "upper"), purify = TRUE,
   exploratory = TRUE, nsimDim = 19L, minSetItems = 3L, cores = 1L){
+  if(is.null(difCovariates)) difCovariates <- c(personCovariates, responseCovariates)
+  if(length(bad <- setdiff(difCovariates, c(personCovariates, responseCovariates))))
+    stop("difCovariates not among personCovariates or responseCovariates: ", paste(bad, collapse = ", "))
   dat <- data.table::as.data.table(dat)
   idc <- fit$call_args$id %||% "id"; itc <- fit$call_args$item %||% "Item"
   sc <- scoreContributions(fit, cores = cores)
@@ -417,7 +429,7 @@ modificationTests <- function(fit, dat, personCovariates = character(), response
   ab <- fdr(ab)
   ## DIF, purified, with effect sizes.
   dl <- list()
-  for(v in c(personCovariates, responseCovariates)) for(par in dif){
+  for(v in difCovariates) for(par in dif){
     cv <- if(v %in% personCovariates) pv(v) else {
       z <- dat[[v]]; o <- data.frame(z = if(is.character(z) || is.factor(z) || is.logical(z)) factor(z) else z)
       names(o) <- v; o
@@ -499,20 +511,33 @@ modificationTests <- function(fit, dat, personCovariates = character(), response
 #' kind and large enough to matter (`minEffect` change in the probability of
 #' a correct answer for DIF, `minAsymptote` for an asymptote, `minGroupSD` for
 #' a group dimension's SD on the logit scale); a batch must raise the held-out
-#' log-likelihood by at least `minGain`. Accepted batches are combined and the
-#' next round tests the combined model. The final model is refitted on all
-#' persons.
+#' log-likelihood by at least `minGain`.
+#'
+#' Within a round the kinds are tried in turn -- ability, then DIF, then
+#' asymptotes, then group dimensions -- each against the model as it stands
+#' after the batches kept before it, so a covariate's effect on ability is in
+#' the model before DIF along it is judged (DIF absorbs impact otherwise). The
+#' next round screens the result. A covariate tested for DIF only
+#' (`responseCovariates`) must have its ability effect in `personPreds`. The
+#' final model is refitted on all persons.
 #'
 #' Selection uses the data, so the final model's estimates and standard
 #' errors are conditional on it: the held-out gain is the honest measure of
 #' what the changes are worth, not the in-sample fit.
 #'
+#' On large data a run takes hours, so with `checkpoint` a directory keeps
+#' each completed step (the base fit, each round's screens, each batch's
+#' result and the fits kept) and a rerun resumes from them. A step is reused
+#' only when the data size, holdout, settings and model specification it was
+#' made under are identical; anything else is recomputed. Only completed steps
+#' are written. Fits are kept uncompressed and can be gigabytes.
+#'
 #' @param dat Long data, one row per response.
 #' @param score,id,item,scale,pl As for [fitIRT()]; the base model.
 #' @param personPreds Person predictors in the base model's ability
 #'   regression.
-#' @param personCovariates,responseCovariates,itemSets,dif,asymptotes What to
-#'   test; see [modificationTests()].
+#' @param personCovariates,responseCovariates,itemSets,dif,difCovariates,asymptotes
+#'   What to test; see [modificationTests()].
 #' @param holdout Share of persons held out to judge changes.
 #' @param alpha FDR level for candidates.
 #' @param minEffect,minAsymptote,minGroupSD Smallest changes worth adding.
@@ -530,18 +555,22 @@ modificationTests <- function(fit, dat, personCovariates = character(), response
 #' @param cores Threads.
 #' @param verbose Print progress.
 #' @param fitArgs Further [fitIRT()] arguments (default `laplaceRefine = "agq"`).
+#' @param checkpoint A directory to keep completed steps in, so that an
+#'   interrupted run resumes; `NULL` (default) keeps nothing.
 #' @return A `bigIRT_improved` object: `fit` (final model, all persons),
 #'   `spec` (the terms added), `path` (each batch tried: round, kind, terms,
-#'   held-out log-likelihood before and after, accepted), `screens` (the last
-#'   round's tests), `base_fit` (the base model on the training persons).
+#'   held-out log-likelihood before and after, gain and its z, accepted,
+#'   seconds to fit and evaluate), `screens` (the last round's tests),
+#'   `base_fit` (the base model on the training persons), `holdout_persons`,
+#'   `timing` (seconds: base fit, each round's screens, final fit).
 #' @seealso [modificationTests()], [heldoutLogLik()]
 #' @export
 improveModel <- function(dat, score = "score", id = "id", item = "Item", scale = "Scale", pl = 2L,
   personPreds = character(), personCovariates = character(), responseCovariates = character(),
-  itemSets = character(), dif = c("B", "A"), asymptotes = c("lower", "upper"),
+  itemSets = character(), dif = c("B", "A"), difCovariates = NULL, asymptotes = c("lower", "upper"),
   holdout = 0.2, alpha = 0.05, minEffect = 0.03, minAsymptote = 0.05, minGroupSD = 0.3,
   minZ = stats::qnorm(.95), minGain = 0, nsimDim = 19L, maxRounds = 3L, maxGroups = 2L, seed = 1L, cores = 1L,
-  verbose = TRUE, fitArgs = list(laplaceRefine = "agq")){
+  verbose = TRUE, fitArgs = list(laplaceRefine = "agq"), checkpoint = NULL){
   dat <- data.table::as.data.table(dat)
   if(!scale %in% names(dat)) { dat <- data.table::copy(dat); data.table::set(dat, j = scale, value = 1L) }
   persons <- unique(dat[[id]])
@@ -557,21 +586,40 @@ improveModel <- function(dat, score = "score", id = "id", item = "Item", scale =
     suppressWarnings(do.call(fitIRT, a))
   }
   say <- function(...) if(isTRUE(verbose)) message(sprintf(...))
+  ## What a cached step must match to be reused. Threads and printing do not
+  ## change results, so they are left out.
+  fp <- list(n = nrow(dat), cols = names(dat), holdout = sort(as.character(ho)),
+    base = base[c("score", "id", "item", "scale", "pl")],
+    fitArgs = base$fitArgs[setdiff(names(base$fitArgs), c("cores", "verbose"))],
+    tests = list(personCovariates, responseCovariates, itemSets, dif, difCovariates, asymptotes, alpha, minEffect,
+      minAsymptote, minGroupSD, minZ, minGain, nsimDim, maxGroups))
+  step <- bigIRT_modify_checkpoint(checkpoint, fp)
+  secs <- function(t0) proc.time()[[3]] - t0
+  timing <- list()
   spec <- list(personPreds = personPreds, abil = list(), dif = list(), lower = character(),
     upper = character(), groups = list())
-  cur <- fit_spec(spec, train); base_fit <- cur
-  cur_ho <- heldoutLogLik(cur, cores = cores)
+  b <- step("base", spec, function(){
+    t0 <- proc.time()[[3]]; f <- fit_spec(spec, train)
+    list(fit = f, h = heldoutLogLik(f, cores = cores), seconds = secs(t0))
+  })
+  cur <- b$fit; base_fit <- cur; cur_ho <- b$h; timing$base <- b$seconds
   say("base model: held-out log-likelihood %.1f", cur_ho$loglik)
   path <- list(); screens <- NULL
   for(round in seq_len(maxRounds)){
     covs_in <- vapply(spec$abil, function(a) a$covariate, "")
     pc_left <- setdiff(personCovariates, c(covs_in, personPreds))
-    dat_cur <- bigIRT_modify_build(dat, spec, base)$dat
     more_groups <- length(spec$groups) < maxGroups
-    screens <- modificationTests(cur, dat_cur, personCovariates = personCovariates,
-      responseCovariates = responseCovariates, itemSets = if(more_groups) itemSets else character(),
-      dif = dif, asymptotes = asymptotes, exploratory = more_groups && nsimDim > 0L, nsimDim = nsimDim,
-      cores = cores)
+    sr <- step(sprintf("round%d_screens", round), spec, function(){
+      t0 <- proc.time()[[3]]
+      dat_cur <- bigIRT_modify_build(dat, spec, base)$dat
+      s <- modificationTests(cur, dat_cur, personCovariates = personCovariates,
+        responseCovariates = responseCovariates, itemSets = if(more_groups) itemSets else character(),
+        dif = dif, difCovariates = difCovariates, asymptotes = asymptotes,
+        exploratory = more_groups && nsimDim > 0L, nsimDim = nsimDim,
+        cores = cores)
+      list(screens = s, seconds = secs(t0))
+    })
+    screens <- sr$screens; timing[[sprintf("round%d_screens", round)]] <- sr$seconds
     ## Candidates, kind by kind.
     cand <- list()
     ab <- screens$ability
@@ -608,7 +656,8 @@ improveModel <- function(dat, score = "score", id = "id", item = "Item", scale =
       if(length(keep)) cand$groups <- keep
     }
     if(!length(cand)){ say("round %d: nothing to add", round); break }
-    ## Each kind as a batch against the current model.
+    ## Each kind as a batch, in turn, against the model as it stands after
+    ## the batches kept before it in this round.
     add_to <- function(s, kind, x){
       if(kind == "ability") s$abil <- c(s$abil, x)
       if(kind == "dif") s$dif <- c(s$dif, unname(x))
@@ -618,33 +667,57 @@ improveModel <- function(dat, score = "score", id = "id", item = "Item", scale =
     }
     nterms <- function(kind, x) switch(kind, ability = length(x), dif = sum(lengths(lapply(x, `[[`, "items"))),
       asymptotes = length(x$lower) + length(x$upper), groups = length(x))
-    accepted <- character(); trial <- list()
-    for(kind in names(cand)){
+    ho_start <- cur_ho$loglik; kept <- 0L
+    for(kind in intersect(c("ability", "dif", "asymptotes", "groups"), names(cand))){
       s <- add_to(spec, kind, cand[[kind]])
-      f <- tryCatch(fit_spec(s, train), error = function(e) NULL)
-      h <- if(is.null(f)) NULL else tryCatch(heldoutLogLik(f, cores = cores), error = function(e) NULL)
-      gm <- if(is.null(h)) list(gain = NA_real_, z = NA_real_) else bigIRT_modify_gain(cur_ho, h)
-      ok <- isTRUE(gm$gain >= minGain && gm$z >= minZ)
+      tr <- step(sprintf("round%d_%s", round, kind), s, function(){
+        t0 <- proc.time()[[3]]
+        f <- tryCatch(fit_spec(s, train), error = function(e) NULL)
+        h <- if(is.null(f)) NULL else tryCatch(heldoutLogLik(f, cores = cores), error = function(e) NULL)
+        gm <- if(is.null(h)) list(gain = NA_real_, z = NA_real_) else bigIRT_modify_gain(cur_ho, h)
+        ok <- isTRUE(gm$gain >= minGain && gm$z >= minZ)
+        ## Only the fit that is kept is needed again.
+        list(fit = if(ok) f else NULL, h = h, gain = gm$gain, z = gm$z, ok = ok, seconds = secs(t0))
+      })
       path[[length(path) + 1L]] <- data.table::data.table(round = round, kind = kind, terms = nterms(kind, cand[[kind]]),
-        heldout_before = cur_ho$loglik, heldout_after = if(is.null(h)) NA_real_ else h$loglik,
-        gain = gm$gain, z = gm$z, accepted = ok)
+        heldout_before = cur_ho$loglik, heldout_after = if(is.null(tr$h)) NA_real_ else tr$h$loglik,
+        gain = tr$gain, z = tr$z, accepted = tr$ok, seconds = tr$seconds)
       say("round %d, %s: %d terms, held-out gain %.1f (z %.1f)%s", round, kind, nterms(kind, cand[[kind]]),
-        gm$gain, gm$z, if(ok) " (kept)" else "")
-      if(ok){ accepted <- c(accepted, kind); trial[[kind]] <- list(fit = f, h = h) }
+        tr$gain, tr$z, if(tr$ok) " (kept)" else "")
+      if(tr$ok){ spec <- s; cur <- tr$fit; cur_ho <- tr$h; kept <- kept + 1L }
     }
-    if(!length(accepted)) break
-    s <- spec; for(kind in accepted) s <- add_to(s, kind, cand[[kind]])
-    if(length(accepted) > 1L){
-      f <- fit_spec(s, train); h <- heldoutLogLik(f, cores = cores)
-      best <- accepted[which.max(vapply(trial, function(x) x$h$loglik, 0))]
-      if(h$loglik < trial[[best]]$h$loglik){ s <- add_to(spec, best, cand[[best]]); f <- trial[[best]]$fit; h <- trial[[best]]$h }
-    } else { f <- trial[[accepted]]$fit; h <- trial[[accepted]]$h }
-    say("round %d: held-out log-likelihood %.1f -> %.1f", round, cur_ho$loglik, h$loglik)
-    spec <- s; cur <- f; cur_ho <- h
+    if(!kept) break
+    say("round %d: held-out log-likelihood %.1f -> %.1f", round, ho_start, cur_ho$loglik)
   }
-  final <- fit_spec(spec, NULL)
-  structure(list(fit = final, spec = spec, path = data.table::rbindlist(path), screens = screens,
-    base_fit = base_fit, holdout_persons = ho), class = "bigIRT_improved")
+  fin <- step("final", spec, function(){
+    t0 <- proc.time()[[3]]; list(fit = fit_spec(spec, NULL), seconds = secs(t0))
+  })
+  timing$final <- fin$seconds
+  structure(list(fit = fin$fit, spec = spec, path = data.table::rbindlist(path, fill = TRUE), screens = screens,
+    base_fit = base_fit, holdout_persons = ho, timing = unlist(timing)), class = "bigIRT_improved")
+}
+
+## A step runner for improveModel(): with no directory, runs the step; with
+## one, returns the stored result when it was made under the same fingerprint
+## and specification, else runs the step and stores the result. Only a step
+## that completed is written, and it is written to a temporary name first so
+## that an interrupted write cannot leave a truncated file behind.
+bigIRT_modify_checkpoint <- function(dir, fp){
+  if(is.null(dir)) return(function(name, spec, run) run())
+  dir.create(dir, recursive = TRUE, showWarnings = FALSE)
+  function(name, spec, run){
+    f <- file.path(dir, paste0(name, ".rds"))
+    if(file.exists(f)){
+      x <- tryCatch(readRDS(f), error = function(e) NULL)
+      if(!is.null(x) && identical(x$fp, fp) && identical(x$spec, spec)) return(x$value)
+    }
+    v <- run()
+    tmp <- paste0(f, ".part")
+    saveRDS(list(fp = fp, spec = spec, value = v), tmp, compress = FALSE)
+    if(file.exists(f)) unlink(f)
+    file.rename(tmp, f)
+    v
+  }
 }
 
 #' @export
