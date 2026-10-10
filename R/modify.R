@@ -517,7 +517,11 @@ modificationTests <- function(fit, dat, personCovariates = character(), response
 #' asymptotes, then group dimensions -- each against the model as it stands
 #' after the batches kept before it, so a covariate's effect on ability is in
 #' the model before DIF along it is judged (DIF absorbs impact otherwise). The
-#' next round screens the result. A covariate tested for DIF only
+#' next round screens the result, for the kinds whose verdict could have
+#' changed: a kind is tried again only if it was kept, or a kind after it
+#' was, in the round before (a kind rejected in a round was already judged
+#' against every batch kept before it). Screens are made at each round's
+#' starting model. A covariate tested for DIF only
 #' (`responseCovariates`) must have its ability effect in `personPreds`. The
 #' final model is refitted on all persons.
 #'
@@ -605,16 +609,23 @@ improveModel <- function(dat, score = "score", id = "id", item = "Item", scale =
   cur <- b$fit; base_fit <- cur; cur_ho <- b$h; timing$base <- b$seconds
   say("base model: held-out log-likelihood %.1f", cur_ho$loglik)
   path <- list(); screens <- NULL
+  ## The kinds open to change. A kind rejected in a round already met every
+  ## batch kept before it, so it is tried again only if it was kept or a kind
+  ## after it was (otherwise nothing that could change its verdict changed,
+  ## and a retry would only refit the same candidates).
+  kinds <- c("ability", "dif", "asymptotes", "groups")
+  live <- kinds
   for(round in seq_len(maxRounds)){
     covs_in <- vapply(spec$abil, function(a) a$covariate, "")
     pc_left <- setdiff(personCovariates, c(covs_in, personPreds))
-    more_groups <- length(spec$groups) < maxGroups
+    more_groups <- length(spec$groups) < maxGroups && "groups" %in% live
     sr <- step(sprintf("round%d_screens", round), spec, function(){
       t0 <- proc.time()[[3]]
       dat_cur <- bigIRT_modify_build(dat, spec, base)$dat
       s <- modificationTests(cur, dat_cur, personCovariates = personCovariates,
         responseCovariates = responseCovariates, itemSets = if(more_groups) itemSets else character(),
-        dif = dif, difCovariates = difCovariates, asymptotes = asymptotes,
+        dif = if("dif" %in% live) dif else character(), difCovariates = difCovariates,
+        asymptotes = if("asymptotes" %in% live) asymptotes else character(),
         exploratory = more_groups && nsimDim > 0L, nsimDim = nsimDim,
         cores = cores)
       list(screens = s, seconds = secs(t0))
@@ -655,6 +666,7 @@ improveModel <- function(dat, score = "score", id = "id", item = "Item", scale =
       }
       if(length(keep)) cand$groups <- keep
     }
+    cand <- cand[intersect(names(cand), live)]
     if(!length(cand)){ say("round %d: nothing to add", round); break }
     ## Each kind as a batch, in turn, against the model as it stands after
     ## the batches kept before it in this round.
@@ -667,7 +679,7 @@ improveModel <- function(dat, score = "score", id = "id", item = "Item", scale =
     }
     nterms <- function(kind, x) switch(kind, ability = length(x), dif = sum(lengths(lapply(x, `[[`, "items"))),
       asymptotes = length(x$lower) + length(x$upper), groups = length(x))
-    ho_start <- cur_ho$loglik; kept <- 0L
+    ho_start <- cur_ho$loglik; kept <- character()
     for(kind in intersect(c("ability", "dif", "asymptotes", "groups"), names(cand))){
       s <- add_to(spec, kind, cand[[kind]])
       tr <- step(sprintf("round%d_%s", round, kind), s, function(){
@@ -684,10 +696,12 @@ improveModel <- function(dat, score = "score", id = "id", item = "Item", scale =
         gain = tr$gain, z = tr$z, accepted = tr$ok, seconds = tr$seconds)
       say("round %d, %s: %d terms, held-out gain %.1f (z %.1f)%s", round, kind, nterms(kind, cand[[kind]]),
         tr$gain, tr$z, if(tr$ok) " (kept)" else "")
-      if(tr$ok){ spec <- s; cur <- tr$fit; cur_ho <- tr$h; kept <- kept + 1L }
+      if(tr$ok){ spec <- s; cur <- tr$fit; cur_ho <- tr$h; kept <- c(kept, kind) }
     }
-    if(!kept) break
+    if(!length(kept)) break
     say("round %d: held-out log-likelihood %.1f -> %.1f", round, ho_start, cur_ho$loglik)
+    last_kept <- max(match(kept, kinds))
+    live <- kinds[kinds %in% kept | seq_along(kinds) < last_kept]
   }
   fin <- step("final", spec, function(){
     t0 <- proc.time()[[3]]; list(fit = fit_spec(spec, NULL), seconds = secs(t0))

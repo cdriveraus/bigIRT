@@ -174,6 +174,27 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     expect_equal(p1$heldout_before[p1$kind == "dif"], p1$heldout_after[p1$kind == "ability"])
   })
 
+  ## A kind rejected in a round is not tried again when only kinds before it
+  ## were kept: it was already judged against them. Here the round keeps g on
+  ## ability and rejects a batch of weak lower asymptotes; a second round
+  ## would refit the same batch (the previous build did).
+  test_that("improveModel does not retry a kind whose verdict cannot have changed", {
+    skip_on_cran()
+    set.seed(1); N <- 1500; J <- 10
+    g <- stats::rbinom(N, 1, .5)
+    th <- stats::rnorm(N) + .8 * g; a <- stats::runif(J, .9, 1.6); b <- stats::rnorm(J, 0, .8)
+    cc <- c(.12, .12, rep(0, J - 2))
+    ii <- rep(seq_len(N), J); jj <- rep(seq_len(J), each = N)
+    d <- data.frame(id = ii, Item = jj, Scale = 1, g = g[ii],
+      score = stats::rbinom(N * J, 1, cc[jj] + (1 - cc[jj]) * stats::plogis(a[jj] * th[ii] - b[jj])))
+    r <- suppressMessages(improveModel(d, pl = 2, personCovariates = "g", dif = character(), asymptotes = "lower",
+      minAsymptote = 0, nsimDim = 0L, maxRounds = 2L, cores = 1, verbose = FALSE))
+    p <- r$path
+    expect_identical(p$kind[p$round == 1], c("ability", "asymptotes"))
+    expect_identical(p$accepted[p$round == 1], c(TRUE, FALSE))
+    expect_false(any(p$round == 2 & p$kind == "asymptotes"))
+  })
+
   ## A checkpoint directory is reused only under the same settings. The test
   ## plants a wrong value in a stored step: a rerun with the same settings
   ## must return it (the step was reused, not recomputed), one with different

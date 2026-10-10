@@ -104,7 +104,11 @@ Within a round the kinds are tried in turn -- ability, then DIF, then
 asymptotes, then group dimensions -- each against the model as it stands
 after the batches kept before it, so a covariate's effect on ability is in
 the model before DIF along it is judged (DIF absorbs impact otherwise). The
-next round screens the result. A covariate tested for DIF only
+next round screens the result, for the kinds whose verdict could have
+changed: a kind is tried again only if it was kept, or a kind after it
+was, in the round before (a kind rejected in a round was already judged
+against every batch kept before it). Screens are made at each round's
+starting model. A covariate tested for DIF only
 (\code{responseCovariates}) must have its ability effect in \code{personPreds}. The
 final model is refitted on all persons.
 
