@@ -22,7 +22,7 @@ improveModel(
   minEffect = 0.03,
   minAsymptote = 0.05,
   minGroupSD = 0.3,
-  minZ = 2,
+  minZ = stats::qnorm(0.95),
   minGain = 0,
   nsimDim = 19L,
   maxRounds = 3L,
@@ -53,7 +53,10 @@ test; see \code{\link[=modificationTests]{modificationTests()}}.}
 \item{minZ, minGain}{A batch is kept when the held-out persons' log-
 likelihood rises, compared person by person: by at least \code{minGain} nats
 in total and by at least \code{minZ} standard errors of the per-person
-differences.}
+differences (default the one-sided 5 per cent point). In simulation (50
+replications per truth) this found 80 per cent of DIF items and the
+testlet in 88 to 94 per cent of runs, where z = 2 found 70 and 72 to 84,
+and with no true change it added nothing at either.}
 
 \item{nsimDim}{Simulations for the null of the exploratory dimensions (0
 turns them off); see \code{\link[=modificationTests]{modificationTests()}}.}

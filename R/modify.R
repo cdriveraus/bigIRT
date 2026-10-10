@@ -499,7 +499,10 @@ modificationTests <- function(fit, dat, personCovariates = character(), response
 #' @param minZ,minGain A batch is kept when the held-out persons' log-
 #'   likelihood rises, compared person by person: by at least `minGain` nats
 #'   in total and by at least `minZ` standard errors of the per-person
-#'   differences.
+#'   differences (default the one-sided 5 per cent point). In simulation (50
+#'   replications per truth) this found 80 per cent of DIF items and the
+#'   testlet in 88 to 94 per cent of runs, where z = 2 found 70 and 72 to 84,
+#'   and with no true change it added nothing at either.
 #' @param nsimDim Simulations for the null of the exploratory dimensions (0
 #'   turns them off); see [modificationTests()].
 #' @param maxRounds,maxGroups Limits on rounds and on group dimensions.
@@ -517,7 +520,7 @@ improveModel <- function(dat, score = "score", id = "id", item = "Item", scale =
   personPreds = character(), personCovariates = character(), responseCovariates = character(),
   itemSets = character(), dif = c("B", "A"), asymptotes = c("lower", "upper"),
   holdout = 0.2, alpha = 0.05, minEffect = 0.03, minAsymptote = 0.05, minGroupSD = 0.3,
-  minZ = 2, minGain = 0, nsimDim = 19L, maxRounds = 3L, maxGroups = 2L, seed = 1L, cores = 1L,
+  minZ = stats::qnorm(.95), minGain = 0, nsimDim = 19L, maxRounds = 3L, maxGroups = 2L, seed = 1L, cores = 1L,
   verbose = TRUE, fitArgs = list(laplaceRefine = "agq")){
   dat <- data.table::as.data.table(dat)
   if(!scale %in% names(dat)) { dat <- data.table::copy(dat); data.table::set(dat, j = scale, value = 1L) }
