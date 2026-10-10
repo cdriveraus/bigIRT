@@ -573,10 +573,9 @@ modificationTests <- function(fit, dat, personCovariates = character(), response
 #' @param cores Threads.
 #' @param verbose Print progress.
 #' @param fitArgs Further [fitIRT()] arguments (default `laplaceRefine = "agq"`).
-#'   Unlike [fitIRT()], perfect and zero scores are kept unless
-#'   `dropPerfectScores = TRUE` is given here: dropping all-correct persons
-#'   biases the upper-asymptote screen (null size 15 per cent on a simulated
-#'   adaptive bank, against 5 with them kept).
+#'   Leave `dropPerfectScores` at its default (FALSE): dropping all-correct
+#'   persons biases the upper-asymptote screen (null size 15 per cent on a
+#'   simulated adaptive bank, against 5 with them kept).
 #' @param checkpoint A directory to keep completed steps in, so that an
 #'   interrupted run resumes; `NULL` (default) keeps nothing.
 #' @return A `bigIRT_improved` object: `fit` (final model, all persons),
@@ -600,13 +599,7 @@ improveModel <- function(dat, score = "score", id = "id", item = "Item", scale =
     on.exit(if(!is.null(old)) assign(".Random.seed", old, globalenv())); set.seed(seed) }
     sample(persons, round(holdout * length(persons))) })
   train <- which(!dat[[id]] %in% ho)
-  ## Perfect and zero scores are kept unless asked otherwise: a marginal fit
-  ## needs no dropping, and dropping all-correct persons biases the
-  ## upper-asymptote screen (null size 15 per cent on a simulated adaptive
-  ## bank, 5 with them kept; diag_asymptote_bias.R in the model-building
-  ## study).
   fa <- utils::modifyList(list(cores = cores, verbose = 0, laplaceCertify = FALSE), fitArgs)
-  if(is.null(fa$dropPerfectScores)) fa$dropPerfectScores <- FALSE
   base <- list(score = score, id = id, item = item, scale = scale, pl = as.integer(pl), fitArgs = fa)
   fit_spec <- function(spec, rows){
     a <- bigIRT_modify_build(dat, spec, base)

@@ -71,10 +71,9 @@ turns them off); see \code{\link[=modificationTests]{modificationTests()}}.}
 \item{verbose}{Print progress.}
 
 \item{fitArgs}{Further \code{\link[=fitIRT]{fitIRT()}} arguments (default \code{laplaceRefine = "agq"}).
-Unlike \code{\link[=fitIRT]{fitIRT()}}, perfect and zero scores are kept unless
-\code{dropPerfectScores = TRUE} is given here: dropping all-correct persons
-biases the upper-asymptote screen (null size 15 per cent on a simulated
-adaptive bank, against 5 with them kept).}
+Leave \code{dropPerfectScores} at its default (FALSE): dropping all-correct
+persons biases the upper-asymptote screen (null size 15 per cent on a
+simulated adaptive bank, against 5 with them kept).}
 
 \item{checkpoint}{A directory to keep completed steps in, so that an
 interrupted run resumes; \code{NULL} (default) keeps nothing.}

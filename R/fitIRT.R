@@ -1718,7 +1718,17 @@ bigIRT_validate_fit_inputs <- function(dat, score, id, item, scale, pl, controls
 #' @param normaliseMean Numeric. Mean for normalization. Default is 0.
 #' @param laplaceCorrParam Character. Parameterisation used for the latent
 #'   correlation when `estimateAbilityCorr = TRUE`.
-#' @param dropPerfectScores Logical. Whether to drop perfect scores from each subject and item before estimation. Default is TRUE.
+#' @param dropPerfectScores Logical. Whether to drop subjects and items whose
+#'   training responses are all correct or all wrong before estimation.
+#'   Default is FALSE (TRUE until October 2026). Neither estimator needs it:
+#'   the ability prior keeps such a person's ability finite, and the item
+#'   priors keep such an item's parameters finite. Dropping them is not
+#'   harmless. All-correct and all-wrong students are exactly the responses
+#'   that speak against a free asymptote, and with them dropped the score test
+#'   of an upper asymptote rejected 15 per cent of true nulls on a simulated
+#'   adaptive bank (5 with them kept). With \code{priors = FALSE} an item with
+#'   all-same responses has no finite estimate, and the fit reports it as
+#'   diverged; drop such items, or keep the priors.
 #' @param trainingRows Integer vector. Rows of data to use for estimation of
 #'   parameters. Default is all rows in \code{dat}. Every item must keep at
 #'   least one training response, since there is nothing else from which to
@@ -1848,7 +1858,7 @@ fitIRT <- function(dat, score = 'score', id = 'id', item = 'Item', scale = 'Scal
   laplaceKeepCovariance = FALSE, laplaceDiagnostics = FALSE, laplacePlot = FALSE,
   laplacePlotEvery = 1L,
   normalise = FALSE, normaliseScale = 1, normaliseMean = 0,
-  dropPerfectScores = TRUE, trainingRows = 1:nrow(dat),
+  dropPerfectScores = FALSE, trainingRows = 1:nrow(dat),
   cores = 6, verbose = 0L, keepInternals = FALSE, ...){
 
   bigIRT_check_dots(list(...))

@@ -120,11 +120,18 @@
 * `improveModel()` tries a kind again in a later round only if it, or a kind
   after it, was kept in the round before; a rejected kind was already judged
   against everything kept before it, and retrying refitted the same batch.
-* `improveModel()` keeps perfect and zero scores unless `fitArgs` says
-  otherwise. With `fitIRT()`'s default of dropping them, the upper-asymptote
-  screen rejected 15 per cent of true nulls on a simulated adaptive bank (7
-  with random selection): all-correct persons are exactly the responses that
-  pull the upper score down. Kept, it holds 5.
+* **`fitIRT(dropPerfectScores = FALSE)` is now the default.** Persons (and
+  items) whose responses are all correct or all wrong are kept. Neither
+  estimator needs them dropped: the ability prior keeps such a person's
+  ability finite and the item priors such an item's parameters. Dropping them
+  biased what depends on them. With them dropped, the upper-asymptote screen
+  of `modificationTests()` rejected 15 per cent of true nulls on a simulated
+  adaptive bank (7 with random selection), because all-correct persons are
+  exactly the responses that pull the upper score down; kept, it holds 5.
+  Fits that relied on the old default now include these persons: pass
+  `dropPerfectScores = TRUE` to reproduce them. With `priors = FALSE` an item
+  with all-same responses has no finite estimate (reported as diverged), so
+  drop it or keep the priors.
 * Named item sets now take precedence over overlapping sets found from the
   scores alone: a labelled set was specified in advance and says what the
   dimension is; the exploratory route is for structure the labels miss.

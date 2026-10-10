@@ -69,7 +69,7 @@ fitIRT(
   normalise = FALSE,
   normaliseScale = 1,
   normaliseMean = 0,
-  dropPerfectScores = TRUE,
+  dropPerfectScores = FALSE,
   trainingRows = 1:nrow(dat),
   cores = 6,
   verbose = 0L,
@@ -587,7 +587,17 @@ during fitting. Default is FALSE.}
 
 \item{normaliseMean}{Numeric. Mean for normalization. Default is 0.}
 
-\item{dropPerfectScores}{Logical. Whether to drop perfect scores from each subject and item before estimation. Default is TRUE.}
+\item{dropPerfectScores}{Logical. Whether to drop subjects and items whose
+training responses are all correct or all wrong before estimation.
+Default is FALSE (TRUE until October 2026). Neither estimator needs it:
+the ability prior keeps such a person's ability finite, and the item
+priors keep such an item's parameters finite. Dropping them is not
+harmless. All-correct and all-wrong students are exactly the responses
+that speak against a free asymptote, and with them dropped the score test
+of an upper asymptote rejected 15 per cent of true nulls on a simulated
+adaptive bank (5 with them kept). With \code{priors = FALSE} an item with
+all-same responses has no finite estimate, and the fit reports it as
+diverged; drop such items, or keep the priors.}
 
 \item{trainingRows}{Integer vector. Rows of data to use for estimation of
 parameters. Default is all rows in \code{dat}. Every item must keep at
