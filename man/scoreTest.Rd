@@ -112,9 +112,9 @@ score is the score of a Bernoulli given the person's other responses, so
 the derivative of its predicted probability in the item's parameters is
 exact; applied to the one-step DIF estimate it gives the response's
 first-order change in the probability of a correct answer at the
-person's own ability. These are averaged per item (\code{effects}) and, for a
-person-level covariate, summed per person over the items they answered
-(\code{dtf}).}
+person's own ability. These are averaged per item (\code{effects}) and, with
+\code{purify} and a person-level covariate, summed per person over the
+flagged items they answered (\code{dtf}).}
 
 \item{nodes, cores}{Passed to \code{\link[=scoreContributions]{scoreContributions()}} when \code{fit} is a fit.}
 }
@@ -135,15 +135,19 @@ With \code{effects}: \code{effects}, per item and contrast (a factor level again
 the reference level; a continuous covariate's 90th against its 10th
 percentile over responses), the mean change in the probability of a
 correct answer over the item's responses at equal ability, signed (\code{dP})
-and unsigned (\code{dP_abs}); and \code{dtf}, per level or covariate quintile, the
-mean change in a person's expected number correct over the items they
-answered (\code{dT}, and \code{dprop} per item), relative to the reference level or
-the median covariate value, and the ability shift that would change
-their expected score as much (\code{dtheta}, one-dimensional models): how far
-DIF in the tested items moves the group's ability estimates, to first
-order. \code{dT_flagged} and \code{dtheta_flagged} use only the items flagged
-after FDR. Effects are first-order in the DIF estimate and, with
-\code{purify}, come from the unpurified stage.
+and unsigned (\code{dP_abs}), first-order in the DIF estimate. They are
+relative to the scale the other items set: with \code{purify}, the anchors;
+without, all items, which absorb any net DIF into the estimated impact.
+With \code{purify} and a person-level covariate (one-dimensional models), also
+\code{dtf}, the test-level effect of the flagged items per level or covariate
+quintile, relative to the reference group (the reference level, or the
+middle quintile): the mean change in a person's expected number correct
+over the items they answered (\code{dT_flagged}), and the ability shift that
+would change their expected score as much (\code{dtheta_flagged}) -- the bias
+DIF puts into a person's ability estimate when scored with these item
+parameters, to first order. Without anchors there is no test-level
+effect to report: with the covariate's ability effect estimated freely,
+the DIF effects of all items sum to about zero for each group.
 }
 \description{
 Tests whether item parameters depend on a covariate (differential item
