@@ -244,6 +244,24 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     expect_identical(vapply(k, `[[`, "", "name"), c("topic=T", "eigen2+"))
   })
 
+  ## A failed step is not stored: a rerun must try it again, not reuse the
+  ## failure (a 76-minute refit of a 20-million-response bank once failed and
+  ## was cached).
+  test_that("the checkpoint does not store a failed step", {
+    ck <- file.path(tempdir(), "improve_ck_fail")
+    unlink(ck, recursive = TRUE)
+    step <- bigIRT:::bigIRT_modify_checkpoint(ck, list(a = 1))
+    n <- 0L
+    bad <- function(){ n <<- n + 1L; list(gain = NA_real_, error = "fit failed") }
+    good <- function(){ n <<- n + 1L; list(gain = 2) }
+    step("round1_dif", list(), bad); step("round1_dif", list(), bad)
+    expect_identical(n, 2L)
+    expect_false(file.exists(file.path(ck, "round1_dif.rds")))
+    step("round1_dif", list(), good); step("round1_dif", list(), good)
+    expect_identical(n, 3L)
+    unlink(ck, recursive = TRUE)
+  })
+
   ## A checkpoint directory is reused only under the same settings. The test
   ## plants a wrong value in a stored step: a rerun with the same settings
   ## must return it (the step was reused, not recomputed), one with different

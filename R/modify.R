@@ -693,17 +693,23 @@ improveModel <- function(dat, score = "score", id = "id", item = "Item", scale =
       s <- add_to(spec, kind, cand[[kind]])
       tr <- step(sprintf("round%d_%s", round, kind), s, function(){
         t0 <- proc.time()[[3]]
-        f <- tryCatch(fit_spec(s, train), error = function(e) NULL)
-        h <- if(is.null(f)) NULL else tryCatch(heldoutLogLik(f, cores = cores), error = function(e) NULL)
+        ## A batch whose fit or held-out evaluation fails is rejected, and the
+        ## reason kept: a failure is not evidence against the change.
+        err <- NULL
+        f <- tryCatch(fit_spec(s, train), error = function(e){ err <<- conditionMessage(e); NULL })
+        h <- if(is.null(f)) NULL else tryCatch(heldoutLogLik(f, cores = cores),
+          error = function(e){ err <<- paste("heldoutLogLik:", conditionMessage(e)); NULL })
         gm <- if(is.null(h)) list(gain = NA_real_, z = NA_real_) else bigIRT_modify_gain(cur_ho, h)
         ok <- isTRUE(gm$gain >= minGain && gm$z >= minZ)
         ## Only the fit that is kept is needed again.
-        list(fit = if(ok) f else NULL, h = h, gain = gm$gain, z = gm$z, ok = ok, seconds = secs(t0))
+        list(fit = if(ok) f else NULL, h = h, gain = gm$gain, z = gm$z, ok = ok, seconds = secs(t0), error = err)
       })
       path[[length(path) + 1L]] <- data.table::data.table(round = round, kind = kind, terms = nterms(kind, cand[[kind]]),
         heldout_before = cur_ho$loglik, heldout_after = if(is.null(tr$h)) NA_real_ else tr$h$loglik,
-        gain = tr$gain, z = tr$z, accepted = tr$ok, seconds = tr$seconds)
-      say("round %d, %s: %d terms, held-out gain %.1f (z %.1f)%s", round, kind, nterms(kind, cand[[kind]]),
+        gain = tr$gain, z = tr$z, accepted = tr$ok, seconds = tr$seconds,
+        error = if(is.null(tr$error)) NA_character_ else tr$error)
+      if(!is.null(tr$error)) say("round %d, %s: %d terms, failed (%s)", round, kind, nterms(kind, cand[[kind]]), tr$error)
+      else say("round %d, %s: %d terms, held-out gain %.1f (z %.1f)%s", round, kind, nterms(kind, cand[[kind]]),
         tr$gain, tr$z, if(tr$ok) " (kept)" else "")
       if(tr$ok){ spec <- s; cur <- tr$fit; cur_ho <- tr$h; kept <- c(kept, kind) }
     }
@@ -742,8 +748,9 @@ bigIRT_modify_pick_groups <- function(gr, sets, used, slots, alpha, minGroupSD){
 ## A step runner for improveModel(): with no directory, runs the step; with
 ## one, returns the stored result when it was made under the same fingerprint
 ## and specification, else runs the step and stores the result. Only a step
-## that completed is written, and it is written to a temporary name first so
-## that an interrupted write cannot leave a truncated file behind.
+## that completed without error is written, and it is written to a temporary
+## name first so that an interrupted write cannot leave a truncated file
+## behind.
 bigIRT_modify_checkpoint <- function(dir, fp){
   if(is.null(dir)) return(function(name, spec, run) run())
   dir.create(dir, recursive = TRUE, showWarnings = FALSE)
@@ -754,6 +761,9 @@ bigIRT_modify_checkpoint <- function(dir, fp){
       if(!is.null(x) && identical(x$fp, fp) && identical(x$spec, spec)) return(x$value)
     }
     v <- run()
+    ## A step that failed (it carries an error) is not stored, so a rerun
+    ## tries it again rather than reusing the failure.
+    if(!is.null(v$error)) return(v)
     tmp <- paste0(f, ".part")
     saveRDS(list(fp = fp, spec = spec, value = v), tmp, compress = FALSE)
     if(file.exists(f)) unlink(f)
