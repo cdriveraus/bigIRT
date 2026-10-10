@@ -87,6 +87,23 @@
   `strucchange::gefp()` and `sctest()` run on bigIRT fits. With no DIF and
   impact modelled their outer-product decorrelation held 2.8 to 3.9 per cent
   where `scoreTest()` held 4.5 to 5.0.
+* `modificationTests()` tests candidate changes to a fitted model at the
+  fit: covariates of ability, DIF (purified, with effect sizes), per-item
+  lower and upper asymptotes (exact from each response's leave-one-out
+  probability, P being linear in c and d), and group dimensions for item
+  sets (the variance-component score test, from each person's posterior
+  expectation of (sum g)^2 + sum h over the set). Dimensions need no item
+  covariate: M = sum E[g g' + diag(h)] is the score for residual covariance
+  among items, so its leading eigenvector, found without forming M (M v is
+  one quadrature pass), proposes the dimension most worth adding, against a
+  simulated null. `improveModel()` refits each kind of change as a batch and
+  keeps it only if the held-out persons' marginal log-likelihood rises,
+  paired by person (`heldoutLogLik()`, which adds the prior's normalising
+  constant the quadrature value leaves out). Every score is checked against
+  finite differences of brute-force integration; on a simulation with one of
+  each it added the two ability covariates and not the null one, DIF on
+  exactly the three DIF items, and the testlet, with or without the topic
+  that defines it.
 
 # bigIRT 0.2.0
 

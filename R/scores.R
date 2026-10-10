@@ -112,7 +112,7 @@ bigIRT_score_item_free <- function(sdat, slots){
 ## state is read back from `fit$pars`, and checked against the fit's own
 ## row-level parameters, which a normalised fit no longer matches.
 bigIRT_score_setup <- function(fit, cores = 1L, jitter = 1e-6, person_tol = 1e-10,
-  exclude_items = NULL, add_preds = NULL){
+  exclude_items = NULL, add_preds = NULL, rows = NULL){
   if(!inherits(fit, "bigIRT_fit")) stop("`fit` must be a fit from fitIRT().")
   int <- fit$internals
   sdat <- if(!is.null(int$sdat)) int$sdat else fit$prepared
@@ -134,7 +134,9 @@ bigIRT_score_setup <- function(fit, cores = 1L, jitter = 1e-6, person_tol = 1e-1
       logitCpars = as.numeric(p$logitCpars), logitCbeta = mat0(p$logitCbeta, 1L),
       logitDpars = as.numeric(p$logitDpars), logitDbeta = mat0(p$logitDbeta, 1L))
   }
-  rc <- bigIRT_laplace_row_context(sdat)
+  ## The training rows by default; other rows (held-out persons, R/modify.R)
+  ## on request.
+  rc <- if(is.null(rows)) bigIRT_laplace_row_context(sdat) else bigIRT_laplace_row_context(sdat, rows = as.integer(rows))
   if(!length(rc$rows)) stop("This fit has no training responses.")
   ## The state must reproduce the fit's own row-level item parameters. A fit
   ## with normalise = TRUE moved those (and the person side) onto another

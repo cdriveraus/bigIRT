@@ -17,5 +17,7 @@ utils::globalVariables(c(
   ## score-test tables, in scoreTest
   "covariate", "p_fdr", "p_holm", "anchor", "stage", "item", "ability_adjusted",
   ## score-test effect tables, in scoreTest
-  "dP", "dpdtheta", "person", "items", "dT", "slope"
+  "dP", "dpdtheta", "person", "items", "dT", "slope",
+  ## modification tables, in modificationTests and improveModel
+  "dP_abs", "form", "n", "LM", "kind", "set", "source", "level", "side", "estimate", "tau2", "z"
 ))

@@ -198,7 +198,8 @@ bigIRT_agq_fg_cpp_impl <- function(id, score, theta_mode, precision,
   D_ref, D_fixed_value, D_beta_row, D_pred,
   Abilitybeta, invspApars, invspAbeta, Bpars, Bbeta, logitCpars, logitCbeta, logitDpars, logitDbeta,
   prior_mean, prior_precision, free_mask, rule, want_person = FALSE, grain_size = 64L,
-  block_items = integer(0), row_out = 0L, slot_out = integer(0), row_hold = integer(0)){
+  block_items = integer(0), row_out = 0L, slot_out = integer(0), row_hold = integer(0),
+  vc_group = integer(0), vc_n = 0L, mv_v = matrix(0, 0, 0)){
   nr <- length(id); K <- ncol(theta_mode)
   .Call(`_bigIRT_agq_fg_cpp_impl`,
     as.integer(id), as.integer(score), as.matrix(theta_mode), as.numeric(precision),
@@ -229,7 +230,13 @@ bigIRT_agq_fg_cpp_impl <- function(id, score, theta_mode, precision,
     ## slots listed, 0-based (R/scores.R).
     as.integer(row_out)[1], as.integer(slot_out),
     ## Rows held out of the posterior but scored (purification); empty for none.
-    as.integer(row_hold))
+    as.integer(row_hold),
+    ## Group-variance scores: a candidate set label per row (0 none), and the
+    ## number of sets (R/modify.R); 0 for none.
+    as.integer(vc_group), as.integer(vc_n)[1],
+    ## Residual-covariance products: each row's weight per direction (rows x
+    ## m), for the matrix-free M v of R/modify.R; 0 x 0 for none.
+    as.matrix(mv_v))
 }
 
 ## Second-order Laplace (src/laplace2_backend.cpp): the leading correction to
