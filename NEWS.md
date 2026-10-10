@@ -126,8 +126,8 @@
   with random selection): all-correct persons are exactly the responses that
   pull the upper score down. Kept, it holds 5.
 * Named item sets now take precedence over overlapping sets found from the
-  scores alone; on a simulated adaptive bank the leading direction picked out
-  half a topic with a larger z than the whole.
+  scores alone: a labelled set was specified in advance and says what the
+  dimension is; the exploratory route is for structure the labels miss.
 * Asymptote tests: an item whose other asymptote is free now uses its fitted
   value (it used 0 or 1, so a second round after freeing c tested d with the
   wrong derivative); a fit with every item fixed no longer errors; and each

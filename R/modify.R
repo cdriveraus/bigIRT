@@ -732,8 +732,7 @@ improveModel <- function(dat, score = "score", id = "id", item = "Item", scale =
 ## at most `slots` of them. Named sets (from item labels) come first, by z,
 ## then sets found from the scores alone: a labelled set was specified in
 ## advance and says what the dimension is, and the exploratory route is for
-## structure the labels miss. Under adaptive designs the leading direction
-## can single out part of a named set with a larger z than the whole.
+## structure the labels miss.
 bigIRT_modify_pick_groups <- function(gr, sets, used, slots, alpha, minGroupSD){
   gr <- gr[p_fdr < alpha & sqrt(tau2) >= minGroupSD]
   gr <- gr[order(source == "eigen", -z)]
