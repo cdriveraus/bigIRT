@@ -600,8 +600,14 @@ modificationTests <- function(fit, dat, personCovariates = character(), response
   ## DIF, purified, with effect sizes.
   dl <- list()
   for(v in difCovariates) for(par in dif){
+    ## A response covariate with few values is a factor, as a person
+    ## covariate is (pv): read as continuous, a 0/1 indicator that is rarely
+    ## 1 got an effect contrast of zero (on Mindsteps, repeated attempts: 434
+    ## items significant, none passing the effect floor).
     cv <- if(v %in% personCovariates) pv(v) else {
-      z <- dat[[v]]; o <- data.frame(z = if(is.character(z) || is.factor(z) || is.logical(z)) factor(z) else z)
+      z <- dat[[v]]
+      o <- data.frame(z = if(is.character(z) || is.factor(z) || is.logical(z) ||
+        length(unique(stats::na.omit(z))) <= 4L) factor(z) else z)
       names(o) <- v; o
     }
     r <- tryCatch(suppressWarnings(scoreTest(fit, cv, parameters = par, purify = purify, effects = TRUE, cores = cores,

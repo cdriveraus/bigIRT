@@ -197,6 +197,14 @@
 
 ## Fixes
 
+* A 0/1 response covariate that is rarely 1 (a repeated attempt at an item,
+  say) got a DIF effect size of zero on every item: read as continuous, its
+  effect contrast was its 90th against its 10th percentile, both 0. No DIF
+  along it could pass `improveModel()`'s effect floor however strong (on
+  Mindsteps 434 items significant, none kept). `modificationTests()` now
+  treats a response covariate with four or fewer values as a factor, as it
+  already did a person covariate, and `scoreTest()` contrasts a covariate's
+  range when its 10th and 90th percentiles coincide.
 * The Laplace and quadrature L-BFGS search now also stops ("noise_floor")
   when the objective has fallen by less than a tenth of the tolerance over
   ten iterations together. It stopped only when the predicted gain fell

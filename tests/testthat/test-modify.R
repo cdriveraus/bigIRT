@@ -371,6 +371,36 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     expect_lte(length(unlist(lapply(r$spec$dif, `[[`, "items"))), 5L)
   })
 
+  ## A 0/1 response covariate that is rarely 1 (a repeated attempt, 6.5 per
+  ## cent of Mindsteps responses) has equal 10th and 90th percentiles. Read as
+  ## continuous, its DIF effect contrast was zero for every item, so no item
+  ## could pass the effect floor however strong its DIF: on Mindsteps 434
+  ## items were significant and none was kept. Both routes are checked: the
+  ## screen treats it as a factor, and scoreTest given it as a number
+  ## contrasts its range.
+  test_that("a rare 0/1 response covariate's DIF has a real effect size", {
+    skip_on_cran()
+    set.seed(43); N <- 3000; J <- 20
+    th <- stats::rnorm(N); a <- stats::runif(J, .9, 1.6); b <- stats::rnorm(J, 0, .8)
+    ii <- rep(seq_len(N), J); jj <- rep(seq_len(J), each = N)
+    rep1 <- stats::rbinom(N * J, 1, .07)
+    dif <- rep(0, J); dif[1:3] <- 1
+    eta <- a[jj] * th[ii] - b[jj] + dif[jj] * rep1
+    d <- data.frame(id = ii, Item = jj, Scale = 1, rep1 = rep1, score = stats::rbinom(N * J, 1, stats::plogis(eta)))
+    f <- suppressWarnings(fitIRT(d, pl = 2, laplaceRefine = "agq", cores = 1, verbose = 0, laplaceCertify = FALSE,
+      normalise = FALSE))
+    mt <- modificationTests(f, d, responseCovariates = "rep1", dif = "B", asymptotes = character(),
+      exploratory = FALSE, cores = 1)
+    x <- mt$dif[item %in% as.character(1:3)]
+    expect_true(all(x$kind == "factor"))
+    expect_true(all(x$p_fdr < .05))
+    expect_true(all(x$dP_abs > .03))
+    r <- suppressWarnings(scoreTest(f, data.frame(rep1 = d$rep1), parameters = "B", form = "linear", effects = TRUE))
+    e <- r$effects[item %in% as.character(1:3)]
+    expect_true(all(e$dP > .03))
+    expect_match(e$contrast[1], "maximum vs minimum")
+  })
+
   ## Asymptotes: the screened selection and the pooled alternative (free on
   ## every item) are both tried, and the better of those that pass is kept.
   test_that("improveModel weighs pooled asymptotes against the screened selection", {

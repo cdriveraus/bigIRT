@@ -1623,6 +1623,14 @@ bigIRT_score_test_items <- function(sc, zall, zlevel, parameters, form, by, item
     own_dP <- rep(NA_real_, nrow(R))
     if(form != "factor"){
       at <- attr(G, "at"); qz <- stats::quantile(as.numeric(z), c(.1, .5, .9), names = FALSE)
+      qlab <- "90th vs 10th percentile"
+      ## A covariate concentrated on one value -- a 0/1 indicator that is
+      ## rarely 1, such as a repeated attempt -- has equal 10th and 90th
+      ## percentiles, and the contrast was zero for every item, so no DIF
+      ## along it could pass an effect floor. Its range is used instead.
+      if(qz[3] == qz[1]){
+        qz[c(1, 3)] <- range(as.numeric(z), na.rm = TRUE); qlab <- "maximum vs minimum"
+      }
       dg <- at(qz[3]) - at(qz[1]); g_med <- as.numeric(at(qz[2]))
     }
   }
@@ -1715,7 +1723,7 @@ bigIRT_score_test_items <- function(sc, zall, zlevel, parameters, form, by, item
       } else {
         d <- as.numeric(dPs %*% as.numeric(dg %*% E))
         effs[[length(effs) + 1L]] <- data.table::data.table(item = g,
-          contrast = sprintf("%.3g vs %.3g (90th vs 10th percentile)", qz[3], qz[1]),
+          contrast = sprintf("%.3g vs %.3g (%s)", qz[3], qz[1], qlab),
           n = length(u), dP = mean(d), dP_abs = mean(abs(d)))
         own_dP[u] <- rowSums(dPs * (sweep(Gu, 2, g_med) %*% E))
       }
