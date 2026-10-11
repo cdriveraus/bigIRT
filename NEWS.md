@@ -195,6 +195,19 @@
   add sets one at a time and orthogonally; on Mindsteps the three subdomains
   as correlated dimensions predicted held-out students far better.
 
+## Fixes
+
+* The Laplace and quadrature L-BFGS search now also stops ("noise_floor")
+  when the objective has fallen by less than a tenth of the tolerance over
+  ten iterations together. It stopped only when the predicted gain fell
+  below the tolerance, which it need never do when the gradient is not quite
+  the derivative of what is evaluated -- one person whose mode cannot be
+  resolved is enough -- while line searches keep accepting steps on the
+  objective's noise. A 3-D 3PL fit in the model-building simulations ran to
+  the 500-iteration cap this way on Linux (3,700 evaluations, the objective
+  flat to 3e-5 nats), turning a two-minute replication into hours; on
+  Windows the same fit's noise happened to stop it at iteration 31.
+
 # bigIRT 0.2.0
 
 ## Joint MAP in C++, and no more Stan
