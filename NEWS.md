@@ -157,6 +157,40 @@
   wrong derivative); a fit with every item fixed no longer errors; and each
   test reports `identified`, the share of the asymptote's information left
   once the item's own parameters are projected out.
+* `scoreTest(contributions = )` takes `scoreContributions(fit)` already
+  computed, for when the fit itself is passed (for `purify` or `adjust`)
+  and the pass over the data would otherwise be repeated; contributions from
+  another fit are refused. `modificationTests()` now computes them once for
+  all its DIF screens, where it computed them again for each covariate.
+* `modificationTests(shape = TRUE)` tests each item's response curve for
+  shape the model lacks: the Hermite terms He2 and He3 of the item's
+  composite, entered in its linear predictor, a 2-df score test per item with
+  one-step coefficients and the largest change they make to the curve
+  (`dP`). The scores are posterior expectations from the quadrature kernel
+  (`shape_out` in `src/agq_backend.cpp`), checked against finite differences
+  of brute-force integration. A curve that rises, flattens and rises again,
+  or flattens early, shows here when no asymptote or DIF covariate captures
+  it.
+* The exploratory dimension screen now proposes its sets on one random half
+  of the persons and tests and sizes them on the other. Found and tested on
+  the same persons, the leading eigenvector's set was tested against a null
+  that had not been chosen to fit it. Set membership still comes from the
+  direction found on all persons.
+* `improveModel()` judges DIF one covariate at a time, and before a
+  covariate's DIF adds its effect on ability if the model lacks one
+  (`difImpact = TRUE`): the covariate's basis columns the ability model does
+  not already span. A DIF covariate without impact modelled has its impact
+  absorbed by DIF on every item.
+* `improveModel()` tries two ways of adding asymptotes and keeps the better
+  if it passes: the items the screen selects, or every item free under a
+  hierarchical prior (`asymptotePooled = TRUE`), which needs no selection and
+  does not overstate the items that happen to pass.
+* With item sets that partition the items (`partitions = TRUE`),
+  `improveModel()` also tries the partition as correlated dimensions, one
+  per set, as an alternative to a group dimension for its strongest set,
+  and keeps the better if it passes. Group dimensions on a general ability
+  add sets one at a time and orthogonally; on Mindsteps the three subdomains
+  as correlated dimensions predicted held-out students far better.
 
 # bigIRT 0.2.0
 

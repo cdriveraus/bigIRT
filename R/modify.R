@@ -138,6 +138,72 @@ bigIRT_modify_asymptotes <- function(fit, sc, sides = c("lower", "upper"), minN 
   data.table::rbindlist(out)
 }
 
+## Per-item tests of the response function's SHAPE: curvature in ability that
+## the item's own parameters (intercept, slope, asymptotes) cannot express.
+## Two terms are added to the item's linear predictor,
+## gamma2 He2(t) + gamma3 He3(t), with t the person's ability along the
+## item's loadings and He2 = t^2 - 1, He3 = t^3 - 3t (Hermite polynomials,
+## orthogonal to 1 and t under a standard normal ability). Their scores are
+## exact posterior expectations from one quadrature pass (the kernel's
+## `shape_out`); the item's free parameters are projected out (C(alpha)) and
+## the expected information is that of the leave-one-out Bernoulli, as for
+## every item test here. Two-sided, 2 df. A significant item is one whose
+## curve bends where the model's cannot: a plateau, a dip, a curve steeper on
+## one side than the other. Returns item, n, LM, df, p, the one-step gammas,
+## and dP: the largest change they make in the probability of a correct
+## response over t in [-2.5, 2.5] along the item's fitted curve.
+bigIRT_modify_shape <- function(fit, cores = 1L, nodes = NULL, minN = 50L){
+  st <- bigIRT_score_setup(fit, cores = cores)
+  sdat <- st$sdat; K <- st$K
+  slots <- bigIRT_score_free_slots(sdat)
+  rule <- bigIRT_score_rule(fit, K, nodes)
+  aq <- do.call(bigIRT_agq_fg_cpp_impl, c(st$args, list(theta_mode = st$posterior$theta_mode,
+    precision = st$posterior$precision, rule = rule, row_out = 1L, slot_out = as.integer(slots),
+    row_hold = if(any(st$hold == 1L)) st$hold else integer(0), shape_out = 1L)))
+  rc <- st$rc
+  ns <- length(slots)
+  sm <- aq$row_scores; sh <- aq$shape
+  g0 <- sm[, ns + 1L]; pp <- sm[, ns + 2L]
+  y <- as.integer(sdat$score[rc$rows])
+  he2 <- sh[, 2] - g0
+  he3 <- sh[, 3] - 3 * sh[, 1]
+  S <- sm[, seq_len(ns), drop = FALSE]
+  free <- bigIRT_score_item_free(sdat, slots)
+  item_labels <- rownames(fit$pars$B) %||% as.character(seq_len(sdat$Nitems))
+  ## The item's fitted curve along t, for the effect size.
+  re <- bigIRT_laplace_row_effective(st$state, sdat, thetaBase = matrix(0, st$N, K), rows = rc$rows[!duplicated(rc$items)])
+  first <- rc$items[!duplicated(rc$items)]
+  anorm <- sqrt(rowSums(re$loadings^2))
+  tg <- seq(-2.5, 2.5, by = .05)
+  keep_row <- if(any(st$hold == 1L)) st$hold == 0L else rep(TRUE, length(y))
+  by_item <- split(which(keep_row), rc$items[keep_row])
+  out <- vector("list", length(by_item))
+  for(ix in seq_along(by_item)){
+    j <- as.integer(names(by_item)[ix]); u <- by_item[[ix]]
+    if(length(u) < minN) next
+    nuis <- which(free[j, ])
+    Sa <- cbind(S[u, nuis, drop = FALSE], he2[u], he3[u])
+    info <- bigIRT_score_expected_info(Sa, y[u], pp[u])
+    m <- ncol(Sa)
+    pc <- tryCatch(bigIRT_score_lm_pieces(matrix(1, length(u), 1), matrix(1, length(u), 1), Sa, info,
+      c(m - 1L, m), seq_len(m - 2L)), error = function(e) NULL)
+    if(is.null(pc)) next
+    V <- as.matrix(pc$V); U <- pc$Ustar
+    pv <- bigIRT_score_pinv(V)
+    LM <- as.numeric(crossprod(U, pv$inv %*% U))
+    gam <- as.numeric(pv$inv %*% U)
+    f <- match(j, first)
+    eta0 <- anorm[f] * tg - re$b_row[f]
+    cc <- re$c_row[f]; dd <- re$d_row[f]
+    P0 <- cc + (dd - cc) * stats::plogis(eta0)
+    P1 <- cc + (dd - cc) * stats::plogis(eta0 + gam[1] * (tg^2 - 1) + gam[2] * (tg^3 - 3 * tg))
+    out[[ix]] <- data.table::data.table(item = item_labels[j], n = length(u), LM = LM, df = pv$rank,
+      p = stats::pchisq(LM, pv$rank, lower.tail = FALSE), gamma2 = gam[1], gamma3 = gam[2],
+      dP = max(abs(P1 - P0)))
+  }
+  data.table::rbindlist(out)
+}
+
 ## The data and fitIRT() arguments for a model specification: the base
 ## arguments plus the terms added so far. Ability terms are indicators (a
 ## factor, or few values) or a centred 3-df natural spline of a person
@@ -147,6 +213,14 @@ bigIRT_modify_asymptotes <- function(fit, sc, sides = c("lower", "upper"), minN 
 ## Freed asymptotes go through itemDat with pl raised to 3 or 4; group
 ## dimensions through `loadings`, each set's items loading on their own
 ## scale and on the set's dimension, uncorrelated with the others.
+##
+## Also: `spec$impact`, covariates whose effect on ability is added (the
+## response-level basis, only the columns the ability predictors do not
+## already span: a DIF covariate's impact must be in the model before its DIF
+## is judged); `spec$pooled`, the sides ("lower", "upper") whose asymptote is
+## freed on every item, pooled by the asymptote priors; `spec$partition`, an
+## item-set column that covers every item, whose levels become correlated
+## ability dimensions.
 bigIRT_modify_build <- function(dat, spec, base){
   d <- data.table::copy(data.table::as.data.table(dat))
   it <- as.character(d[[base$item]])
@@ -157,6 +231,15 @@ bigIRT_modify_build <- function(dat, spec, base){
     for(k in seq_len(ncol(B))) data.table::set(d, j = nm[k], value = B[, k])
     pp <- c(pp, nm)
   }
+  for(v in spec$impact){
+    z <- d[[v]]
+    B <- bigIRT_modify_basis(z, if(is.character(z) || is.factor(z) || is.logical(z) ||
+      length(unique(stats::na.omit(z))) <= 4L) "factor" else "linear", NULL)
+    keep <- bigIRT_modify_unspanned(d, pp, B)
+    nm <- paste0(".imp_", make.names(v), "_", seq_len(ncol(B)))
+    for(k in keep) data.table::set(d, j = nm[k], value = B[, k])
+    pp <- c(pp, nm[keep])
+  }
   Bp <- character(); Ap <- character()
   for(t in spec$dif){
     B <- bigIRT_modify_basis(d[[t$covariate]], t$kind, NULL)
@@ -166,17 +249,23 @@ bigIRT_modify_build <- function(dat, spec, base){
     if(t$parameter == "B") Bp <- c(Bp, nm) else Ap <- c(Ap, nm)
   }
   pl <- base$pl
-  if(length(spec$upper)) pl <- 4L else if(length(spec$lower)) pl <- max(pl, 3L)
+  free_c <- "lower" %in% spec$pooled; free_d <- "upper" %in% spec$pooled
+  if(length(spec$upper) || free_d) pl <- 4L else if(length(spec$lower) || free_c) pl <- max(pl, 3L)
   items <- unique(it)
   itemDat <- NA
   if(pl > base$pl){
     itemDat <- data.frame(items, B = NA_real_,
-      C = if(base$pl >= 3L) NA_real_ else ifelse(items %in% spec$lower, NA_real_, 0),
-      D = if(base$pl >= 4L) NA_real_ else ifelse(items %in% spec$upper, NA_real_, 1))
+      C = if(base$pl >= 3L || free_c) NA_real_ else ifelse(items %in% spec$lower, NA_real_, 0),
+      D = if(base$pl >= 4L || free_d) NA_real_ else ifelse(items %in% spec$upper, NA_real_, 1))
     names(itemDat)[1] <- base$item
     if(pl < 4L) itemDat$D <- NULL
+    ## Every asymptote free on both sides: nothing left to fix.
+    if(all(is.na(itemDat$C)) && (is.null(itemDat$D) || all(is.na(itemDat$D)))) itemDat <- NA
   }
-  scale <- base$scale; loadings <- NA
+  scale <- if(length(spec$partition)) spec$partition else base$scale
+  loadings <- NA
+  fa <- base$fitArgs
+  if(length(spec$partition)) fa$estimateAbilityCorr <- TRUE
   if(length(spec$groups)){
     sc0 <- as.character(d[[base$scale]])
     own <- tapply(sc0, it, function(x) x[1])
@@ -192,8 +281,27 @@ bigIRT_modify_build <- function(dat, spec, base){
   }
   args <- c(list(dat = d, score = base$score, id = base$id, item = base$item, scale = scale, pl = pl,
     personPreds = pp, BitemPreds = Bp, AitemPreds = Ap, itemSpecificBetas = length(c(Bp, Ap)) > 0,
-    itemDat = itemDat, loadings = loadings, normalise = FALSE), base$fitArgs)
+    itemDat = itemDat, loadings = loadings, normalise = FALSE), fa)
   args
+}
+
+## Which columns of B add to the span of the ability predictors `pp` (with an
+## intercept), judged on up to 200,000 evenly spaced rows. A covariate whose
+## effect is already in the model in another form (context indicators split
+## into a person mean and a deviation, say) adds nothing; its other levels do.
+bigIRT_modify_unspanned <- function(d, pp, B, max_rows = 2e5L, tol = 1e-7){
+  n <- nrow(d)
+  idx <- if(n > max_rows) unique(round(seq(1, n, length.out = max_rows))) else seq_len(n)
+  X <- matrix(1, length(idx), 1L)
+  if(length(pp)) X <- cbind(X, as.matrix(d[idx, pp, with = FALSE]))
+  r0 <- qr(X, tol = tol)$rank
+  keep <- integer(0)
+  for(k in seq_len(ncol(B))){
+    X1 <- cbind(X, B[idx, k])
+    r1 <- qr(X1, tol = tol)$rank
+    if(r1 > r0){ X <- X1; r0 <- r1; keep <- c(keep, k) }
+  }
+  keep
 }
 
 ## A covariate's basis: indicators for a factor or few values, else a centred
@@ -232,7 +340,9 @@ bigIRT_modify_basis <- function(z, kind, id = NULL){
 ## three-subdomain model shows to be distinct. The test itself (z) uses the
 ## observed outer product, which is right under the null.
 bigIRT_modify_groups <- function(fit, sc, sets, cores = 1L, nodes = NULL, max_proj = 200L,
-  nsimNull = 2L, seed = 1L){
+  nsimNull = 2L, seed = 1L, persons = NULL){
+  ## `persons` (logical, one per person): sum over these persons only -- the
+  ## half not used to choose a set from the scores (modificationTests()).
   if(!length(sets)) return(NULL)
   ## The kernel takes one set per response, so overlapping sets (a subdomain
   ## and a competence area within it) cannot share a pass: labelling them in
@@ -260,14 +370,16 @@ bigIRT_modify_groups <- function(fit, sc, sets, cores = 1L, nodes = NULL, max_pr
     for(l in soi_of) Tm[, l$ks] <- bigIRT_modify_vc_scores(fit, l$soi, st = s, rule = rule)
     Tm
   }
-  Tm <- scores(st)
+  pk <- if(is.null(persons)) rep(TRUE, st$N) else as.logical(persons)
+  Tm <- scores(st)[pk, , drop = FALSE]
   V0 <- rep(NA_real_, length(sets))
   if(nsimNull > 0L){
     old <- if(exists(".Random.seed", globalenv())) get(".Random.seed", globalenv()) else NULL
     on.exit(if(!is.null(old)) assign(".Random.seed", old, globalenv()))
     set.seed(seed)
     ## (A matrix even for one set, which vapply would return as a vector.)
-    V0 <- rowMeans(matrix(vapply(seq_len(nsimNull), function(b) colSums(scores(bigIRT_modify_null_state(st))^2),
+    V0 <- rowMeans(matrix(vapply(seq_len(nsimNull), function(b)
+      colSums(scores(bigIRT_modify_null_state(st))[pk, , drop = FALSE]^2),
       numeric(length(sets))), nrow = length(sets)))
   }
   out <- list()
@@ -278,7 +390,7 @@ bigIRT_modify_groups <- function(fit, sc, sets, cores = 1L, nodes = NULL, max_pr
     if(persons < 10L || length(its) < 2L) next
     U <- sum(t); V <- V_raw <- sum(t^2)
     Psi <- tryCatch(if(sum(sc$item_free[match(its, sc$item_labels), ]) <= max_proj)
-      estfun.bigIRT_scores(sc, items = its) else NULL, error = function(e) NULL)
+      estfun.bigIRT_scores(sc, items = its)[pk, , drop = FALSE] else NULL, error = function(e) NULL)
     if(!is.null(Psi) && ncol(Psi)){
       tp <- crossprod(Psi, t); pinv <- bigIRT_score_pinv(crossprod(Psi))$inv
       U <- U - as.numeric(crossprod(tp, pinv %*% colSums(Psi)))
@@ -304,8 +416,11 @@ bigIRT_modify_groups <- function(fit, sc, sets, cores = 1L, nodes = NULL, max_pr
 ## leading eigenpairs even for thousands of items. Entries are scaled by the
 ## items' response counts, D^-1/2 M D^-1/2, so that heavily answered items do
 ## not dominate the direction.
-bigIRT_modify_mv <- function(st, rule, V, scl){
+bigIRT_modify_mv <- function(st, rule, V, scl, rowmask = NULL){
   Vr <- (V * scl)[st$rc$items, , drop = FALSE]
+  ## A row with weight zero contributes nothing, and neither does any row of
+  ## a person whose rows all have weight zero: M from those persons only.
+  if(!is.null(rowmask)) Vr <- Vr * rowmask
   aq <- do.call(bigIRT_agq_fg_cpp_impl, c(st$args, list(theta_mode = st$posterior$theta_mode,
     precision = st$posterior$precision, rule = rule, mv_v = Vr)))
   out <- matrix(0, nrow(V), ncol(V))
@@ -317,9 +432,9 @@ bigIRT_modify_mv <- function(st, rule, V, scl){
 ## Leading (largest algebraic) eigenpairs of the scaled M by subspace
 ## iteration with Rayleigh-Ritz, shifted when the largest-magnitude
 ## eigenvalue is negative.
-bigIRT_modify_eigen <- function(st, rule, m = 2L, iters = 60L, tol = 1e-6, seed = 1L){
+bigIRT_modify_eigen <- function(st, rule, m = 2L, iters = 60L, tol = 1e-6, seed = 1L, rowmask = NULL){
   J <- max(st$rc$items)
-  scl <- 1 / sqrt(pmax(tabulate(st$rc$items, J), 1))
+  scl <- 1 / sqrt(pmax(tabulate(st$rc$items[if(is.null(rowmask)) TRUE else rowmask > 0], J), 1))
   old <- if(exists(".Random.seed", globalenv())) get(".Random.seed", globalenv()) else NULL
   on.exit(if(!is.null(old)) assign(".Random.seed", old, globalenv()))
   set.seed(seed)
@@ -327,7 +442,7 @@ bigIRT_modify_eigen <- function(st, rule, m = 2L, iters = 60L, tol = 1e-6, seed 
   run <- function(shift){
     vals <- rep(NA_real_, m)
     for(it in seq_len(iters)){
-      W <- bigIRT_modify_mv(st, rule, V, scl) + shift * V
+      W <- bigIRT_modify_mv(st, rule, V, scl, rowmask) + shift * V
       H <- crossprod(V, W); e <- eigen((H + t(H)) / 2, symmetric = TRUE)
       Vn <- qr.Q(qr(W %*% e$vectors))
       new <- e$values - shift
@@ -372,17 +487,22 @@ bigIRT_modify_null_state <- function(st){
   s2
 }
 
-bigIRT_modify_dimensions <- function(fit, m = 2L, nsim = 19L, iters = 60L, cores = 1L, nodes = NULL, seed = 1L){
+bigIRT_modify_dimensions <- function(fit, m = 2L, nsim = 19L, iters = 60L, cores = 1L, nodes = NULL, seed = 1L,
+  persons = NULL){
+  ## `persons` (logical, one per person): find the directions from these
+  ## persons only, so that sets chosen from them can be tested on the others.
   st <- bigIRT_score_setup(fit, cores = cores)
   rule <- bigIRT_score_rule(fit, st$K, nodes)
-  obs <- bigIRT_modify_eigen(st, rule, m = m, iters = iters, seed = seed)
+  rowmask <- if(is.null(persons)) NULL else as.numeric(as.logical(persons)[st$rc$ids])
+  obs <- bigIRT_modify_eigen(st, rule, m = m, iters = iters, seed = seed, rowmask = rowmask)
   null <- numeric(0)
   if(nsim > 0L){
     old <- if(exists(".Random.seed", globalenv())) get(".Random.seed", globalenv()) else NULL
     on.exit(if(!is.null(old)) assign(".Random.seed", old, globalenv()))
     set.seed(seed + 1L)
     null <- vapply(seq_len(nsim), function(b)
-      bigIRT_modify_eigen(bigIRT_modify_null_state(st), rule, m = 1L, iters = iters, seed = seed + b)$values[1], 0)
+      bigIRT_modify_eigen(bigIRT_modify_null_state(st), rule, m = 1L, iters = iters, seed = seed + b,
+        rowmask = rowmask)$values[1], 0)
   }
   item_labels <- rownames(fit$pars$B) %||% as.character(seq_len(fit$prepared$Nitems))
   list(values = obs$values, vectors = obs$vectors, null = null,
@@ -437,6 +557,9 @@ bigIRT_modify_null_p <- function(x, null){
 #' @param nsimDim Data sets simulated from the fit for the null distribution
 #'   of the leading eigenvalue.
 #' @param minSetItems Smallest item set tested for a group dimension.
+#' @param shape Also test each item's response function for curvature its
+#'   own parameters cannot express (`shape`, below). Diagnostic only:
+#'   [improveModel()] does not add such terms.
 #' @param cores Threads.
 #' @return A list of data.tables: `ability`, `dif` (with effect sizes),
 #'   `asymptotes`, `groups`; each with p-values adjusted by Benjamini-Hochberg
@@ -446,7 +569,7 @@ bigIRT_modify_null_p <- function(x, null){
 #' @export
 modificationTests <- function(fit, dat, personCovariates = character(), responseCovariates = character(),
   itemSets = character(), dif = c("B", "A"), difCovariates = NULL, asymptotes = c("lower", "upper"), purify = TRUE,
-  exploratory = TRUE, nsimDim = 19L, minSetItems = 3L, cores = 1L){
+  exploratory = TRUE, nsimDim = 19L, minSetItems = 3L, shape = FALSE, cores = 1L){
   if(is.null(difCovariates)) difCovariates <- c(personCovariates, responseCovariates)
   if(length(bad <- setdiff(difCovariates, c(personCovariates, responseCovariates))))
     stop("difCovariates not among personCovariates or responseCovariates: ", paste(bad, collapse = ", "))
@@ -481,7 +604,8 @@ modificationTests <- function(fit, dat, personCovariates = character(), response
       z <- dat[[v]]; o <- data.frame(z = if(is.character(z) || is.factor(z) || is.logical(z)) factor(z) else z)
       names(o) <- v; o
     }
-    r <- tryCatch(suppressWarnings(scoreTest(fit, cv, parameters = par, purify = purify, effects = TRUE, cores = cores)),
+    r <- tryCatch(suppressWarnings(scoreTest(fit, cv, parameters = par, purify = purify, effects = TRUE, cores = cores,
+      contributions = sc)),
       error = function(e) NULL)
     if(is.null(r) || !nrow(r$tests)) next
     e <- r$effects
@@ -504,43 +628,73 @@ modificationTests <- function(fit, dat, personCovariates = character(), response
     }
   }
   ## From the scores alone: the leading directions of residual covariance,
-  ## against their simulated null; a significant direction's heavily loading
-  ## items, split by sign, become candidate sets. Their p-value is the
-  ## direction's: a set chosen by maximising cannot be tested afresh.
-  eig_p <- list()
+  ## against their simulated null, found from a random half of the persons;
+  ## a direction's heavily loading items, split by sign, become candidate
+  ## sets, tested and sized on the OTHER half. A set chosen by maximising over
+  ## the same persons it is then tested on looks larger than it is: on
+  ## Mindsteps such sets read SD 2 to 4 where the named sets read 0.4. On the
+  ## other half the choice is fixed in advance, so the set's own test is valid
+  ## and its size unbiased.
+  ## The set a batch would add takes its members from the same direction
+  ## found on all persons (matched to the half's, sign aligned): half the
+  ## persons give a noisier direction, which on a simulated testlet dropped
+  ## one of its five items. The test and size stay those of the half-chosen
+  ## set on the other half; the held-out gate judges the batch itself.
+  eig_sets <- list(); eig_members <- list()
   if(isTRUE(exploratory) && length(sc$item_labels) >= 2L * minSetItems){
-    dims <- tryCatch(bigIRT_modify_dimensions(fit, m = 2L, nsim = nsimDim, cores = cores), error = function(e) NULL)
+    half <- local({ old <- if(exists(".Random.seed", globalenv())) get(".Random.seed", globalenv()) else NULL
+      on.exit(if(!is.null(old)) assign(".Random.seed", old, globalenv())); set.seed(1L)
+      stats::runif(length(sc$person_labels)) < .5 })
+    dims <- tryCatch(bigIRT_modify_dimensions(fit, m = 2L, nsim = nsimDim, cores = cores, persons = half),
+      error = function(e) NULL)
+    dims_all <- if(is.null(dims)) NULL else tryCatch(bigIRT_modify_dimensions(fit, m = 2L, nsim = 0L, cores = cores),
+      error = function(e) NULL)
     if(!is.null(dims)){
       J <- length(sc$item_labels)
+      pick <- function(vs) { thr <- max(max(vs) / 2, 1 / sqrt(J)); sc$item_labels[vs >= thr] }
       for(k in seq_along(dims$values)){
-        pk <- dims$p[k]
         v <- dims$vectors[, k]
+        vf <- v
+        if(!is.null(dims_all)){
+          cc <- as.numeric(stats::cor(v, dims_all$vectors))
+          kk <- which.max(abs(cc)); vf <- sign(cc[kk]) * dims_all$vectors[, kk]
+        }
         ## A set: the items loading at least half the direction's largest
         ## loading of that sign, and above the level of an even spread.
         for(sg in c(1, -1)){
-          vs <- sg * v
-          thr <- max(max(vs) / 2, 1 / sqrt(J))
-          its <- sc$item_labels[vs >= thr]
+          its <- pick(sg * v)
           if(length(its) >= minSetItems){
             nm <- paste0("eigen", k, if(sg > 0) "+" else "-")
-            sets[[nm]] <- its; eig_p[[nm]] <- pk
+            eig_sets[[nm]] <- its
+            mem <- pick(sg * vf)
+            eig_members[[nm]] <- if(length(mem) >= minSetItems) mem else its
           }
         }
       }
+      dims$values_all <- if(is.null(dims_all)) NULL else dims_all$values
     }
   }
+  gr <- NULL
   if(length(sets)){
     gr <- bigIRT_modify_groups(fit, sc, sets, cores = cores)
     if(!is.null(gr) && nrow(gr)){
       gr[, `:=`(source = sub("=.*$", "", set), level = sub("^[^=]*=", "", set))]
-      ex <- gr$set %in% names(eig_p)
-      gr[ex, `:=`(source = "eigen", level = set)]
-      gr[!ex, p_fdr := stats::p.adjust(p, "BH")]
-      if(any(ex)) gr[ex, `:=`(p = unlist(eig_p[set]), p_fdr = unlist(eig_p[set]))]
+      gr[, p_fdr := stats::p.adjust(p, "BH")]
     }
-    attr(gr, "sets") <- sets
   }
-  list(ability = ab, dif = di, asymptotes = as, groups = gr, dimensions = dims)
+  if(length(eig_sets)){
+    ge <- bigIRT_modify_groups(fit, sc, eig_sets, cores = cores, persons = !half)
+    if(!is.null(ge) && nrow(ge)){
+      ge[, `:=`(source = "eigen", level = set, p_fdr = stats::p.adjust(p, "BH"))]
+      gr <- data.table::rbindlist(list(gr, ge), fill = TRUE)
+    }
+  }
+  if(!is.null(gr)){
+    attr(gr, "sets") <- c(sets, eig_members)
+    attr(gr, "sets_tested") <- c(sets, eig_sets)
+  }
+  sh <- if(isTRUE(shape)) fdr(bigIRT_modify_shape(fit, cores = cores)) else NULL
+  list(ability = ab, dif = di, asymptotes = as, groups = gr, dimensions = dims, shape = sh)
 }
 
 #' Improve a model by score tests and held-out likelihood
@@ -560,17 +714,31 @@ modificationTests <- function(fit, dat, personCovariates = character(), response
 #' a group dimension's SD on the logit scale); a batch must raise the held-out
 #' log-likelihood by at least `minGain`.
 #'
-#' Within a round the kinds are tried in turn -- ability, then DIF, then
-#' asymptotes, then group dimensions -- each against the model as it stands
-#' after the batches kept before it, so a covariate's effect on ability is in
-#' the model before DIF along it is judged (DIF absorbs impact otherwise). The
-#' next round screens the result, for the kinds whose verdict could have
+#' Within a round the kinds are tried in turn -- ability, then the impact of
+#' DIF covariates, then DIF, then asymptotes, then dimensions -- each against
+#' the model as it stands after the batches kept before it, so a covariate's
+#' effect on ability is in the model before DIF along it is judged (DIF
+#' absorbs impact otherwise).
+#'
+#' * DIF along each covariate (and parameter) is a batch of its own, the
+#'   strongest first, so each covariate's DIF has to earn its place.
+#' * With `difImpact`, a DIF covariate whose effect on ability the model lacks
+#'   in any form (judged by the span of the ability predictors) first gets it,
+#'   as a batch of its own; a response covariate's within-person effect
+#'   included.
+#' * With `asymptotePooled`, the screened asymptotes have an alternative: the
+#'   asymptote free on every item, pooled by its prior. The better of the two
+#'   that passes the gate is kept.
+#' * Group dimensions go in one per round, the strongest first. With
+#'   `partitions`, an item-set column that covers every item (a partition,
+#'   such as subdomains) is offered as an alternative: its levels as
+#'   correlated ability dimensions.
+#'
+#' The next round screens the result, for the kinds whose verdict could have
 #' changed: a kind is tried again only if it was kept, or a kind after it
 #' was, in the round before (a kind rejected in a round was already judged
 #' against every batch kept before it). Screens are made at each round's
-#' starting model. A covariate tested for DIF only
-#' (`responseCovariates`) must have its ability effect in `personPreds`. The
-#' final model is refitted on all persons.
+#' starting model. The final model is refitted on all persons.
 #'
 #' Selection uses the data, so the final model's estimates and standard
 #' errors are conditional on it: the held-out gain is the honest measure of
@@ -614,6 +782,9 @@ modificationTests <- function(fit, dat, personCovariates = character(), response
 #'   simulated adaptive bank, against 5 with them kept).
 #' @param checkpoint A directory to keep completed steps in, so that an
 #'   interrupted run resumes; `NULL` (default) keeps nothing.
+#' @param difImpact,asymptotePooled,partitions Offer the impact of DIF
+#'   covariates, pooled asymptotes and partitions into correlated dimensions
+#'   (see Details).
 #' @return A `bigIRT_improved` object: `fit` (final model, all persons),
 #'   `spec` (the terms added), `path` (each batch tried: round, kind, terms,
 #'   held-out log-likelihood before and after, gain and its z, accepted,
@@ -627,7 +798,8 @@ improveModel <- function(dat, score = "score", id = "id", item = "Item", scale =
   itemSets = character(), dif = c("B", "A"), difCovariates = NULL, asymptotes = c("lower", "upper"),
   holdout = 0.2, alpha = 0.05, minEffect = 0.03, minAsymptote = 0.05, minGroupSD = 0.3,
   minZ = stats::qnorm(.95), minGain = 0, nsimDim = 19L, maxRounds = 3L, maxGroups = 2L, seed = 1L, cores = 1L,
-  verbose = TRUE, fitArgs = list(laplaceRefine = "agq"), checkpoint = NULL){
+  verbose = TRUE, fitArgs = list(laplaceRefine = "agq"), checkpoint = NULL,
+  difImpact = TRUE, asymptotePooled = TRUE, partitions = TRUE){
   dat <- data.table::as.data.table(dat)
   if(!scale %in% names(dat)) { dat <- data.table::copy(dat); data.table::set(dat, j = scale, value = 1L) }
   persons <- unique(dat[[id]])
@@ -649,12 +821,12 @@ improveModel <- function(dat, score = "score", id = "id", item = "Item", scale =
     base = base[c("score", "id", "item", "scale", "pl")],
     fitArgs = base$fitArgs[setdiff(names(base$fitArgs), c("cores", "verbose"))],
     tests = list(personCovariates, responseCovariates, itemSets, dif, difCovariates, asymptotes, alpha, minEffect,
-      minAsymptote, minGroupSD, minZ, minGain, nsimDim, maxGroups))
+      minAsymptote, minGroupSD, minZ, minGain, nsimDim, maxGroups, difImpact, asymptotePooled, partitions))
   step <- bigIRT_modify_checkpoint(checkpoint, fp)
   secs <- function(t0) proc.time()[[3]] - t0
   timing <- list()
-  spec <- list(personPreds = personPreds, abil = list(), dif = list(), lower = character(),
-    upper = character(), groups = list())
+  spec <- list(personPreds = personPreds, abil = list(), impact = character(), dif = list(), lower = character(),
+    upper = character(), pooled = character(), groups = list(), partition = character())
   b <- step("base", spec, function(){
     t0 <- proc.time()[[3]]; f <- fit_spec(spec, train)
     list(fit = f, h = heldoutLogLik(f, cores = cores), seconds = secs(t0))
@@ -666,12 +838,12 @@ improveModel <- function(dat, score = "score", id = "id", item = "Item", scale =
   ## batch kept before it, so it is tried again only if it was kept or a kind
   ## after it was (otherwise nothing that could change its verdict changed,
   ## and a retry would only refit the same candidates).
-  kinds <- c("ability", "dif", "asymptotes", "groups")
+  kinds <- c("ability", "impact", "dif", "asymptotes", "groups")
   live <- kinds
   for(round in seq_len(maxRounds)){
     covs_in <- vapply(spec$abil, function(a) a$covariate, "")
     pc_left <- setdiff(personCovariates, c(covs_in, personPreds))
-    more_groups <- length(spec$groups) < maxGroups && "groups" %in% live
+    more_groups <- !length(spec$partition) && length(spec$groups) < maxGroups && "groups" %in% live
     sr <- step(sprintf("round%d_screens", round), spec, function(){
       t0 <- proc.time()[[3]]
       dat_cur <- bigIRT_modify_build(dat, spec, base)$dat
@@ -684,29 +856,78 @@ improveModel <- function(dat, score = "score", id = "id", item = "Item", scale =
       list(screens = s, seconds = secs(t0))
     })
     screens <- sr$screens; timing[[sprintf("round%d_screens", round)]] <- sr$seconds
-    ## Candidates, kind by kind.
-    cand <- list()
+    ## Candidates, kind by kind. Each stage below is one batch, or a choice
+    ## between alternative batches of one kind, judged in turn against the
+    ## model as it stands after the batches kept before it.
+    stages <- list()
+    stage <- function(kind, ...) list(kind = kind, alts = list(...))
+    alt <- function(label, apply, terms) list(label = label, apply = apply, terms = terms)
     ab <- screens$ability
-    if(!is.null(ab) && nrow(ab)) {
+    if("ability" %in% live && !is.null(ab) && nrow(ab)) {
       ab <- ab[covariate %in% pc_left & p_fdr < alpha]
-      if(nrow(ab)) cand$ability <- lapply(seq_len(nrow(ab)), function(k) list(covariate = ab$covariate[k], kind = ab$kind[k]))
+      if(nrow(ab)) local({
+        ## (local: each batch's function must keep its own terms, not a loop
+        ## variable that later candidates overwrite.)
+        xa <- lapply(seq_len(nrow(ab)), function(k) list(covariate = ab$covariate[k], kind = ab$kind[k]))
+        stages[[length(stages) + 1L]] <<- stage("ability", alt("ability", function(s){ s$abil <- c(s$abil, xa); s }, length(xa)))
+      })
     }
     di <- screens$dif
-    if(!is.null(di) && nrow(di)){
+    dif_groups <- list()
+    if("dif" %in% live && !is.null(di) && nrow(di)){
       di <- di[!is.na(p_fdr) & p_fdr < alpha & !is.na(dP_abs) & dP_abs >= minEffect]
       done <- data.table::rbindlist(lapply(spec$dif, function(t) data.table::data.table(covariate = t$covariate,
         parameter = t$parameter, item = t$items)))
       if(nrow(done)) di <- di[!done, on = c("covariate", "parameter", "item")]
-      if(nrow(di)) cand$dif <- lapply(split(di, by = c("covariate", "parameter"), keep.by = TRUE), function(x)
-        list(covariate = x$covariate[1], parameter = x$parameter[1], kind = x$kind[1], items = x$item))
+      ## DIF along each covariate (and parameter) is its own batch, the
+      ## strongest first, so each covariate's DIF has to earn its place.
+      if(nrow(di)) dif_groups <- lapply(split(di, by = c("covariate", "parameter"), keep.by = TRUE), function(x)
+        list(covariate = x$covariate[1], parameter = x$parameter[1], kind = x$kind[1], items = x$item,
+          strength = sum(x$LM, na.rm = TRUE)))
+      dif_groups <- dif_groups[order(-vapply(dif_groups, `[[`, 0, "strength"))]
     }
+    ## A DIF covariate whose effect on ability the model lacks (in any form)
+    ## gets it first, as a batch of its own: DIF along it would otherwise
+    ## absorb impact, and judged together the two could not be told apart.
+    if(isTRUE(difImpact) && length(dif_groups)){
+      cur_args <- bigIRT_modify_build(dat, spec, base)
+      need <- Filter(function(v){
+        z <- cur_args$dat[[v]]
+        B <- bigIRT_modify_basis(z, if(is.character(z) || is.factor(z) || is.logical(z) ||
+          length(unique(stats::na.omit(z))) <= 4L) "factor" else "linear", NULL)
+        length(bigIRT_modify_unspanned(cur_args$dat, cur_args$personPreds, B)) > 0L
+      }, setdiff(unique(vapply(dif_groups, `[[`, "", "covariate")), spec$impact))
+      rm(cur_args)
+      if(length(need)) stages[[length(stages) + 1L]] <- stage("impact",
+        alt("impact", function(s){ s$impact <- union(s$impact, need); s }, length(need)))
+    }
+    for(x in dif_groups) local({ xx <- x[c("covariate", "parameter", "kind", "items")]
+      stages[[length(stages) + 1L]] <<- stage("dif", alt(paste("dif", make.names(xx$covariate), xx$parameter, sep = "-"),
+        function(s){ s$dif <- c(s$dif, list(xx)); s }, length(xx$items)))
+    })
     as <- screens$asymptotes
-    if(!is.null(as) && nrow(as)){
+    as_alts <- list()
+    if("asymptotes" %in% live && !is.null(as) && nrow(as) && length(setdiff(asymptotes, spec$pooled))){
       as <- as[p_fdr < alpha & estimate >= minAsymptote]
-      if(nrow(as)) cand$asymptotes <- list(lower = as[side == "lower", item], upper = as[side == "upper", item])
+      if(nrow(as)){
+        lo <- as[side == "lower", item]; up <- as[side == "upper", item]
+        as_alts[[1]] <- alt("asymptotes", function(s){ s$lower <- union(s$lower, lo); s$upper <- union(s$upper, up); s },
+          length(lo) + length(up))
+      }
+      ## The alternative: the asymptote free on EVERY item, pooled by the
+      ## asymptote priors. Where slips or guesses are many, small and each
+      ## barely identified, screening finds only the large ones (on Mindsteps
+      ## a 4PL everywhere beat the screened selection by 431 held-out nats).
+      sa <- screens$asymptotes
+      sides <- setdiff(intersect(asymptotes, unique(sa[!is.na(p_fdr) & p_fdr < alpha, side])), spec$pooled)
+      if(isTRUE(asymptotePooled) && length(sides))
+        as_alts[[length(as_alts) + 1L]] <- alt(paste0("asymptotes-pooled-", paste(sides, collapse = "-")),
+          function(s){ s$pooled <- union(s$pooled, sides); s }, length(unique(screens$asymptotes$item)) * length(sides))
     }
+    if(length(as_alts)) stages[[length(stages) + 1L]] <- do.call(stage, c(list("asymptotes"), as_alts))
     gr <- screens$groups
-    if(!is.null(gr) && nrow(gr) && length(spec$groups) < maxGroups){
+    gr_alts <- list()
+    if(more_groups && !is.null(gr) && nrow(gr)){
       ## One group dimension per round, the strongest first. Until a real
       ## dimension is modelled the general ability leans towards its items,
       ## and the other items share the leftover covariance: tried together
@@ -715,45 +936,58 @@ improveModel <- function(dat, score = "score", id = "id", item = "Item", scale =
       ## with the first dimension in the model.
       keep <- bigIRT_modify_pick_groups(gr, attr(gr, "sets"), unlist(lapply(spec$groups, `[[`, "items")),
         min(1L, maxGroups - length(spec$groups)), alpha, minGroupSD)
-      if(length(keep)) cand$groups <- keep
+      if(length(keep)) gr_alts[[1]] <- alt("groups", function(s){ s$groups <- c(s$groups, keep); s }, length(keep))
+      ## The alternative when an item-set column covers every item (a
+      ## partition, such as subdomains): its levels as correlated dimensions,
+      ## which is what a partition calls for; group factors on a general
+      ## ability can add at most maxGroups of its levels, orthogonally.
+      if(isTRUE(partitions) && !length(spec$groups) && !length(spec$partition)){
+        for(v in itemSets){
+          lv <- unique(dat[, c(item, v), with = FALSE])
+          if(anyNA(lv[[v]]) || data.table::uniqueN(lv[[v]]) < 2L || anyDuplicated(lv[[item]])) next
+          gv <- gr[source == v]
+          if(!nrow(gv) || !any(gv$p_fdr < alpha & sqrt(gv$tau2) >= minGroupSD, na.rm = TRUE)) next
+          local({ vv <- v; nl <- data.table::uniqueN(lv[[v]])
+            gr_alts[[length(gr_alts) + 1L]] <<- alt(paste0("partition-", make.names(vv)),
+              function(s){ s$partition <- vv; s }, nl) })
+        }
+      }
     }
-    cand <- cand[intersect(names(cand), live)]
-    if(!length(cand)){ say("round %d: nothing to add", round); break }
-    ## Each kind as a batch, in turn, against the model as it stands after
-    ## the batches kept before it in this round.
-    add_to <- function(s, kind, x){
-      if(kind == "ability") s$abil <- c(s$abil, x)
-      if(kind == "dif") s$dif <- c(s$dif, unname(x))
-      if(kind == "asymptotes"){ s$lower <- union(s$lower, x$lower); s$upper <- union(s$upper, x$upper) }
-      if(kind == "groups") s$groups <- c(s$groups, x)
-      s
-    }
-    nterms <- function(kind, x) switch(kind, ability = length(x), dif = sum(lengths(lapply(x, `[[`, "items"))),
-      asymptotes = length(x$lower) + length(x$upper), groups = length(x))
+    if(length(gr_alts)) stages[[length(stages) + 1L]] <- do.call(stage, c(list("groups"), gr_alts))
+    if(!length(stages)){ say("round %d: nothing to add", round); break }
     ho_start <- cur_ho$loglik; kept <- character()
-    for(kind in intersect(c("ability", "dif", "asymptotes", "groups"), names(cand))){
-      s <- add_to(spec, kind, cand[[kind]])
-      tr <- step(sprintf("round%d_%s", round, kind), s, function(){
-        t0 <- proc.time()[[3]]
-        ## A batch whose fit or held-out evaluation fails is rejected, and the
-        ## reason kept: a failure is not evidence against the change.
-        err <- NULL
-        f <- tryCatch(fit_spec(s, train), error = function(e){ err <<- conditionMessage(e); NULL })
-        h <- if(is.null(f)) NULL else tryCatch(heldoutLogLik(f, cores = cores),
-          error = function(e){ err <<- paste("heldoutLogLik:", conditionMessage(e)); NULL })
-        gm <- if(is.null(h)) list(gain = NA_real_, z = NA_real_) else bigIRT_modify_gain(cur_ho, h)
-        ok <- isTRUE(gm$gain >= minGain && gm$z >= minZ)
-        ## Only the fit that is kept is needed again.
-        list(fit = if(ok) f else NULL, h = h, gain = gm$gain, z = gm$z, ok = ok, seconds = secs(t0), error = err)
-      })
-      path[[length(path) + 1L]] <- data.table::data.table(round = round, kind = kind, terms = nterms(kind, cand[[kind]]),
-        heldout_before = cur_ho$loglik, heldout_after = if(is.null(tr$h)) NA_real_ else tr$h$loglik,
-        gain = tr$gain, z = tr$z, accepted = tr$ok, seconds = tr$seconds,
-        error = if(is.null(tr$error)) NA_character_ else tr$error)
-      if(!is.null(tr$error)) say("round %d, %s: %d terms, failed (%s)", round, kind, nterms(kind, cand[[kind]]), tr$error)
-      else say("round %d, %s: %d terms, held-out gain %.1f (z %.1f)%s", round, kind, nterms(kind, cand[[kind]]),
-        tr$gain, tr$z, if(tr$ok) " (kept)" else "")
-      if(tr$ok){ spec <- s; cur <- tr$fit; cur_ho <- tr$h; kept <- c(kept, kind) }
+    for(sg in stages){
+      ## Each alternative judged against the current model; the best that
+      ## passes the gate is kept.
+      best <- NULL
+      for(a in sg$alts){
+        s <- a$apply(spec)
+        tr <- step(sprintf("round%d_%s", round, a$label), s, function(){
+          t0 <- proc.time()[[3]]
+          ## A batch whose fit or held-out evaluation fails is rejected, and
+          ## the reason kept: a failure is not evidence against the change.
+          err <- NULL
+          f <- tryCatch(fit_spec(s, train), error = function(e){ err <<- conditionMessage(e); NULL })
+          h <- if(is.null(f)) NULL else tryCatch(heldoutLogLik(f, cores = cores),
+            error = function(e){ err <<- paste("heldoutLogLik:", conditionMessage(e)); NULL })
+          gm <- if(is.null(h)) list(gain = NA_real_, z = NA_real_) else bigIRT_modify_gain(cur_ho, h)
+          ok <- isTRUE(gm$gain >= minGain && gm$z >= minZ)
+          ## Only a fit that passes is needed again.
+          list(fit = if(ok) f else NULL, h = h, gain = gm$gain, z = gm$z, ok = ok, seconds = secs(t0), error = err)
+        })
+        path[[length(path) + 1L]] <- data.table::data.table(round = round, kind = sg$kind, batch = a$label,
+          terms = a$terms, heldout_before = cur_ho$loglik, heldout_after = if(is.null(tr$h)) NA_real_ else tr$h$loglik,
+          gain = tr$gain, z = tr$z, accepted = FALSE, seconds = tr$seconds,
+          error = if(is.null(tr$error)) NA_character_ else tr$error)
+        if(!is.null(tr$error)) say("round %d, %s: %d terms, failed (%s)", round, a$label, a$terms, tr$error)
+        else say("round %d, %s: %d terms, held-out gain %.1f (z %.1f)%s", round, a$label, a$terms,
+          tr$gain, tr$z, if(tr$ok) " (passes)" else "")
+        if(tr$ok && (is.null(best) || tr$gain > best$tr$gain)) best <- list(tr = tr, s = s, at = length(path))
+      }
+      if(!is.null(best)){
+        spec <- best$s; cur <- best$tr$fit; cur_ho <- best$tr$h; kept <- c(kept, sg$kind)
+        path[[best$at]]$accepted <- TRUE
+      }
     }
     if(!length(kept)) break
     say("round %d: held-out log-likelihood %.1f -> %.1f", round, ho_start, cur_ho$loglik)
@@ -819,9 +1053,12 @@ print.bigIRT_improved <- function(x, ...){
   s <- x$spec
   cat("Model improved by score tests and held-out likelihood\n")
   cat(sprintf("  ability terms: %s\n", if(length(s$abil)) paste(vapply(s$abil, function(a) a$covariate, ""), collapse = ", ") else "none"))
+  if(length(s$impact)) cat(sprintf("  impact of DIF covariates: %s\n", paste(s$impact, collapse = ", ")))
   cat(sprintf("  DIF terms: %d items (%s)\n", sum(lengths(lapply(s$dif, `[[`, "items"))),
     if(length(s$dif)) paste(unique(vapply(s$dif, function(t) paste0(t$covariate, ":", t$parameter), "")), collapse = ", ") else "none"))
-  cat(sprintf("  lower asymptotes freed: %d; upper: %d\n", length(s$lower), length(s$upper)))
+  cat(sprintf("  lower asymptotes freed: %s; upper: %s\n",
+    if("lower" %in% s$pooled) "all (pooled)" else length(s$lower), if("upper" %in% s$pooled) "all (pooled)" else length(s$upper)))
+  if(length(s$partition)) cat(sprintf("  correlated dimensions: the levels of %s\n", s$partition))
   cat(sprintf("  group dimensions: %s\n", if(length(s$groups)) paste(vapply(s$groups, `[[`, "", "name"), collapse = ", ") else "none"))
   if(nrow(x$path)) { cat("Batches tried:\n"); print(x$path) }
   invisible(x)

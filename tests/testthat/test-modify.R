@@ -22,7 +22,7 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
       y = st$sdat$score[st$rc$rows], pid = st$rc$ids, itm = st$rc$items,
       m = st$args$prior_mean[, 1], sd = 1 / sqrt(as.numeric(st$prior_prec)[1]))
   }
-  logp <- function(ex, i, G1, G2 = NULL, tau2 = 0, S = integer(0), j0 = 0L, dc = 0, dd = 0){
+  logp <- function(ex, i, G1, G2 = NULL, tau2 = 0, S = integer(0), j0 = 0L, dc = 0, dd = 0, dh2 = 0, dh3 = 0){
     r <- which(ex$pid == i); tq <- ex$m[i] + ex$sd * G1$x
     uq <- if(tau2 > 0) sqrt(tau2) * G2$x else 0; wu <- if(tau2 > 0) G2$w else 1
     tot <- 0
@@ -30,7 +30,9 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
       ll <- rep(0, length(tq))
       for(rr in r){
         cc <- ex$c[rr] + (ex$itm[rr] == j0) * dc; dd0 <- ex$d[rr] - (ex$itm[rr] == j0) * dd
-        p <- cc + (dd0 - cc) * stats::plogis(ex$a[rr] * tq - ex$b[rr] + (ex$itm[rr] %in% S) * uq[k])
+        ## Shape terms on item j0: Hermite polynomials of the ability.
+        sh <- (ex$itm[rr] == j0) * (dh2 * (tq^2 - 1) + dh3 * (tq^3 - 3 * tq))
+        p <- cc + (dd0 - cc) * stats::plogis(ex$a[rr] * tq - ex$b[rr] + (ex$itm[rr] %in% S) * uq[k] + sh)
         ll <- ll + if(ex$y[rr] == 1) log(p) else log(1 - p)
       }
       tot <- tot + wu[k] * sum(G1$w * exp(ll))
@@ -116,6 +118,51 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     a0 <- bigIRT:::bigIRT_modify_asymptotes(f0, scoreContributions(f0), minN = 10L)
     expect_identical(nrow(a0), 14L)
     expect_true(all(a0$identified > .999))
+  })
+
+  ## The item-shape scores: each response's score in a Hermite term added to
+  ## its item's linear predictor, from the kernel's shape output, against
+  ## finite differences of the exact marginal (2PL and 3PL; a person answers
+  ## each item once, so the person's derivative is the row's score).
+  test_that("item-shape scores match finite differences of the exact marginal", {
+    skip_on_cran()
+    d <- sim3(9)
+    G1 <- gh_rule(80)
+    for(pl in 2:3){
+      f <- suppressWarnings(fitIRT(d, pl = pl, laplaceRefine = "agq", cores = 1, verbose = 0,
+        laplaceCertify = FALSE, normalise = FALSE))
+      ex <- exact_setup(f); st <- ex$st
+      rule <- bigIRT:::bigIRT_score_rule(f, 1L, 41L)
+      slots <- bigIRT:::bigIRT_score_free_slots(st$sdat)
+      aq <- do.call(bigIRT:::bigIRT_agq_fg_cpp_impl, c(st$args, list(theta_mode = st$posterior$theta_mode,
+        precision = st$posterior$precision, rule = rule, row_out = 1L, slot_out = as.integer(slots), shape_out = 1L)))
+      g0 <- aq$row_scores[, length(slots) + 1L]
+      he2 <- aq$shape[, 2] - g0; he3 <- aq$shape[, 3] - 3 * aq$shape[, 1]
+      j0 <- 4L; u <- which(st$rc$items == j0)[1:25]; e2 <- 1e-6
+      fd2 <- vapply(st$rc$ids[u], function(i) (logp(ex, i, G1, j0 = j0, dh2 = e2) - logp(ex, i, G1)) / e2, 0)
+      fd3 <- vapply(st$rc$ids[u], function(i) (logp(ex, i, G1, j0 = j0, dh3 = e2) - logp(ex, i, G1)) / e2, 0)
+      expect_lt(max(abs(he2[u] - fd2)), 1e-4)
+      expect_lt(max(abs(he3[u] - fd3)), 1e-4)
+      expect_gt(max(abs(fd3)), .05)
+    }
+  })
+
+  ## The shape screen flags an item whose curve bends where a logistic cannot
+  ## and leaves the logistic items alone.
+  test_that("the item-shape screen finds a bent item", {
+    skip_on_cran()
+    set.seed(31); N <- 3000; J <- 10
+    th <- stats::rnorm(N); a <- stats::runif(J, .9, 1.6); b <- stats::rnorm(J, 0, .7)
+    ii <- rep(seq_len(N), J); jj <- rep(seq_len(J), each = N)
+    eta <- a[jj] * th[ii] - b[jj] + (jj == 1L) * 1.2 * (th[ii]^2 - 1)
+    d <- data.frame(id = ii, Item = jj, Scale = 1, score = stats::rbinom(N * J, 1, stats::plogis(eta)))
+    f <- suppressWarnings(fitIRT(d, pl = 2, laplaceRefine = "agq", cores = 1, verbose = 0,
+      laplaceCertify = FALSE, normalise = FALSE))
+    sh <- bigIRT:::bigIRT_modify_shape(f)
+    expect_equal(nrow(sh), J)
+    expect_lt(sh[item == "1", p], 1e-10)
+    expect_gt(sh[item == "1", dP], .1)
+    expect_lt(mean(sh[item != "1", p] < .05), .35)
   })
 
   test_that("the residual-covariance product M v matches M built by integration", {
@@ -251,8 +298,10 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     r <- suppressMessages(improveModel(d, pl = 2, personCovariates = "g", dif = character(), asymptotes = "lower",
       alpha = .5, minAsymptote = 0, nsimDim = 0L, maxRounds = 2L, cores = 1, verbose = FALSE))
     p <- r$path
-    expect_identical(p$kind[p$round == 1], c("ability", "asymptotes"))
-    expect_identical(p$accepted[p$round == 1], c(TRUE, FALSE))
+    ## (Round 1 tries the screened asymptotes and the pooled alternative.)
+    expect_identical(unique(p$kind[p$round == 1]), c("ability", "asymptotes"))
+    expect_true(p$accepted[p$round == 1 & p$kind == "ability"])
+    expect_false(any(p$accepted[p$round == 1 & p$kind == "asymptotes"]))
     expect_false(any(p$round == 2 & p$kind == "asymptotes"))
   })
 
@@ -290,10 +339,91 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     d <- data.table::data.table(id = ii, Item = jj, Scale = 1L, g = g[ii], z = z[ii], w = w[ii], topic = topic[jj],
       score = stats::rbinom(N * J, 1, cc[jj] + (1 - cc[jj]) * stats::plogis(eta)))
     r <- suppressMessages(improveModel(d, pl = 2, personCovariates = c("g", "z", "w"), itemSets = "topic",
-      dif = "B", asymptotes = "lower", nsimDim = 0L, maxRounds = 3L, cores = 1, verbose = FALSE))
-    expect_true(all(r$path$terms[r$path$kind == "groups"] <= 1L))
+      dif = "B", asymptotes = "lower", nsimDim = 0L, maxRounds = 3L, cores = 1, verbose = FALSE, partitions = FALSE))
+    expect_true(all(r$path$terms[r$path$batch == "groups"] <= 1L))
     expect_length(r$spec$groups, 1L)
     expect_setequal(r$spec$groups[[1]]$items, as.character(11:15))
+  })
+
+  ## DIF along a response covariate whose effect on ability the model lacks:
+  ## the covariate's impact goes in first, as its own batch, then its DIF, in
+  ## a batch of its own. Truth: ability is higher on responses with ctx = 1
+  ## (a within-person effect) and items 1-3 also have DIF along ctx.
+  test_that("improveModel adds a DIF covariate's missing impact first, then its DIF per covariate", {
+    skip_on_cran()
+    set.seed(41); N <- 3000; J <- 20
+    th <- stats::rnorm(N); a <- stats::runif(J, .9, 1.6); b <- stats::rnorm(J, 0, .8)
+    ii <- rep(seq_len(N), J); jj <- rep(seq_len(J), each = N)
+    ctx <- stats::rbinom(N * J, 1, .5)
+    dif <- rep(0, J); dif[1:3] <- .8
+    eta <- a[jj] * (th[ii] + .6 * ctx) - b[jj] + dif[jj] * ctx
+    d <- data.frame(id = ii, Item = jj, Scale = 1, ctx = ctx, score = stats::rbinom(N * J, 1, stats::plogis(eta)))
+    r <- suppressMessages(improveModel(d, pl = 2, responseCovariates = "ctx", dif = "B",
+      asymptotes = character(), nsimDim = 0L, maxRounds = 1L, cores = 1, verbose = FALSE))
+    p <- r$path
+    expect_true(p$accepted[p$kind == "impact"])
+    expect_identical(r$spec$impact, "ctx")
+    expect_identical(p$batch[p$kind == "dif"], "dif-ctx-B")
+    expect_true(all(as.character(1:3) %in% unlist(lapply(r$spec$dif, `[[`, "items"))))
+    expect_lte(length(unlist(lapply(r$spec$dif, `[[`, "items"))), 5L)
+  })
+
+  ## Asymptotes: the screened selection and the pooled alternative (free on
+  ## every item) are both tried, and the better of those that pass is kept.
+  test_that("improveModel weighs pooled asymptotes against the screened selection", {
+    skip_on_cran()
+    set.seed(43); N <- 3000; J <- 15
+    th <- stats::rnorm(N); a <- stats::runif(J, .9, 1.8); b <- stats::rnorm(J, 0, .8)
+    ii <- rep(seq_len(N), J); jj <- rep(seq_len(J), each = N)
+    d <- data.frame(id = ii, Item = jj, Scale = 1,
+      score = stats::rbinom(N * J, 1, .15 + .85 * stats::plogis(a[jj] * th[ii] - b[jj])))
+    r <- suppressMessages(improveModel(d, pl = 2, dif = character(), asymptotes = "lower",
+      nsimDim = 0L, maxRounds = 1L, cores = 1, verbose = FALSE))
+    p <- r$path[kind == "asymptotes"]
+    expect_true("asymptotes-pooled-lower" %in% p$batch)
+    if(any(p$accepted)){
+      pass <- p[!is.na(z) & z >= stats::qnorm(.95)]
+      expect_identical(p$batch[p$accepted], pass$batch[which.max(pass$gain)])
+    }
+  })
+
+  ## Item sets that cover every item: the partition into correlated
+  ## dimensions is offered alongside a single group factor, and with three
+  ## subdomains correlated .5 it is the one kept.
+  test_that("improveModel offers a partition of the items as correlated dimensions", {
+    skip_on_cran()
+    set.seed(47); N <- 3000; S <- 3L; Js <- 8L; J <- S * Js
+    R <- matrix(.5, S, S); diag(R) <- 1
+    th <- matrix(stats::rnorm(N * S), N, S) %*% chol(R)
+    sub <- rep(seq_len(S), each = Js); a <- stats::runif(J, .9, 1.6); b <- stats::rnorm(J, 0, .8)
+    ii <- rep(seq_len(N), J); jj <- rep(seq_len(J), each = N)
+    d <- data.frame(id = ii, Item = jj, Scale = 1, sub = paste0("s", sub[jj]),
+      score = stats::rbinom(N * J, 1, stats::plogis(a[jj] * th[cbind(ii, sub[jj])] - b[jj])))
+    r <- suppressMessages(improveModel(d, pl = 2, itemSets = "sub", dif = character(), asymptotes = character(),
+      nsimDim = 0L, maxRounds = 1L, cores = 1, verbose = FALSE))
+    expect_true("partition-sub" %in% r$path$batch)
+    expect_identical(r$spec$partition, "sub")
+  })
+
+  ## Sets found from the scores are chosen on one half of the persons and
+  ## tested on the other, so their test is valid and their size unbiased.
+  test_that("exploratory sets are tested on the half of the persons not used to find them", {
+    skip_on_cran()
+    set.seed(53); N <- 2000; J <- 20
+    th <- stats::rnorm(N); u <- stats::rnorm(N, 0, .9)
+    a <- stats::runif(J, .9, 1.6); b <- stats::rnorm(J, 0, .8)
+    ii <- rep(seq_len(N), J); jj <- rep(seq_len(J), each = N)
+    d <- data.frame(id = ii, Item = jj, Scale = 1,
+      score = stats::rbinom(N * J, 1, stats::plogis(a[jj] * th[ii] - b[jj] + (jj %in% 11:15) * u[ii])))
+    f <- suppressWarnings(fitIRT(d, pl = 2, laplaceRefine = "agq", cores = 1, verbose = 0,
+      laplaceCertify = FALSE, normalise = FALSE))
+    mt <- modificationTests(f, d, dif = character(), asymptotes = character(), nsimDim = 5L)
+    ge <- mt$groups[source == "eigen"]
+    expect_gt(nrow(ge), 0L)
+    expect_true(all(ge$persons < .6 * N & ge$persons > .4 * N))
+    best <- ge[which.max(z)]
+    expect_setequal(attr(mt$groups, "sets")[[best$set]], as.character(11:15))
+    expect_gt(best$z, 4)
   })
 
   ## A failed step is not stored: a rerun must try it again, not reuse the
