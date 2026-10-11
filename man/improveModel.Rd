@@ -62,7 +62,10 @@ and with no true change it added nothing at either.}
 \item{nsimDim}{Simulations for the null of the exploratory dimensions (0
 turns them off); see \code{\link[=modificationTests]{modificationTests()}}.}
 
-\item{maxRounds, maxGroups}{Limits on rounds and on group dimensions.}
+\item{maxRounds, maxGroups}{Limits on rounds and on group dimensions. Group
+dimensions are added one per round, the strongest set first, so two
+dimensions need two rounds: until a real dimension is modelled, other sets
+look dependent too.}
 
 \item{seed}{For the holdout split.}
 

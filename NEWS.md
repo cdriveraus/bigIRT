@@ -146,6 +146,12 @@
   below the 0.3 floor, while a correlated three-subdomain model has residual
   correlations of .70 to .78 and predicts held-out students far better. The
   test statistic (z) is unchanged.
+* `improveModel()` adds group dimensions one per round, the strongest set
+  first. Until a real dimension is modelled the general ability leans towards
+  its items and the other items share the leftover covariance; tried in one
+  batch with a real testlet, a 15-item set with no structure of its own rode
+  in with it in 10 per cent of simulated runs once the size estimate above
+  stopped shrinking.
 * Asymptote tests: an item whose other asymptote is free now uses its fitted
   value (it used 0 or 1, so a second round after freeing c tested d with the
   wrong derivative); a fit with every item fixed no longer errors; and each

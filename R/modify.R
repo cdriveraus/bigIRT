@@ -601,7 +601,10 @@ modificationTests <- function(fit, dat, personCovariates = character(), response
 #'   and with no true change it added nothing at either.
 #' @param nsimDim Simulations for the null of the exploratory dimensions (0
 #'   turns them off); see [modificationTests()].
-#' @param maxRounds,maxGroups Limits on rounds and on group dimensions.
+#' @param maxRounds,maxGroups Limits on rounds and on group dimensions. Group
+#'   dimensions are added one per round, the strongest set first, so two
+#'   dimensions need two rounds: until a real dimension is modelled, other sets
+#'   look dependent too.
 #' @param seed For the holdout split.
 #' @param cores Threads.
 #' @param verbose Print progress.
@@ -704,8 +707,14 @@ improveModel <- function(dat, score = "score", id = "id", item = "Item", scale =
     }
     gr <- screens$groups
     if(!is.null(gr) && nrow(gr) && length(spec$groups) < maxGroups){
+      ## One group dimension per round, the strongest first. Until a real
+      ## dimension is modelled the general ability leans towards its items,
+      ## and the other items share the leftover covariance: tried together
+      ## with a real testlet, a 15-item set with no structure of its own rode
+      ## in with it in 10 per cent of simulated runs. The next round re-screens
+      ## with the first dimension in the model.
       keep <- bigIRT_modify_pick_groups(gr, attr(gr, "sets"), unlist(lapply(spec$groups, `[[`, "items")),
-        maxGroups - length(spec$groups), alpha, minGroupSD)
+        min(1L, maxGroups - length(spec$groups)), alpha, minGroupSD)
       if(length(keep)) cand$groups <- keep
     }
     cand <- cand[intersect(names(cand), live)]

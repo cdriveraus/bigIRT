@@ -270,6 +270,32 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     expect_identical(vapply(k, `[[`, "", "name"), c("topic=T", "eigen2+"))
   })
 
+  ## Group dimensions go in one per round. On this data set (the known-
+  ## structure simulation's seed 810110: a testlet on items 11-15, nothing on
+  ## 16-30) the topic sets offered as candidates were both added in one batch
+  ## once the size estimate stopped shrinking: items 16-30 look dependent until
+  ## the testlet is modelled. Added one at a time, the testlet goes in alone.
+  test_that("improveModel adds group dimensions one per round and leaves a set that only looked dependent", {
+    skip_on_cran()
+    set.seed(810110); N <- 3000; J <- 30
+    g <- stats::rbinom(N, 1, .5); z <- stats::runif(N); w <- stats::rnorm(N)
+    th <- stats::rnorm(N) + .8 * g + .8 * (z > .5)
+    u <- stats::rnorm(N, 0, .8)
+    a <- stats::runif(J, .9, 1.6); b <- stats::rnorm(J, 0, .8)
+    cc <- rep(0, J); dif <- rep(0, J); tl <- rep(FALSE, J)
+    cc[6:9] <- .25; dif[1:3] <- .7; tl[11:15] <- TRUE
+    topic <- ifelse(1:J <= 10, "A", ifelse(1:J <= 15, "T", "B"))
+    ii <- rep(seq_len(N), J); jj <- rep(seq_len(J), each = N)
+    eta <- a[jj] * th[ii] - b[jj] + dif[jj] * g[ii] + tl[jj] * u[ii]
+    d <- data.table::data.table(id = ii, Item = jj, Scale = 1L, g = g[ii], z = z[ii], w = w[ii], topic = topic[jj],
+      score = stats::rbinom(N * J, 1, cc[jj] + (1 - cc[jj]) * stats::plogis(eta)))
+    r <- suppressMessages(improveModel(d, pl = 2, personCovariates = c("g", "z", "w"), itemSets = "topic",
+      dif = "B", asymptotes = "lower", nsimDim = 0L, maxRounds = 3L, cores = 1, verbose = FALSE))
+    expect_true(all(r$path$terms[r$path$kind == "groups"] <= 1L))
+    expect_length(r$spec$groups, 1L)
+    expect_setequal(r$spec$groups[[1]]$items, as.character(11:15))
+  })
+
   ## A failed step is not stored: a rerun must try it again, not reuse the
   ## failure (a 76-minute refit of a 20-million-response bank once failed and
   ## was cached).
