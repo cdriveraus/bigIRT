@@ -180,7 +180,9 @@
   covariate's DIF adds its effect on ability if the model lacks one
   (`difImpact = TRUE`): the covariate's basis columns the ability model does
   not already span. A DIF covariate without impact modelled has its impact
-  absorbed by DIF on every item.
+  absorbed by DIF on every item. What is missing is judged when the stage is
+  reached, after the ability batch, and a batch that would add nothing is
+  not refitted.
 * `improveModel()` tries two ways of adding asymptotes and keeps the better
   if it passes: the items the screen selects, or every item free under the
   asymptote prior, whose mean across items is estimated

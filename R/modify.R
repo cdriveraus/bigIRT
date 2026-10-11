@@ -890,17 +890,26 @@ improveModel <- function(dat, score = "score", id = "id", item = "Item", scale =
     ## A DIF covariate whose effect on ability the model lacks (in any form)
     ## gets it first, as a batch of its own: DIF along it would otherwise
     ## absorb impact, and judged together the two could not be told apart.
+    ## What is missing is judged against the model as it stands when the
+    ## stage is reached: the ability batch before it may have added the
+    ## covariate already (judged at the round's start, the impact batch then
+    ## refitted the same model).
     if(isTRUE(difImpact) && length(dif_groups)){
-      cur_args <- bigIRT_modify_build(dat, spec, base)
-      need <- Filter(function(v){
-        z <- cur_args$dat[[v]]
-        B <- bigIRT_modify_basis(z, if(is.character(z) || is.factor(z) || is.logical(z) ||
-          length(unique(stats::na.omit(z))) <= 4L) "factor" else "linear", NULL)
-        length(bigIRT_modify_unspanned(cur_args$dat, cur_args$personPreds, B)) > 0L
-      }, setdiff(unique(vapply(dif_groups, `[[`, "", "covariate")), spec$impact))
-      rm(cur_args)
-      if(length(need)) stages[[length(stages) + 1L]] <- stage("impact",
-        alt("impact", function(s){ s$impact <- union(s$impact, need); s }, length(need)))
+      dif_covs <- unique(vapply(dif_groups, `[[`, "", "covariate"))
+      need_for <- function(s){
+        cand <- setdiff(dif_covs, s$impact)
+        if(!length(cand)) return(character())
+        a <- bigIRT_modify_build(dat, s, base)
+        Filter(function(v){
+          z <- a$dat[[v]]
+          B <- bigIRT_modify_basis(z, if(is.character(z) || is.factor(z) || is.logical(z) ||
+            length(unique(stats::na.omit(z))) <= 4L) "factor" else "linear", NULL)
+          length(bigIRT_modify_unspanned(a$dat, a$personPreds, B)) > 0L
+        }, cand)
+      }
+      if(length(need_for(spec))) stages[[length(stages) + 1L]] <- stage("impact",
+        alt("impact", function(s){ s$impact <- union(s$impact, need_for(s)); s },
+          function(s) length(need_for(s))))
     }
     for(x in dif_groups) local({ xx <- x[c("covariate", "parameter", "kind", "items")]
       stages[[length(stages) + 1L]] <<- stage("dif", alt(paste("dif", make.names(xx$covariate), xx$parameter, sep = "-"),
@@ -962,7 +971,10 @@ improveModel <- function(dat, score = "score", id = "id", item = "Item", scale =
       ## passes the gate is kept.
       best <- NULL
       for(a in sg$alts){
+        if(is.function(a$terms)) a$terms <- a$terms(spec)
         s <- a$apply(spec)
+        ## Nothing left to add once the batches before it are in: no refit.
+        if(identical(s, spec)){ say("round %d, %s: nothing left to add", round, a$label); next }
         tr <- step(sprintf("round%d_%s", round, a$label), s, function(){
           t0 <- proc.time()[[3]]
           ## A batch whose fit or held-out evaluation fails is rejected, and

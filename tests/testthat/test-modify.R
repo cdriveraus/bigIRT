@@ -278,6 +278,9 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     ## effect on ability, not against the base (where DIF would absorb it).
     p1 <- r$path[r$path$round == 1]
     expect_equal(p1$heldout_before[p1$kind == "dif"], p1$heldout_after[p1$kind == "ability"])
+    ## g's impact came in with the ability batch, so no impact batch is
+    ## refitted (judged at the round's start, it refitted the same model).
+    expect_false(any(r$path$kind == "impact"))
   })
 
   ## A kind rejected in a round is not tried again when only kinds before it
