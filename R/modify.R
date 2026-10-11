@@ -219,7 +219,20 @@ bigIRT_modify_basis <- function(z, kind, id = NULL){
 ## out (by their per-person scores, sandwich::estfun()) when that is
 ## affordable, and conservatively not otherwise. One-sided: a variance is not
 ## negative. Returns set, items, persons, z, p, one-step tau^2.
-bigIRT_modify_groups <- function(fit, sc, sets, cores = 1L, nodes = NULL, max_proj = 200L){
+##
+## The one-step tau^2 divides the score by its NULL information, the summed
+## squares of the persons' scores in data simulated from the fitted model
+## (`nsimNull` data sets), not by the observed outer product. Under the
+## alternative every person's score has a mean of order k^2 tau^2 (k their
+## responses in the set), and the observed outer product carries those
+## squared means: with true SD 0.5 the observed-outer-product estimate fell
+## from 0.52 to 0.09 as k went from 5 to 100 items per person, while the null
+## information held it steady (diag_set_onestep*.R in the model-building
+## study). On Mindsteps it had put subdomains at SD 0.06 that a correlated
+## three-subdomain model shows to be distinct. The test itself (z) uses the
+## observed outer product, which is right under the null.
+bigIRT_modify_groups <- function(fit, sc, sets, cores = 1L, nodes = NULL, max_proj = 200L,
+  nsimNull = 2L, seed = 1L){
   if(!length(sets)) return(NULL)
   ## The kernel takes one set per response, so overlapping sets (a subdomain
   ## and a competence area within it) cannot share a pass: labelling them in
@@ -237,12 +250,25 @@ bigIRT_modify_groups <- function(fit, sc, sets, cores = 1L, nodes = NULL, max_pr
   }
   st <- bigIRT_score_setup(fit, cores = cores)
   rule <- bigIRT_score_rule(fit, st$K, nodes)
-  Tm <- matrix(0, st$N, length(sets))
-  for(L in seq_along(used)){
-    ks <- which(layer_of == L)
-    soi <- integer(ni)
+  soi_of <- lapply(seq_along(used), function(L){
+    ks <- which(layer_of == L); soi <- integer(ni)
     for(j in seq_along(ks)) soi[match(sets[[ks[j]]], sc$item_labels)] <- j
-    Tm[, ks] <- bigIRT_modify_vc_scores(fit, soi, st = st, rule = rule)
+    list(ks = ks, soi = soi)
+  })
+  scores <- function(s){
+    Tm <- matrix(0, st$N, length(sets))
+    for(l in soi_of) Tm[, l$ks] <- bigIRT_modify_vc_scores(fit, l$soi, st = s, rule = rule)
+    Tm
+  }
+  Tm <- scores(st)
+  V0 <- rep(NA_real_, length(sets))
+  if(nsimNull > 0L){
+    old <- if(exists(".Random.seed", globalenv())) get(".Random.seed", globalenv()) else NULL
+    on.exit(if(!is.null(old)) assign(".Random.seed", old, globalenv()))
+    set.seed(seed)
+    ## (A matrix even for one set, which vapply would return as a vector.)
+    V0 <- rowMeans(matrix(vapply(seq_len(nsimNull), function(b) colSums(scores(bigIRT_modify_null_state(st))^2),
+      numeric(length(sets))), nrow = length(sets)))
   }
   out <- list()
   for(k in seq_along(sets)){
@@ -250,7 +276,7 @@ bigIRT_modify_groups <- function(fit, sc, sets, cores = 1L, nodes = NULL, max_pr
     its <- sets[[k]]
     persons <- sum(t != 0)
     if(persons < 10L || length(its) < 2L) next
-    U <- sum(t); V <- sum(t^2)
+    U <- sum(t); V <- V_raw <- sum(t^2)
     Psi <- tryCatch(if(sum(sc$item_free[match(its, sc$item_labels), ]) <= max_proj)
       estfun.bigIRT_scores(sc, items = its) else NULL, error = function(e) NULL)
     if(!is.null(Psi) && ncol(Psi)){
@@ -259,9 +285,12 @@ bigIRT_modify_groups <- function(fit, sc, sets, cores = 1L, nodes = NULL, max_pr
       V <- V - as.numeric(crossprod(tp, pinv %*% tp))
     }
     z <- if(V > 0) U / sqrt(V) else NA_real_
+    ## The null information, reduced by the projection in the same proportion
+    ## as the observed outer product.
+    I0 <- if(is.finite(V0[k]) && V0[k] > 0 && V_raw > 0) V0[k] * V / V_raw else V
     out[[length(out) + 1L]] <- data.table::data.table(set = names(sets)[k], items = length(its),
       persons = persons, z = z, p = stats::pnorm(z, lower.tail = FALSE),
-      tau2 = if(V > 0) max(U / V, 0) else NA_real_)
+      tau2 = if(I0 > 0) max(U / I0, 0) else NA_real_)
   }
   data.table::rbindlist(out)
 }
@@ -331,6 +360,18 @@ bigIRT_modify_simulate <- function(st){
   as.integer(stats::runif(length(p)) < p)
 }
 
+## The scoring state for responses simulated from the fitted model: same
+## persons, items and rule, new responses, each person's posterior re-solved.
+bigIRT_modify_null_state <- function(st){
+  s2 <- st
+  s2$args$score <- bigIRT_modify_simulate(st)
+  s2$args_post <- if(any(st$hold == 1L)) bigIRT_score_args_rows(s2$args, st$hold == 0L) else s2$args
+  s2$posterior <- do.call(bigIRT_laplace_person_step_block_cpp_impl, c(s2$args_post, list(
+    theta_init = st$posterior$theta_mode, jitter = 1e-6, max_attempts = 8L, max_iter = 100L,
+    tol = 1e-10, keep_covariance = FALSE)))
+  s2
+}
+
 bigIRT_modify_dimensions <- function(fit, m = 2L, nsim = 19L, iters = 60L, cores = 1L, nodes = NULL, seed = 1L){
   st <- bigIRT_score_setup(fit, cores = cores)
   rule <- bigIRT_score_rule(fit, st$K, nodes)
@@ -340,16 +381,8 @@ bigIRT_modify_dimensions <- function(fit, m = 2L, nsim = 19L, iters = 60L, cores
     old <- if(exists(".Random.seed", globalenv())) get(".Random.seed", globalenv()) else NULL
     on.exit(if(!is.null(old)) assign(".Random.seed", old, globalenv()))
     set.seed(seed + 1L)
-    null <- vapply(seq_len(nsim), function(b){
-      s2 <- st
-      y <- bigIRT_modify_simulate(st)
-      s2$args$score <- y
-      s2$args_post <- if(any(st$hold == 1L)) bigIRT_score_args_rows(s2$args, st$hold == 0L) else s2$args
-      s2$posterior <- do.call(bigIRT_laplace_person_step_block_cpp_impl, c(s2$args_post, list(
-        theta_init = st$posterior$theta_mode, jitter = 1e-6, max_attempts = 8L, max_iter = 100L,
-        tol = 1e-10, keep_covariance = FALSE)))
-      bigIRT_modify_eigen(s2, rule, m = 1L, iters = iters, seed = seed + b)$values[1]
-    }, 0)
+    null <- vapply(seq_len(nsim), function(b)
+      bigIRT_modify_eigen(bigIRT_modify_null_state(st), rule, m = 1L, iters = iters, seed = seed + b)$values[1], 0)
   }
   item_labels <- rownames(fit$pars$B) %||% as.character(seq_len(fit$prepared$Nitems))
   list(values = obs$values, vectors = obs$vectors, null = null,

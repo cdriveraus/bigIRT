@@ -149,6 +149,32 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
       sum(bigIRT:::bigIRT_modify_vc_scores(f, soi, nodes = 41L)), tolerance = 1e-8)
   })
 
+  ## The one-step size of a group dimension must not shrink when persons give
+  ## many responses to the set. Truth: each of three 60-item sets carries a
+  ## person effect with SD 0.5 on the linear predictor (slopes 1); every
+  ## person answers 40 items in each. Dividing the score by its observed
+  ## outer product gave about 0.2 here (0.09 at 100 items a set); dividing by
+  ## the null information recovers the truth.
+  test_that("the group screen's one-step SD is not attenuated by many responses per person", {
+    skip_on_cran()
+    set.seed(12); N <- 1500L; S <- 3L; Js <- 60L; k <- 40L
+    sub <- rep(seq_len(S), each = Js); b <- stats::rnorm(S * Js, 0, 1)
+    th <- stats::rnorm(N); u <- matrix(stats::rnorm(N * S, 0, .5), N, S)
+    d <- data.table::rbindlist(lapply(seq_len(N), function(i)
+      data.table::data.table(id = i, Item = unlist(lapply(seq_len(S), function(s) sample(which(sub == s), k))))))
+    d[, set := sub[Item]]
+    d[, score := as.integer(stats::runif(.N) < stats::plogis(th[id] + u[cbind(id, set)] - b[Item]))]
+    d[, `:=`(Scale = 1L, set = paste0("s", set))]
+    f <- suppressWarnings(fitIRT(d, pl = 2, cores = 1, verbose = 0, laplaceCertify = FALSE,
+      laplaceRefine = "agq", normalise = FALSE))
+    mt <- modificationTests(f, d, itemSets = "set", dif = character(), asymptotes = character(),
+      exploratory = FALSE)
+    sdh <- sqrt(mt$groups$tau2)
+    expect_length(sdh, 3L)
+    expect_true(all(sdh > .38 & sdh < .7))
+    expect_true(all(mt$groups$z > 5))
+  })
+
   ## Overlapping sets (a subdomain and a competence area within it) are
   ## tested as if each were alone. One pass once let the last set take every
   ## shared item.

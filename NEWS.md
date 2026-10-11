@@ -135,6 +135,17 @@
 * Named item sets now take precedence over overlapping sets found from the
   scores alone: a labelled set was specified in advance and says what the
   dimension is; the exploratory route is for structure the labels miss.
+* The group-dimension screen's one-step size (`tau2`) now divides the score by
+  its null information, from two data sets simulated under the fitted model,
+  instead of by the observed outer product. Under the alternative the outer
+  product carries each person's squared mean, which grows with their
+  responses in the set, so the old estimate collapsed exactly where persons
+  answer many items of a set: with true SD 0.5 it gave 0.52, 0.38, 0.20 and
+  0.09 at 5, 15, 40 and 100 items a person, while the new one holds steady.
+  On the Mindsteps bank the old estimate put the three subdomains at SD 0.06,
+  below the 0.3 floor, while a correlated three-subdomain model has residual
+  correlations of .70 to .78 and predicts held-out students far better. The
+  test statistic (z) is unchanged.
 * Asymptote tests: an item whose other asymptote is free now uses its fitted
   value (it used 0 or 1, so a second round after freeing c tested d with the
   wrong derivative); a fit with every item fixed no longer errors; and each
