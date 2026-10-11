@@ -182,9 +182,10 @@
   not already span. A DIF covariate without impact modelled has its impact
   absorbed by DIF on every item.
 * `improveModel()` tries two ways of adding asymptotes and keeps the better
-  if it passes: the items the screen selects, or every item free under a
-  hierarchical prior (`asymptotePooled = TRUE`), which needs no selection and
-  does not overstate the items that happen to pass.
+  if it passes: the items the screen selects, or every item free under the
+  asymptote prior, whose mean across items is estimated
+  (`asymptotePooled = TRUE`). That needs no selection, and it collects many
+  small asymptotes that are each too weakly identified to pass a screen.
 * With item sets that partition the items (`partitions = TRUE`),
   `improveModel()` also tries the partition as correlated dimensions, one
   per set, as an alternative to a group dimension for its strongest set,

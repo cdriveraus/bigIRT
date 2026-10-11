@@ -632,7 +632,8 @@ modificationTests <- function(fit, dat, personCovariates = character(), response
   ## a direction's heavily loading items, split by sign, become candidate
   ## sets, tested and sized on the OTHER half. A set chosen by maximising over
   ## the same persons it is then tested on looks larger than it is: on
-  ## Mindsteps such sets read SD 2 to 4 where the named sets read 0.4. On the
+  ## Mindsteps such sets read SD 2.3 to 3.8 where the named sets read 0.35 to
+  ## 0.60. On the
   ## other half the choice is fixed in advance, so the set's own test is valid
   ## and its size unbiased.
   ## The set a batch would add takes its members from the same direction
