@@ -847,6 +847,9 @@ improveModel <- function(dat, score = "score", id = "id", item = "Item", scale =
   ## and a retry would only refit the same candidates).
   kinds <- c("ability", "impact", "dif", "asymptotes", "groups")
   live <- kinds
+  ## The accepted step whose stored fit is the current model's (none while
+  ## the base is current: the base fit is returned and kept).
+  holder <- NULL
   for(round in seq_len(maxRounds)){
     covs_in <- vapply(spec$abil, function(a) a$covariate, "")
     pc_left <- setdiff(personCovariates, c(covs_in, personPreds))
@@ -971,7 +974,7 @@ improveModel <- function(dat, score = "score", id = "id", item = "Item", scale =
     }
     if(length(gr_alts)) stages[[length(stages) + 1L]] <- do.call(stage, c(list("groups"), gr_alts))
     if(!length(stages)){ say("round %d: nothing to add", round); break }
-    ho_start <- cur_ho$loglik; kept <- character()
+    ho_start <- cur_ho$loglik; kept <- character(); passed <- list()
     for(sg in stages){
       ## Each alternative judged against the current model; the best that
       ## passes the gate is kept.
@@ -1001,12 +1004,26 @@ improveModel <- function(dat, score = "score", id = "id", item = "Item", scale =
         if(!is.null(tr$error)) say("round %d, %s: %d terms, failed (%s)", round, a$label, a$terms, tr$error)
         else say("round %d, %s: %d terms, held-out gain %.1f (z %.1f)%s", round, a$label, a$terms,
           tr$gain, tr$z, if(tr$ok) " (passes)" else "")
-        if(tr$ok && (is.null(best) || tr$gain > best$tr$gain)) best <- list(tr = tr, s = s, at = length(path))
+        if(tr$ok){
+          passed[[length(passed) + 1L]] <- list(name = sprintf("round%d_%s", round, a$label), s = s, tr = tr)
+          if(is.null(best) || tr$gain > best$tr$gain) best <- list(tr = tr, s = s, at = length(path), slot = length(passed))
+        }
       }
       if(!is.null(best)){
         spec <- best$s; cur <- best$tr$fit; cur_ho <- best$tr$h; kept <- c(kept, sg$kind)
         path[[best$at]]$accepted <- TRUE
+        ## Only the latest accepted fit is needed again (a resumed run takes
+        ## its model from it), so the checkpoint keeps every other step's
+        ## verdict but not its fit: the alternatives that passed and lost,
+        ## and the fit this one supersedes. On Mindsteps each fit is 13 GB,
+        ## and a round can accept a batch per DIF covariate.
+        if(!is.null(checkpoint)){
+          slim <- c(passed[-best$slot], if(!is.null(holder)) list(holder))
+          for(x in slim){ v <- x$tr; v$fit <- NULL; bigIRT_modify_store(checkpoint, x$name, fp, x$s, v) }
+        }
+        holder <- passed[[best$slot]]
       }
+      passed <- list()
     }
     if(!length(kept)) break
     say("round %d: held-out log-likelihood %.1f -> %.1f", round, ho_start, cur_ho$loglik)
@@ -1059,12 +1076,20 @@ bigIRT_modify_checkpoint <- function(dir, fp){
     ## A step that failed (it carries an error) is not stored, so a rerun
     ## tries it again rather than reusing the failure.
     if(!is.null(v$error)) return(v)
-    tmp <- paste0(f, ".part")
-    saveRDS(list(fp = fp, spec = spec, value = v), tmp, compress = FALSE)
-    if(file.exists(f)) unlink(f)
-    file.rename(tmp, f)
+    bigIRT_modify_store(dir, name, fp, spec, v)
     v
   }
+}
+
+## Writes a checkpoint step, to a temporary name first so that an interrupted
+## write cannot leave a truncated file behind.
+bigIRT_modify_store <- function(dir, name, fp, spec, value){
+  f <- file.path(dir, paste0(name, ".rds"))
+  tmp <- paste0(f, ".part")
+  saveRDS(list(fp = fp, spec = spec, value = value), tmp, compress = FALSE)
+  if(file.exists(f)) unlink(f)
+  file.rename(tmp, f)
+  invisible(f)
 }
 
 #' @export

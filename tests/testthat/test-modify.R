@@ -511,4 +511,38 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     expect_equal(r3$path$heldout_before[1], r1$path$heldout_before[1])
     unlink(ck, recursive = TRUE)
   })
+
+  ## The checkpoint kept the fit of every batch that passed; on Mindsteps a
+  ## fit is 13 GB and a round can accept a batch per DIF covariate, more than
+  ## the disk held. Only the latest accepted fit is needed to resume, so the
+  ## others keep their verdicts and drop their fits -- and a resumed run must
+  ## still give the same result.
+  test_that("the checkpoint keeps only the current model's fit, and a resumed run gives the same result", {
+    skip_on_cran()
+    set.seed(21); N <- 3000; J <- 20
+    g <- stats::rbinom(N, 1, .5); w <- stats::rnorm(N)
+    th <- stats::rnorm(N) + .8 * g; u <- stats::rnorm(N, 0, .9)
+    a <- stats::runif(J, .9, 1.6); b <- stats::rnorm(J, 0, .8)
+    dif <- rep(0, J); dif[1:3] <- .8
+    ii <- rep(seq_len(N), J); jj <- rep(seq_len(J), each = N)
+    eta <- a[jj] * th[ii] - b[jj] + dif[jj] * g[ii] + (jj %in% 11:15) * u[ii]
+    d <- data.frame(id = ii, Item = jj, Scale = 1, g = g[ii], w = w[ii],
+      score = stats::rbinom(N * J, 1, stats::plogis(eta)))
+    ck <- file.path(tempdir(), "improve_ck_slim")
+    unlink(ck, recursive = TRUE)
+    run <- function() suppressMessages(improveModel(d, pl = 2, personCovariates = c("g", "w"), dif = "B",
+      asymptotes = character(), nsimDim = 9L, maxRounds = 2L, cores = 1, verbose = FALSE, checkpoint = ck))
+    r1 <- run()
+    acc <- r1$path[r1$path$accepted]
+    expect_gte(nrow(acc), 2L)
+    files <- file.path(ck, paste0("round", acc$round, "_", acc$batch, ".rds"))
+    has_fit <- vapply(files, function(f) !is.null(readRDS(f)$value$fit), TRUE)
+    expect_identical(unname(has_fit), c(rep(FALSE, nrow(acc) - 1L), TRUE))
+    expect_false(is.null(readRDS(file.path(ck, "base.rds"))$value$fit))
+    r2 <- run()
+    expect_identical(r2$spec, r1$spec)
+    expect_equal(r2$path, r1$path)
+    expect_equal(r2$fit$itemPars, r1$fit$itemPars)
+    unlink(ck, recursive = TRUE)
+  })
 }

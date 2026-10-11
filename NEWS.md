@@ -197,6 +197,12 @@
 
 ## Fixes
 
+* `improveModel(checkpoint = )` keeps the fit of the current model only:
+  every other step keeps its verdict (held-out values, gain, z) but drops
+  its fit once a later batch is accepted or another alternative wins. A
+  resumed run needs nothing more. It kept every passing batch's fit, and
+  on Mindsteps, where a fit is 13 GB and a round can accept a batch per DIF
+  covariate, that was more than the disk held.
 * A 0/1 response covariate that is rarely 1 (a repeated attempt at an item,
   say) got a DIF effect size of zero on every item: read as continuous, its
   effect contrast was its 90th against its 10th percentile, both 0. No DIF
