@@ -195,6 +195,22 @@
   add sets one at a time and orthogonally; on Mindsteps the three subdomains
   as correlated dimensions predicted held-out students far better.
 
+* `fitIRT(startFrom = fit)` starts the optimisation from a previous fit's
+  estimates, matched by label (items, dimensions, persons, predictors);
+  anything the previous fit lacks keeps its default start. Only the starting
+  point changes: from its own estimates a fit stays at its optimum in a
+  fraction of the evaluations, and a model with DIF terms added, asymptotes
+  freed or one dimension split into correlated ones reaches the optimum its
+  cold start reaches (`test-start-from.R`). `improveModel()` starts every
+  batch, and the final refit, from the current model. Started from the
+  priors -- every free asymptote at c = .25 and d = .75 -- a 3-D 4PL on
+  Mindsteps with four DIF terms added stopped at a point 16,551 held-out
+  nats worse than the model it extended.
+* `improveModel(checkpoint = )` no longer holds the base fit in memory
+  through the rounds (it is read back at the end), and holds only the best
+  passing fit of a stage. On Mindsteps a refit held three fits at once and
+  ran out of memory at 67 of 128 GB.
+
 ## Fixes
 
 * `improveModel(checkpoint = )` keeps the fit of the current model only:

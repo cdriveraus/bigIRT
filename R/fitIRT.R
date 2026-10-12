@@ -1516,6 +1516,14 @@ bigIRT_validate_fit_inputs <- function(dat, score, id, item, scale, pl, controls
 #'   comparing fits across designs of very different sizes, but note that it
 #'   is far stricter at large N: a tolerance chosen for \code{\"relative\"}
 #'   should not be carried over unchanged.
+#' @param startFrom Optional: a previous fit from \code{fitIRT()} to start
+#'   the optimisation from, rather than from the priors. Its estimates are
+#'   matched to this model by label -- items, dimensions, persons and
+#'   predictors -- and anything it lacks (a new covariate's coefficients, a
+#'   newly freed asymptote) keeps its default start. The model fitted is
+#'   unchanged; only the starting point is. For refitting a model with a few
+#'   terms added: a cold start of a large model, with every free asymptote
+#'   starting at c = .25 and d = .75, can stop at a far worse optimum.
 #' @param keepInternals Logical. Attach the prepared data (\code{sdat}), the
 #'   final parameter state and the prior precision array to the returned fit.
 #'   Off by default because these carry copies of the response arrays. Useful
@@ -1859,9 +1867,11 @@ fitIRT <- function(dat, score = 'score', id = 'id', item = 'Item', scale = 'Scal
   laplacePlotEvery = 1L,
   normalise = FALSE, normaliseScale = 1, normaliseMean = 0,
   dropPerfectScores = FALSE, trainingRows = 1:nrow(dat),
-  cores = 6, verbose = 0L, keepInternals = FALSE, ...){
+  cores = 6, verbose = 0L, keepInternals = FALSE, startFrom = NULL, ...){
 
   bigIRT_check_dots(list(...))
+  if(!is.null(startFrom) && !inherits(startFrom, "bigIRT_fit") && is.null(startFrom$prepared))
+    stop("startFrom must be a fit from fitIRT().", call. = FALSE)
   trainingRows <- bigIRT_validate_fit_inputs(
     dat, score, id, item, scale, pl,
     controls = list(cores = cores, laplaceOuterIter = laplaceOuterIter,
@@ -2284,6 +2294,14 @@ fitIRT <- function(dat, score = 'score', id = 'id', item = 'Item', scale = 'Scal
   if(estimateAbilityCorr) laplaceKeepCovariance <- TRUE
 
   state <- bigIRT_laplace_initial_state(sdat, eps = laplaceJitter, corr_paramization = laplaceCorrParam)
+  if(!is.null(startFrom)){
+    state <- bigIRT_laplace_warm_state(state, sdat, startFrom, labels = list(
+      items = bigIRT_index_labels(itemIndex), scales = bigIRT_index_labels(scaleIndex),
+      ids = bigIRT_index_labels(idIndex),
+      personPreds = if(sdat$NpersonPreds > 0L) colnames(personPreds) else character(),
+      Bpreds = BitemPreds, estimate_corr = estimateAbilityCorr))
+    laplace_trace(1, "Laplace: starting from the estimates of a previous fit (startFrom).")
+  }
   priorPrecision <- bigIRT_laplace_prior_mats(sdat, jitter = laplaceJitter)$precision_array
   laplace_trace(1, sprintf(
     "%s: starting prior-anchored fit with %d persons, %d items, %d dimensions, max_iter=%d.",

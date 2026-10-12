@@ -816,9 +816,14 @@ improveModel <- function(dat, score = "score", id = "id", item = "Item", scale =
   train <- which(!dat[[id]] %in% ho)
   fa <- utils::modifyList(list(cores = cores, verbose = 0, laplaceCertify = FALSE), fitArgs)
   base <- list(score = score, id = id, item = item, scale = scale, pl = as.integer(pl), fitArgs = fa)
-  fit_spec <- function(spec, rows){
+  ## A batch is the current model with terms added, so it starts from the
+  ## current model's estimates (`start`): fitted from the priors, a large
+  ## model can stop at a far worse optimum -- on Mindsteps a 3-D 4PL with four
+  ## DIF terms added lost 16,551 held-out nats that way.
+  fit_spec <- function(spec, rows, start = NULL){
     a <- bigIRT_modify_build(dat, spec, base)
     if(!is.null(rows)) a$trainingRows <- rows
+    if(!is.null(start)) a$startFrom <- start
     suppressWarnings(do.call(fitIRT, a))
   }
   say <- function(...) if(isTRUE(verbose)) message(sprintf(...))
@@ -834,11 +839,17 @@ improveModel <- function(dat, score = "score", id = "id", item = "Item", scale =
   timing <- list()
   spec <- list(personPreds = personPreds, abil = list(), impact = character(), dif = list(), lower = character(),
     upper = character(), pooled = character(), groups = list(), partition = character())
+  base_spec <- spec
   b <- step("base", spec, function(){
     t0 <- proc.time()[[3]]; f <- fit_spec(spec, train)
     list(fit = f, h = heldoutLogLik(f, cores = cores), seconds = secs(t0))
   })
-  cur <- b$fit; base_fit <- cur; cur_ho <- b$h; timing$base <- b$seconds
+  cur <- b$fit; cur_ho <- b$h; timing$base <- b$seconds
+  ## With a checkpoint the base fit is read back at the end rather than held
+  ## through the rounds: on large data each fit is many GB, and a refit holds
+  ## the current fit and the new one besides.
+  base_fit <- if(is.null(checkpoint)) cur else NULL
+  rm(b)
   say("base model: held-out log-likelihood %.1f", cur_ho$loglik)
   path <- list(); screens <- NULL
   ## The kinds open to change. A kind rejected in a round already met every
@@ -989,7 +1000,7 @@ improveModel <- function(dat, score = "score", id = "id", item = "Item", scale =
           ## A batch whose fit or held-out evaluation fails is rejected, and
           ## the reason kept: a failure is not evidence against the change.
           err <- NULL
-          f <- tryCatch(fit_spec(s, train), error = function(e){ err <<- conditionMessage(e); NULL })
+          f <- tryCatch(fit_spec(s, train, start = cur), error = function(e){ err <<- conditionMessage(e); NULL })
           h <- if(is.null(f)) NULL else tryCatch(heldoutLogLik(f, cores = cores),
             error = function(e){ err <<- paste("heldoutLogLik:", conditionMessage(e)); NULL })
           gm <- if(is.null(h)) list(gain = NA_real_, z = NA_real_) else bigIRT_modify_gain(cur_ho, h)
@@ -1005,9 +1016,18 @@ improveModel <- function(dat, score = "score", id = "id", item = "Item", scale =
         else say("round %d, %s: %d terms, held-out gain %.1f (z %.1f)%s", round, a$label, a$terms,
           tr$gain, tr$z, if(tr$ok) " (passes)" else "")
         if(tr$ok){
-          passed[[length(passed) + 1L]] <- list(name = sprintf("round%d_%s", round, a$label), s = s, tr = tr)
-          if(is.null(best) || tr$gain > best$tr$gain) best <- list(tr = tr, s = s, at = length(path), slot = length(passed))
+          ## Only the stage's best fit is held in memory; the others keep
+          ## their verdicts.
+          is_best <- is.null(best) || tr$gain > best$tr$gain
+          slim_tr <- tr; slim_tr$fit <- NULL
+          passed[[length(passed) + 1L]] <- list(name = sprintf("round%d_%s", round, a$label), s = s,
+            tr = if(is_best) tr else slim_tr)
+          if(is_best){
+            if(!is.null(best)) passed[[best$slot]]$tr$fit <- NULL
+            best <- list(tr = tr, s = s, at = length(path), slot = length(passed))
+          }
         }
+        tr <- NULL; gc(verbose = FALSE)
       }
       if(!is.null(best)){
         spec <- best$s; cur <- best$tr$fit; cur_ho <- best$tr$h; kept <- c(kept, sg$kind)
@@ -1031,9 +1051,11 @@ improveModel <- function(dat, score = "score", id = "id", item = "Item", scale =
     live <- kinds[kinds %in% kept | seq_along(kinds) < last_kept]
   }
   fin <- step("final", spec, function(){
-    t0 <- proc.time()[[3]]; list(fit = fit_spec(spec, NULL), seconds = secs(t0))
+    t0 <- proc.time()[[3]]; list(fit = fit_spec(spec, NULL, start = cur), seconds = secs(t0))
   })
   timing$final <- fin$seconds
+  rm(cur)
+  if(is.null(base_fit)) base_fit <- step("base", base_spec, function() stop("the checkpoint lost the base step"))$fit
   structure(list(fit = fin$fit, spec = spec, path = data.table::rbindlist(path, fill = TRUE), screens = screens,
     base_fit = base_fit, holdout_persons = ho, timing = unlist(timing)), class = "bigIRT_improved")
 }
