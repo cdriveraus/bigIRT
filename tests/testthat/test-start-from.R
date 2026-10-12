@@ -3,9 +3,8 @@
 ## the optimum a cold start reaches -- for the same model, and for a bigger one
 ## that adds DIF terms, frees asymptotes, or splits one dimension into
 ## correlated ones -- and from its own estimates it must get there in far
-## fewer evaluations. improveModel() refits every batch this way: on Mindsteps
-## a cold-started 3-D 4PL with four DIF terms added stopped 16,551 held-out
-## nats short.
+## fewer evaluations. improveModel() refits every batch this way, so a batch
+## begins at the model it extends.
 
 if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
 

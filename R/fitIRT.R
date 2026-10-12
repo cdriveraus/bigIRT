@@ -1522,8 +1522,9 @@ bigIRT_validate_fit_inputs <- function(dat, score, id, item, scale, pl, controls
 #'   predictors -- and anything it lacks (a new covariate's coefficients, a
 #'   newly freed asymptote) keeps its default start. The model fitted is
 #'   unchanged; only the starting point is. For refitting a model with a few
-#'   terms added: a cold start of a large model, with every free asymptote
-#'   starting at c = .25 and d = .75, can stop at a far worse optimum.
+#'   terms added: the fit then begins at the model it extends and can only
+#'   climb from there, and gets there in far fewer evaluations than from the
+#'   priors (where every free asymptote starts at c = .25 and d = .75).
 #' @param keepInternals Logical. Attach the prepared data (\code{sdat}), the
 #'   final parameter state and the prior precision array to the returned fit.
 #'   Off by default because these carry copies of the response arrays. Useful

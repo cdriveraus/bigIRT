@@ -202,10 +202,12 @@
   fraction of the evaluations, and a model with DIF terms added, asymptotes
   freed or one dimension split into correlated ones reaches the optimum its
   cold start reaches (`test-start-from.R`). `improveModel()` starts every
-  batch, and the final refit, from the current model. Started from the
-  priors -- every free asymptote at c = .25 and d = .75 -- a 3-D 4PL on
-  Mindsteps with four DIF terms added stopped at a point 16,551 held-out
-  nats worse than the model it extended.
+  batch, and the final refit, from the current model, so a batch begins at
+  the model it extends and can only climb. On Mindsteps one batch (a 3-D
+  4PL with four DIF terms added) came back 16,551 held-out nats worse than
+  the model it extended, in a run at its memory limit; refitted alone from
+  the priors it was 2.7 nats worse, as it should be. What went wrong in the
+  run was not established.
 * `improveModel(checkpoint = )` no longer holds the base fit in memory
   through the rounds (it is read back at the end), and holds only the best
   passing fit of a stage. On Mindsteps a refit held three fits at once and

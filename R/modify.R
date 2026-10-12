@@ -817,9 +817,12 @@ improveModel <- function(dat, score = "score", id = "id", item = "Item", scale =
   fa <- utils::modifyList(list(cores = cores, verbose = 0, laplaceCertify = FALSE), fitArgs)
   base <- list(score = score, id = id, item = item, scale = scale, pl = as.integer(pl), fitArgs = fa)
   ## A batch is the current model with terms added, so it starts from the
-  ## current model's estimates (`start`): fitted from the priors, a large
-  ## model can stop at a far worse optimum -- on Mindsteps a 3-D 4PL with four
-  ## DIF terms added lost 16,551 held-out nats that way.
+  ## current model's estimates (`start`): it begins at the model it extends
+  ## and can only climb, in far fewer evaluations. (On Mindsteps one batch, a
+  ## 3-D 4PL with four DIF terms added, came back 16,551 held-out nats worse
+  ## than the model it extended, in a run at its memory limit; refitted alone
+  ## from the priors it was 2.7 nats worse. The cause was not established; a
+  ## nested batch that starts where the current model ends cannot do that.)
   fit_spec <- function(spec, rows, start = NULL){
     a <- bigIRT_modify_build(dat, spec, base)
     if(!is.null(rows)) a$trainingRows <- rows
