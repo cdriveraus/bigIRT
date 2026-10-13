@@ -215,6 +215,17 @@
 
 ## Fixes
 
+* `improveModel()`: DIF added in a later round along a covariate that already
+  had DIF in the model collided with it. Each batch was a separate term
+  whose column took the same name, so the later batch's items overwrote the
+  earlier column -- the earlier items lost their DIF -- and the column was
+  listed twice. On Mindsteps a round-2 batch of 2 age items dropped the age
+  DIF of 3,883 items and ran for ten hours before it was stopped. DIF along
+  one covariate and parameter is now one term over the union of its items,
+  and the build asserts that no predictor is listed twice. The same
+  collision probably explains an earlier round-2 DIF batch that "failed
+  numerically". None of the simulation runs hit it (no run tried round-2
+  DIF along a covariate kept in round 1).
 * `improveModel(checkpoint = )` keeps the fit of the current model only:
   every other step keeps its verdict (held-out values, gain, z) but drops
   its fit once a later batch is accepted or another alternative wins. A

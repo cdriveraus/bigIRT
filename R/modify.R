@@ -241,13 +241,14 @@ bigIRT_modify_build <- function(dat, spec, base){
     pp <- c(pp, nm[keep])
   }
   Bp <- character(); Ap <- character()
-  for(t in spec$dif){
+  for(t in bigIRT_modify_merge_dif(spec$dif)){
     B <- bigIRT_modify_basis(d[[t$covariate]], t$kind, NULL)
     mask <- it %in% t$items
     nm <- paste0(".dif_", t$parameter, "_", make.names(t$covariate), "_", seq_len(ncol(B)))
     for(k in seq_len(ncol(B))) data.table::set(d, j = nm[k], value = B[, k] * mask)
     if(t$parameter == "B") Bp <- c(Bp, nm) else Ap <- c(Ap, nm)
   }
+  stopifnot(!anyDuplicated(Bp), !anyDuplicated(Ap))
   pl <- base$pl
   free_c <- "lower" %in% spec$pooled; free_d <- "upper" %in% spec$pooled
   if(length(spec$upper) || free_d) pl <- 4L else if(length(spec$lower) || free_c) pl <- max(pl, 3L)
@@ -283,6 +284,22 @@ bigIRT_modify_build <- function(dat, spec, base){
     personPreds = pp, BitemPreds = Bp, AitemPreds = Ap, itemSpecificBetas = length(c(Bp, Ap)) > 0,
     itemDat = itemDat, loadings = loadings, normalise = FALSE), fa)
   args
+}
+
+## DIF along one covariate and parameter is one term -- one set of columns,
+## with a coefficient per item -- so a later batch along a covariate already
+## in the model adds its items to that term. Kept as separate entries they
+## shared a column name, and the later overwrote the earlier's column with its
+## own items' mask: on Mindsteps a round-2 batch of 2 age items removed the
+## age DIF of the 3,883 items round 1 had added, and listed the column twice.
+bigIRT_modify_merge_dif <- function(dif){
+  if(length(dif) < 2L) return(dif)
+  key <- vapply(dif, function(t) paste(t$covariate, t$parameter, sep = "\r"), "")
+  unname(lapply(split(seq_along(dif), factor(key, levels = unique(key))), function(ix){
+    t <- dif[[ix[1L]]]
+    t$items <- unique(unlist(lapply(dif[ix], `[[`, "items")))
+    t
+  }))
 }
 
 ## Which columns of B add to the span of the ability predictors `pp` (with an
@@ -936,7 +953,7 @@ improveModel <- function(dat, score = "score", id = "id", item = "Item", scale =
     }
     for(x in dif_groups) local({ xx <- x[c("covariate", "parameter", "kind", "items")]
       stages[[length(stages) + 1L]] <<- stage("dif", alt(paste("dif", make.names(xx$covariate), xx$parameter, sep = "-"),
-        function(s){ s$dif <- c(s$dif, list(xx)); s }, length(xx$items)))
+        function(s){ s$dif <- bigIRT_modify_merge_dif(c(s$dif, list(xx))); s }, length(xx$items)))
     })
     as <- screens$asymptotes
     as_alts <- list()

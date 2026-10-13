@@ -371,6 +371,29 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     expect_lte(length(unlist(lapply(r$spec$dif, `[[`, "items"))), 5L)
   })
 
+  ## DIF added along a covariate already in the model (round 2 after round 1)
+  ## must extend that covariate's term, not collide with it: as a second entry
+  ## it took the same column name, overwrote the first entry's column with its
+  ## own items' mask, and listed the column twice (on Mindsteps the age DIF of
+  ## 3,883 items vanished from a round-2 refit, which then ran for hours).
+  test_that("DIF along one covariate from two rounds is one term over both rounds' items", {
+    d <- data.frame(id = rep(1:50, each = 6), Item = rep(1:6, 50), Scale = 1, score = rbinom(300, 1, .5),
+      z = rep(seq(-1, 1, length.out = 50), each = 6))
+    spec <- list(personPreds = character(), abil = list(), impact = character(),
+      dif = list(list(covariate = "z", parameter = "B", kind = "linear", items = c("1", "2")),
+        list(covariate = "z", parameter = "B", kind = "linear", items = "3")),
+      lower = character(), upper = character(), pooled = character(), groups = list(), partition = character())
+    base <- list(score = "score", id = "id", item = "Item", scale = "Scale", pl = 2L, fitArgs = list())
+    a <- bigIRT:::bigIRT_modify_build(d, spec, base)
+    expect_identical(a$BitemPreds, ".dif_B_z_1")
+    col <- a$dat[[".dif_B_z_1"]]
+    expect_true(all(col[a$dat$Item %in% 1:3] != 0 | a$dat$z[a$dat$Item %in% 1:3] == mean(d$z)))
+    expect_true(all(col[a$dat$Item %in% 4:6] == 0))
+    m <- bigIRT:::bigIRT_modify_merge_dif(spec$dif)
+    expect_length(m, 1L)
+    expect_setequal(m[[1]]$items, c("1", "2", "3"))
+  })
+
   ## A 0/1 response covariate that is rarely 1 (a repeated attempt, 6.5 per
   ## cent of Mindsteps responses) has equal 10th and 90th percentiles. Read as
   ## continuous, its DIF effect contrast was zero for every item, so no item
