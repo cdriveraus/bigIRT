@@ -17,6 +17,7 @@ modificationTests(
   exploratory = TRUE,
   nsimDim = 19L,
   minSetItems = 3L,
+  shape = FALSE,
   cores = 1L
 )
 }
@@ -53,6 +54,10 @@ leading directions of residual covariance), as well as in \code{itemSets}.}
 of the leading eigenvalue.}
 
 \item{minSetItems}{Smallest item set tested for a group dimension.}
+
+\item{shape}{Also test each item's response function for curvature its
+own parameters cannot express (\code{shape}, below). Diagnostic only:
+\code{\link[=improveModel]{improveModel()}} does not add such terms.}
 
 \item{cores}{Threads.}
 }

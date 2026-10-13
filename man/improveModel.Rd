@@ -32,7 +32,10 @@ improveModel(
   cores = 1L,
   verbose = TRUE,
   fitArgs = list(laplaceRefine = "agq"),
-  checkpoint = NULL
+  checkpoint = NULL,
+  difImpact = TRUE,
+  asymptotePooled = TRUE,
+  partitions = TRUE
 )
 }
 \arguments{
@@ -80,6 +83,10 @@ simulated adaptive bank, against 5 with them kept).}
 
 \item{checkpoint}{A directory to keep completed steps in, so that an
 interrupted run resumes; \code{NULL} (default) keeps nothing.}
+
+\item{difImpact, asymptotePooled, partitions}{Offer the impact of DIF
+covariates, pooled asymptotes and partitions into correlated dimensions
+(see Details).}
 }
 \value{
 A \code{bigIRT_improved} object: \code{fit} (final model, all persons),
@@ -106,17 +113,32 @@ a group dimension's SD on the logit scale); a batch must raise the held-out
 log-likelihood by at least \code{minGain}.
 }
 \details{
-Within a round the kinds are tried in turn -- ability, then DIF, then
-asymptotes, then group dimensions -- each against the model as it stands
-after the batches kept before it, so a covariate's effect on ability is in
-the model before DIF along it is judged (DIF absorbs impact otherwise). The
-next round screens the result, for the kinds whose verdict could have
+Within a round the kinds are tried in turn -- ability, then the impact of
+DIF covariates, then DIF, then asymptotes, then dimensions -- each against
+the model as it stands after the batches kept before it, so a covariate's
+effect on ability is in the model before DIF along it is judged (DIF
+absorbs impact otherwise).
+\itemize{
+\item DIF along each covariate (and parameter) is a batch of its own, the
+strongest first, so each covariate's DIF has to earn its place.
+\item With \code{difImpact}, a DIF covariate whose effect on ability the model lacks
+in any form (judged by the span of the ability predictors) first gets it,
+as a batch of its own; a response covariate's within-person effect
+included.
+\item With \code{asymptotePooled}, the screened asymptotes have an alternative: the
+asymptote free on every item, pooled by its prior. The better of the two
+that passes the gate is kept.
+\item Group dimensions go in one per round, the strongest first. With
+\code{partitions}, an item-set column that covers every item (a partition,
+such as subdomains) is offered as an alternative: its levels as
+correlated ability dimensions.
+}
+
+The next round screens the result, for the kinds whose verdict could have
 changed: a kind is tried again only if it was kept, or a kind after it
 was, in the round before (a kind rejected in a round was already judged
 against every batch kept before it). Screens are made at each round's
-starting model. A covariate tested for DIF only
-(\code{responseCovariates}) must have its ability effect in \code{personPreds}. The
-final model is refitted on all persons.
+starting model. The final model is refitted on all persons.
 
 Selection uses the data, so the final model's estimates and standard
 errors are conditional on it: the held-out gain is the honest measure of
