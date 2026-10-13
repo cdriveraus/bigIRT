@@ -215,6 +215,14 @@
 
 ## Fixes
 
+* A fit's stored call (`fit$call`) no longer carries its data, a previous
+  fit passed as `startFrom`, or long vectors such as `trainingRows`: called
+  through `do.call()`, as `improveModel()` calls `fitIRT()`, `match.call()`
+  holds the values themselves, and a warm-started Mindsteps fit stored its
+  20-million-row data and the whole previous fit -- 33 GB where the fit is
+  9 -- which filled the disk. Large values are now placeholders naming their
+  class. `options(bigIRT.checkpoint_compress = TRUE)` writes
+  `improveModel()`'s checkpoint gzipped (about sevenfold smaller).
 * `improveModel()`: DIF added in a later round along a covariate that already
   had DIF in the model collided with it. Each batch was a separate term
   whose column took the same name, so the later batch's items overwrote the

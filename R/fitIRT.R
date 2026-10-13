@@ -20,6 +20,20 @@ afunc <- function(x){
 }
 afunci <- function(x) x + log(-expm1(-x))
 
+## A call that keeps names, expressions and short atomic settings as written
+## and replaces every other argument value -- data, a fit, a long vector such
+## as trainingRows -- by a placeholder symbol naming its class.
+bigIRT_lean_call <- function(cl, max_length = 50L){
+  ## Under do.call() the function itself, not its name, heads the call.
+  if(!is.name(cl[[1L]])) cl[[1L]] <- as.name("fitIRT")
+  for(i in seq_along(cl)[-1L]){
+    v <- cl[[i]]
+    keep <- is.null(v) || is.name(v) || is.call(v) || (is.atomic(v) && is.null(dim(v)) && length(v) <= max_length)
+    if(!keep) cl[[i]] <- as.name(sprintf("<%s>", class(v)[1L]))
+  }
+  cl
+}
+
 ## The user's labels in the order of fitIRT's sequential integers, from one of
 ## its index tables (columns `original` and `new`).
 bigIRT_index_labels <- function(index){
@@ -2980,7 +2994,12 @@ fitIRT <- function(dat, score = 'score', id = 'id', item = 'Item', scale = 'Scal
     )
   }
 
-  fit$call <- match.call()
+  ## The call, with any large argument value -- the data, or a previous fit
+  ## passed as startFrom -- replaced by a placeholder. Called through
+  ## do.call(), as improveModel() calls it, match.call() holds the values
+  ## themselves: a Mindsteps fit carried its 20-million-row data and the whole
+  ## previous fit, 33 GB where the fit is 9.
+  fit$call <- bigIRT_lean_call(match.call())
   fit$backend <- estimator
   if(!is.null(fit$laplaceStatus)){
     status <- fit$laplaceStatus

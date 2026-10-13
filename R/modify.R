@@ -1128,7 +1128,11 @@ bigIRT_modify_checkpoint <- function(dir, fp){
 bigIRT_modify_store <- function(dir, name, fp, spec, value){
   f <- file.path(dir, paste0(name, ".rds"))
   tmp <- paste0(f, ".part")
-  saveRDS(list(fp = fp, spec = spec, value = value), tmp, compress = FALSE)
+  ## Uncompressed by default, for speed; option bigIRT.checkpoint_compress =
+  ## TRUE writes gzip (a large fit shrinks about sevenfold, at a few minutes a
+  ## write), for a disk shared with other work.
+  saveRDS(list(fp = fp, spec = spec, value = value), tmp,
+    compress = isTRUE(getOption("bigIRT.checkpoint_compress", FALSE)))
   if(file.exists(f)) unlink(f)
   file.rename(tmp, f)
   invisible(f)

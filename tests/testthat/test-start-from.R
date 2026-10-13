@@ -63,3 +63,22 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     expect_equal(as.numeric(fixed_k$prepared$AbilityCorr), as.numeric(diag(3)))
   })
 }
+
+if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
+  ## Called through do.call(), as improveModel() calls it, match.call() holds
+  ## the argument values: a Mindsteps fit stored its data and, warm-started,
+  ## the whole previous fit in fit$call (33 GB where the fit was 9).
+  test_that("a fit's stored call does not carry its data or the fit it started from", {
+    skip_on_cran()
+    set.seed(3)
+    d <- data.frame(id = rep(1:400, each = 10), Item = rep(1:10, 400), Scale = 1,
+      score = stats::rbinom(4000, 1, .5))
+    a <- list(dat = d, pl = 2, cores = 1, verbose = 0, laplaceCertify = FALSE, laplaceRefine = "none")
+    f0 <- suppressWarnings(do.call(fitIRT, a))
+    f1 <- suppressWarnings(do.call(fitIRT, c(a, list(startFrom = f0))))
+    expect_lt(as.numeric(utils::object.size(f1$call)), 1e5)
+    expect_identical(f1$call$dat, as.name("<data.frame>"))
+    expect_true(is.name(f1$call$startFrom))
+    expect_lt(as.numeric(utils::object.size(f1)), 2 * as.numeric(utils::object.size(f0)))
+  })
+}
