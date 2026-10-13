@@ -16,6 +16,7 @@ improveModel(
   responseCovariates = character(),
   itemSets = character(),
   dif = c("B", "A"),
+  difCovariates = NULL,
   asymptotes = c("lower", "upper"),
   holdout = 0.2,
   alpha = 0.05,
@@ -30,7 +31,11 @@ improveModel(
   seed = 1L,
   cores = 1L,
   verbose = TRUE,
-  fitArgs = list(laplaceRefine = "agq")
+  fitArgs = list(laplaceRefine = "agq"),
+  checkpoint = NULL,
+  difImpact = TRUE,
+  asymptotePooled = TRUE,
+  partitions = TRUE
 )
 }
 \arguments{
@@ -41,8 +46,7 @@ improveModel(
 \item{personPreds}{Person predictors in the base model's ability
 regression.}
 
-\item{personCovariates, responseCovariates, itemSets, dif, asymptotes}{What to
-test; see \code{\link[=modificationTests]{modificationTests()}}.}
+\item{personCovariates, responseCovariates, itemSets, dif, difCovariates, asymptotes}{What to test; see \code{\link[=modificationTests]{modificationTests()}}.}
 
 \item{holdout}{Share of persons held out to judge changes.}
 
@@ -61,7 +65,10 @@ and with no true change it added nothing at either.}
 \item{nsimDim}{Simulations for the null of the exploratory dimensions (0
 turns them off); see \code{\link[=modificationTests]{modificationTests()}}.}
 
-\item{maxRounds, maxGroups}{Limits on rounds and on group dimensions.}
+\item{maxRounds, maxGroups}{Limits on rounds and on group dimensions. Group
+dimensions are added one per round, the strongest set first, so two
+dimensions need two rounds: until a real dimension is modelled, other sets
+look dependent too.}
 
 \item{seed}{For the holdout split.}
 
@@ -69,13 +76,25 @@ turns them off); see \code{\link[=modificationTests]{modificationTests()}}.}
 
 \item{verbose}{Print progress.}
 
-\item{fitArgs}{Further \code{\link[=fitIRT]{fitIRT()}} arguments (default \code{laplaceRefine = "agq"}).}
+\item{fitArgs}{Further \code{\link[=fitIRT]{fitIRT()}} arguments (default \code{laplaceRefine = "agq"}).
+Leave \code{dropPerfectScores} at its default (FALSE): dropping all-correct
+persons biases the upper-asymptote screen (null size 15 per cent on a
+simulated adaptive bank, against 5 with them kept).}
+
+\item{checkpoint}{A directory to keep completed steps in, so that an
+interrupted run resumes; \code{NULL} (default) keeps nothing.}
+
+\item{difImpact, asymptotePooled, partitions}{Offer the impact of DIF
+covariates, pooled asymptotes and partitions into correlated dimensions
+(see Details).}
 }
 \value{
 A \code{bigIRT_improved} object: \code{fit} (final model, all persons),
 \code{spec} (the terms added), \code{path} (each batch tried: round, kind, terms,
-held-out log-likelihood before and after, accepted), \code{screens} (the last
-round's tests), \code{base_fit} (the base model on the training persons).
+held-out log-likelihood before and after, gain and its z, accepted,
+seconds to fit and evaluate), \code{screens} (the last round's tests),
+\code{base_fit} (the base model on the training persons), \code{holdout_persons},
+\code{timing} (seconds: base fit, each round's screens, final fit).
 }
 \description{
 Starting from a base model, repeatedly tests candidate changes at the
@@ -91,14 +110,46 @@ rest). A candidate must be significant after Benjamini-Hochberg within its
 kind and large enough to matter (\code{minEffect} change in the probability of
 a correct answer for DIF, \code{minAsymptote} for an asymptote, \code{minGroupSD} for
 a group dimension's SD on the logit scale); a batch must raise the held-out
-log-likelihood by at least \code{minGain}. Accepted batches are combined and the
-next round tests the combined model. The final model is refitted on all
-persons.
+log-likelihood by at least \code{minGain}.
 }
 \details{
+Within a round the kinds are tried in turn -- ability, then the impact of
+DIF covariates, then DIF, then asymptotes, then dimensions -- each against
+the model as it stands after the batches kept before it, so a covariate's
+effect on ability is in the model before DIF along it is judged (DIF
+absorbs impact otherwise).
+\itemize{
+\item DIF along each covariate (and parameter) is a batch of its own, the
+strongest first, so each covariate's DIF has to earn its place.
+\item With \code{difImpact}, a DIF covariate whose effect on ability the model lacks
+in any form (judged by the span of the ability predictors) first gets it,
+as a batch of its own; a response covariate's within-person effect
+included.
+\item With \code{asymptotePooled}, the screened asymptotes have an alternative: the
+asymptote free on every item, pooled by its prior. The better of the two
+that passes the gate is kept.
+\item Group dimensions go in one per round, the strongest first. With
+\code{partitions}, an item-set column that covers every item (a partition,
+such as subdomains) is offered as an alternative: its levels as
+correlated ability dimensions.
+}
+
+The next round screens the result, for the kinds whose verdict could have
+changed: a kind is tried again only if it was kept, or a kind after it
+was, in the round before (a kind rejected in a round was already judged
+against every batch kept before it). Screens are made at each round's
+starting model. The final model is refitted on all persons.
+
 Selection uses the data, so the final model's estimates and standard
 errors are conditional on it: the held-out gain is the honest measure of
 what the changes are worth, not the in-sample fit.
+
+On large data a run takes hours, so with \code{checkpoint} a directory keeps
+each completed step (the base fit, each round's screens, each batch's
+result and the fits kept) and a rerun resumes from them. A step is reused
+only when the data size, holdout, settings and model specification it was
+made under are identical; anything else is recomputed. Only completed steps
+are written. Fits are kept uncompressed and can be gigabytes.
 }
 \seealso{
 \code{\link[=modificationTests]{modificationTests()}}, \code{\link[=heldoutLogLik]{heldoutLogLik()}}

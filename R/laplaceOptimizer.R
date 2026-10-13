@@ -707,11 +707,21 @@ bigIRT_laplace_metric_solver <- function(e, sdat, context, layout, gfun,
 ## interpolation; only a first step without a metric is shortened. Stops when
 ## the predicted gain 0.5 g'Hg falls below `gain_tol` (nats), and treats an
 ## Armijo failure below 1e-4 nats of predicted gain as the noise floor of the
-## objective rather than a failure. `refresh(e)` may return a new minv every
-## `refresh_every` iterations, or list(stop = TRUE) to end the search there
-## (terminate "refresh_stop").
+## objective rather than a failure. It also stops ("noise_floor") when the
+## objective has fallen by less than a tenth of `gain_tol` over the last
+## `stall` iterations together -- less than the predicted-gain rule would
+## accept from a single one, so slow but real progress is not cut short:
+## then the gradient is not the derivative of what is being
+## evaluated to the precision the predicted gain assumes (one person whose
+## mode cannot be resolved does this), the predicted gain need never fall
+## below the tolerance, and line searches keep accepting steps on noise. A
+## 3-D 3PL fit ran to the 500-iteration cap this way on Linux, 3,700
+## evaluations with the objective flat to 3e-5 nats, where on Windows the
+## noise happened to stop it at iteration 31. `refresh(e)` may return a new
+## minv every `refresh_every` iterations, or list(stop = TRUE) to end the
+## search there (terminate "refresh_stop").
 bigIRT_laplace_lbfgs <- function(x0, fg, minv = NULL, memory = 30L, maxit = 500L,
-  gain_tol = 1e-3, c1 = 1e-4, maxback = 30L, refresh = NULL, refresh_every = 10L){
+  gain_tol = 1e-3, c1 = 1e-4, maxback = 30L, refresh = NULL, refresh_every = 10L, stall = 10L){
   S <- list(); Y <- list(); rho <- numeric(0)
   mv <- if(is.null(minv)) function(v) v else minv
   x <- x0; e <- fg(x); f <- e$f; g <- e$g
@@ -727,6 +737,9 @@ bigIRT_laplace_lbfgs <- function(x0, fg, minv = NULL, memory = 30L, maxit = 500L
     r
   }
   it <- 0L; term <- "max_iter"; gain <- NA_real_; nback <- 0L; retried <- FALSE
+  ## The objective after each iteration since the objective last moved under
+  ## a refresh, for the stall rule.
+  fh <- f
   while(it < maxit){
     d <- -hmul(g)
     dphi <- sum(g * d)
@@ -763,6 +776,8 @@ bigIRT_laplace_lbfgs <- function(x0, fg, minv = NULL, memory = 30L, maxit = 500L
       if(length(S) > memory){ S <- S[-1L]; Y <- Y[-1L]; rho <- rho[-1L] }
     }
     x <- x + s; f <- fn; g <- en$g; e <- en
+    fh <- c(fh, f)
+    if(stall > 0L && length(fh) > stall && fh[length(fh) - stall] - f < 0.1 * gain_tol){ term <- "noise_floor"; break }
     if(!is.null(refresh) && refresh_every > 0L && it %% refresh_every == 0L){
       m <- refresh(e)
       ## A refresh may also move the objective itself (the quadrature
@@ -772,7 +787,7 @@ bigIRT_laplace_lbfgs <- function(x0, fg, minv = NULL, memory = 30L, maxit = 500L
       ## the objective it moved to, and end the search.
       if(is.list(m) && !is.function(m)){
         if(isTRUE(m$stop)){ term <- "refresh_stop"; break }
-        if(!is.null(m$e)){ e <- m$e; f <- e$f; g <- e$g }
+        if(!is.null(m$e)){ e <- m$e; f <- e$f; g <- e$g; fh <- f }
         m <- m$minv
       }
       if(!is.null(m)) mv <- m

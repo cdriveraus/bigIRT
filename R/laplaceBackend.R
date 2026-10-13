@@ -318,6 +318,90 @@ bigIRT_laplace_initial_state <- function(sdat, eps = 1e-6,
   state
 }
 
+## A warm start: the initial state's parameters replaced by a previous fit's,
+## matched by label -- items, dimensions, persons, predictors -- and taken
+## through the previous fit's reported values, inverted through this model's
+## own links (a loading may be signed in one model and softplus in the
+## other). Whatever the previous fit lacks (a new DIF coefficient, a newly
+## freed asymptote, a new dimension's correlations) keeps its default. When
+## the previous fit had one dimension and this one has several, an item's
+## loading and the persons' abilities carry over to each dimension, and the
+## ability coefficients to every dimension. Mutates nothing; returns the
+## state. `labels`: item, scale and id labels in sdat's internal order, and
+## the person- and B-item-predictor names in sdat's column order.
+bigIRT_laplace_warm_state <- function(state, sdat, prev, labels){
+  pp <- prev$pars; ps <- prev$prepared
+  if(is.null(pp) || is.null(ps)) stop("startFrom must be a fit from fitIRT().", call. = FALSE)
+  K <- as.integer(sdat$Nscales); Kp <- as.integer(ps$Nscales)
+  p_items <- rownames(pp$B); p_scales <- colnames(pp$A) %||% colnames(pp$Ability)
+  jmap <- match(labels$items, p_items)
+  smap <- if(Kp == 1L) rep(1L, K) else match(labels$scales, p_scales)
+  Ap <- as.matrix(pp$A)
+  ## Items: intercepts, loadings, asymptotes.
+  for(j in which(!is.na(jmap))){
+    jp <- jmap[j]
+    if(sdat$freeBref[j] > 0L && is.finite(pp$B[jp])) state$Bpars[sdat$freeBref[j]] <- pp$B[jp]
+    if(sdat$freeCref[j] > 0L && ps$fixedClogit[jp] == 0L && pp$C[jp] > 0 && pp$C[jp] < .5)
+      state$logitCpars[sdat$freeCref[j]] <- cfunci(pp$C[jp])
+    if(sdat$freeDref[j] > 0L && ps$fixedDlogit[jp] == 0L && pp$D[jp] > .5 && pp$D[jp] < 1)
+      state$logitDpars[sdat$freeDref[j]] <- stats::qlogis(2 * pp$D[jp] - 1)
+    for(si in seq_len(K)){
+      r <- sdat$freeAref[(j - 1L) * K + si]
+      if(r == 0L) next
+      sp <- smap[si]
+      ## A dimension the previous fit did not have: the item's only loading.
+      if(is.na(sp)){ nz <- which(Ap[jp, ] != 0); if(length(nz) != 1L) next; sp <- nz }
+      a <- Ap[jp, sp]
+      if(!is.finite(a) || a == 0) next
+      signed <- length(sdat$signedA) && as.integer(sdat$signedA[(j - 1L) * K + si]) == 1L
+      if(signed) state$invspApars[r] <- a else if(a > 1e-8) state$invspApars[r] <- afunci(a)
+    }
+  }
+  ## Item-specific DIF coefficients on B, by item and predictor name.
+  if(length(state$Bbeta) && sdat$itemSpecificBetas == 1L && length(pp$Bbeta) && ps$itemSpecificBetas == 1L){
+    pcol <- match(labels$Bpreds, colnames(pp$Bbeta))
+    for(j in which(!is.na(jmap) & sdat$freeBref > 0L)){
+      rp <- ps$freeBref[jmap[j]]
+      if(rp == 0L) next
+      ok <- !is.na(pcol)
+      state$Bbeta[sdat$freeBref[j], ok] <- pp$Bbeta[rp, pcol[ok]]
+    }
+  }
+  ## Ability coefficients, by dimension and predictor name.
+  if(length(state$Abilitybeta) && length(pp$Abilitybeta)){
+    pcol <- match(labels$personPreds, colnames(pp$Abilitybeta))
+    for(si in seq_len(K)) if(!is.na(smap[si])){
+      ok <- !is.na(pcol)
+      state$Abilitybeta[si, ok] <- pp$Abilitybeta[smap[si], pcol[ok]]
+    }
+  }
+  ## Hyperparameter means, when free in both.
+  if(sdat$fixedBMean == 0L && length(pp$BMeanpar)) state$BMean <- pp$BMeanpar
+  if(sdat$fixedAMean == 0L && length(pp$invspAMeanpar)) state$invspAMean <- pp$invspAMeanpar
+  if(sdat$fixedCMean == 0L && length(pp$logitCMeanpar) && ps$fixedCMean == 0L) state$logitCMean <- pp$logitCMeanpar
+  if(sdat$fixedDMean == 0L && length(pp$logitDMeanpar) && ps$fixedDMean == 0L) state$logitDMean <- pp$logitDMeanpar
+  if(sdat$fixedAbilityMean == 0L && length(pp$AbilityMeanpar) == K) state$AbilityMean <- pp$AbilityMeanpar
+  ## The correlations, when they are estimated (fixed ones stay as given) and
+  ## the dimensions are the same.
+  if(isTRUE(labels$estimate_corr) && K > 1L && Kp == K && !anyNA(smap) && !is.null(ps$AbilityCorr)){
+    R <- as.matrix(ps$AbilityCorr)[smap, smap, drop = FALSE]
+    state$AbilityCorr <- R
+    state$AbilityCorrPars <- bigIRT_laplace_pack_corr(R, paramization = state$laplaceCorrParam)
+  }
+  ## The persons' modes, as the starting point of their own solves.
+  pm <- prev$personPosterior$mode
+  if(!is.null(pm)){
+    imap <- match(labels$ids, rownames(pp$Ability))
+    free <- sdat$fixedAbilityLogical == 0L
+    for(si in seq_len(K)){
+      sp <- smap[si]; if(is.na(sp)) sp <- 1L
+      ok <- !is.na(imap) & free[, si]
+      state$AbilityBase[ok, si] <- pm[imap[ok], sp]
+    }
+  }
+  state
+}
+
 bigIRT_laplace_training_rows <- function(sdat){
   which(as.integer(sdat$trainingLogical) == 1L)
 }

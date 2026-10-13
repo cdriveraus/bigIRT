@@ -69,11 +69,12 @@ fitIRT(
   normalise = FALSE,
   normaliseScale = 1,
   normaliseMean = 0,
-  dropPerfectScores = TRUE,
+  dropPerfectScores = FALSE,
   trainingRows = 1:nrow(dat),
   cores = 6,
   verbose = 0L,
   keepInternals = FALSE,
+  startFrom = NULL,
   ...
 )
 }
@@ -587,7 +588,17 @@ during fitting. Default is FALSE.}
 
 \item{normaliseMean}{Numeric. Mean for normalization. Default is 0.}
 
-\item{dropPerfectScores}{Logical. Whether to drop perfect scores from each subject and item before estimation. Default is TRUE.}
+\item{dropPerfectScores}{Logical. Whether to drop subjects and items whose
+training responses are all correct or all wrong before estimation.
+Default is FALSE (TRUE until October 2026). Neither estimator needs it:
+the ability prior keeps such a person's ability finite, and the item
+priors keep such an item's parameters finite. Dropping them is not
+harmless. All-correct and all-wrong students are exactly the responses
+that speak against a free asymptote, and with them dropped the score test
+of an upper asymptote rejected 15 per cent of true nulls on a simulated
+adaptive bank (5 with them kept). With \code{priors = FALSE} an item with
+all-same responses has no finite estimate, and the fit reports it as
+diverged; drop such items, or keep the priors.}
 
 \item{trainingRows}{Integer vector. Rows of data to use for estimation of
 parameters. Default is all rows in \code{dat}. Every item must keep at
@@ -611,6 +622,16 @@ final parameter state and the prior precision array to the returned fit.
 Off by default because these carry copies of the response arrays. Useful
 for verifying analytic gradients against finite differences, and for
 inspecting a fit that stopped somewhere unexpected.}
+
+\item{startFrom}{Optional: a previous fit from \code{fitIRT()} to start
+the optimisation from, rather than from the priors. Its estimates are
+matched to this model by label -- items, dimensions, persons and
+predictors -- and anything it lacks (a new covariate's coefficients, a
+newly freed asymptote) keeps its default start. The model fitted is
+unchanged; only the starting point is. For refitting a model with a few
+terms added: the fit then begins at the model it extends and can only
+climb from there, and gets there in far fewer evaluations than from the
+priors (where every free asymptote starts at c = .25 and d = .75).}
 
 \item{...}{Accepted only for arguments of earlier versions, so that old
 code keeps running. \code{plot} and \code{noptimsteps}, which never

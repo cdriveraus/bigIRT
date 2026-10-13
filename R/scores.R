@@ -762,8 +762,27 @@ bigIRT_score_compute <- function(fit, nodes = NULL, information = TRUE, cores = 
     adjusted = colnames(add_preds) %||% character(0),
     refit_iter = st$refit_iter %||% NA_integer_, refit_converged = st$refit_converged %||% NA,
     adjust_method = method_used,
-    value = aq$value),
+    value = aq$value, nodes = nodes, fit_key = bigIRT_score_fit_key(fit)),
     class = "bigIRT_scores")
+}
+
+## A fingerprint of the estimates a fit's score contributions depend on, so
+## contributions passed back to scoreTest() can be checked against the fit.
+bigIRT_score_fit_key <- function(fit){
+  x <- unlist(lapply(c("A", "B", "C", "D", "Abilitybeta"), function(n) as.numeric(fit$pars[[n]])))
+  x <- x[is.finite(x)]
+  c(length(x), sum(x), sum(x * seq_along(x)), length(fit$pars$p %||% numeric(0)))
+}
+
+bigIRT_score_check_contributions <- function(sc, fit, nodes){
+  if(!inherits(sc, "bigIRT_scores")) stop("`contributions` must come from scoreContributions().")
+  if(length(sc$excluded) || length(sc$adjusted))
+    stop("`contributions` must be computed without `exclude` or added predictors.")
+  if(!identical(sc$nodes, nodes))
+    stop("`contributions` were computed with different `nodes`.")
+  if(is.null(sc$fit_key) || !isTRUE(all.equal(sc$fit_key, bigIRT_score_fit_key(fit), tolerance = 1e-12)))
+    stop("`contributions` do not belong to this fit.")
+  invisible(TRUE)
 }
 
 #' @export
@@ -1237,6 +1256,11 @@ bigIRT_score_fluct <- function(z, S, info, Nb, test, nuis, ngrid, trim, nsim){
 #'   `purify` and a person-level covariate, summed per person over the
 #'   flagged items they answered (`dtf`).
 #' @param nodes,cores Passed to [scoreContributions()] when `fit` is a fit.
+#' @param contributions Optional: `scoreContributions(fit)` already computed,
+#'   with the default `nodes` and no `exclude`, to use instead of computing
+#'   them again when `fit` is passed for `purify` or `adjust`. On large data
+#'   that pass is the cost of a test. Contributions from another fit are
+#'   refused.
 #'
 #' @return An object of class `bigIRT_scoretest`: a list with `tests`, a
 #'   data.table with one row per covariate and item (or group): the number of
@@ -1278,14 +1302,15 @@ scoreTest <- function(fit, covariates, parameters = "B",
   purify = FALSE, purifyAlpha = 0.05, purifyMaxIter = 5L,
   information = c("expected", "observed", "opg"),
   adjust = c("auto", "none"), adjustDf = 3L, adjustMethod = c("fast", "full"),
-  effects = TRUE, nodes = NULL, cores = 1L){
+  effects = TRUE, nodes = NULL, cores = 1L, contributions = NULL){
   information <- match.arg(information); adjust <- match.arg(adjust)
   adjustMethod <- match.arg(adjustMethod)
   form <- match.arg(form); level <- match.arg(level)
   if(isTRUE(purify) && !inherits(fit, "bigIRT_fit"))
     stop("purify needs the fit itself, to recompute the person side; pass the fit, not its scores.")
   if(isTRUE(purify) && !identical(by, "item")) stop("purify works with by = \"item\".")
-  sc <- if(inherits(fit, "bigIRT_scores")) fit else scoreContributions(fit, nodes = nodes, cores = cores)
+  if(!is.null(contributions) && inherits(fit, "bigIRT_fit")) bigIRT_score_check_contributions(contributions, fit, nodes)
+  sc <- if(inherits(fit, "bigIRT_scores")) fit else contributions %||% scoreContributions(fit, nodes = nodes, cores = cores)
   if(!any(grepl("^I\\.", names(sc$rows))))
     stop("These score contributions carry no information; recompute with information = TRUE.")
   if(!is.null(seed)){
@@ -1598,6 +1623,14 @@ bigIRT_score_test_items <- function(sc, zall, zlevel, parameters, form, by, item
     own_dP <- rep(NA_real_, nrow(R))
     if(form != "factor"){
       at <- attr(G, "at"); qz <- stats::quantile(as.numeric(z), c(.1, .5, .9), names = FALSE)
+      qlab <- "90th vs 10th percentile"
+      ## A covariate concentrated on one value -- a 0/1 indicator that is
+      ## rarely 1, such as a repeated attempt -- has equal 10th and 90th
+      ## percentiles, and the contrast was zero for every item, so no DIF
+      ## along it could pass an effect floor. Its range is used instead.
+      if(qz[3] == qz[1]){
+        qz[c(1, 3)] <- range(as.numeric(z), na.rm = TRUE); qlab <- "maximum vs minimum"
+      }
       dg <- at(qz[3]) - at(qz[1]); g_med <- as.numeric(at(qz[2]))
     }
   }
@@ -1690,7 +1723,7 @@ bigIRT_score_test_items <- function(sc, zall, zlevel, parameters, form, by, item
       } else {
         d <- as.numeric(dPs %*% as.numeric(dg %*% E))
         effs[[length(effs) + 1L]] <- data.table::data.table(item = g,
-          contrast = sprintf("%.3g vs %.3g (90th vs 10th percentile)", qz[3], qz[1]),
+          contrast = sprintf("%.3g vs %.3g (%s)", qz[3], qz[1], qlab),
           n = length(u), dP = mean(d), dP_abs = mean(abs(d)))
         own_dP[u] <- rowSums(dPs * (sweep(Gu, 2, g_med) %*% E))
       }

@@ -398,4 +398,26 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     f0 <- opt_fit(pl = 2, ns = 300, ni = 12, optimizer = "fisher", laplacePolish = 0L)
     expect_identical(f0$laplaceStatus$polish_steps, 0L)
   })
+
+  ## When the gradient is not the derivative of what is evaluated -- one
+  ## person whose mode cannot be resolved does this -- the predicted gain need
+  ## never fall below the tolerance while line searches keep accepting steps
+  ## that gain nothing. A 3-D 3PL fit ran to the iteration cap this way on
+  ## Linux (3,700 evaluations with the objective flat to 3e-5 nats), where on
+  ## Windows the noise happened to end it at iteration 31. Here the gradient
+  ## promises a constant gain and the objective falls by 1e-7 an evaluation:
+  ## the search ran all 500 iterations; it must stop at the noise floor. And a
+  ## badly conditioned quadratic, slow but real progress, still ends on the
+  ## gain criterion.
+  test_that("the L-BFGS search stops when the objective has stopped falling", {
+    n <- 0L
+    fg <- function(x){ n <<- n + 1L; list(f = 1 - 1e-7 * n, g = rep(.1, 5)) }
+    r <- bigIRT:::bigIRT_laplace_lbfgs(rep(1, 5), fg, minv = function(v) v, maxit = 500L, gain_tol = 1e-3)
+    expect_identical(r$terminate$what, "noise_floor")
+    expect_lt(r$iter, 20L)
+    H <- diag(10^seq(0, 4, length.out = 6))
+    fq <- function(x) list(f = 0.5 * sum(x * (H %*% x)), g = as.numeric(H %*% x))
+    r2 <- bigIRT:::bigIRT_laplace_lbfgs(rep(3, 6), fq, maxit = 500L, gain_tol = 1e-8)
+    expect_identical(r2$terminate$what, "gain")
+  })
 }

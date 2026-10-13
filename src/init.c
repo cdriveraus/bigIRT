@@ -14,7 +14,7 @@
 
 
 /* .Call calls */
-extern SEXP _bigIRT_agq_fg_cpp_impl(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
+extern SEXP _bigIRT_agq_fg_cpp_impl(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
 extern SEXP _bigIRT_fisher_blocks_cpp_impl(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
 extern SEXP _bigIRT_fisher_dense_cpp_impl(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
 extern SEXP _bigIRT_item_info_accum_cpp_impl(SEXP, SEXP, SEXP, SEXP);
@@ -35,7 +35,7 @@ extern SEXP _bigIRT_person_covariance_cpp_impl(SEXP, SEXP, SEXP, SEXP, SEXP, SEX
 extern SEXP _bigIRT_row_aSa_cpp_impl(SEXP, SEXP, SEXP, SEXP, SEXP);
 
 static const R_CallMethodDef CallEntries[] = {
-    {"_bigIRT_agq_fg_cpp_impl",                       (DL_FUNC) &_bigIRT_agq_fg_cpp_impl,                       49},
+    {"_bigIRT_agq_fg_cpp_impl",                       (DL_FUNC) &_bigIRT_agq_fg_cpp_impl,                       50},
     {"_bigIRT_fisher_blocks_cpp_impl",                (DL_FUNC) &_bigIRT_fisher_blocks_cpp_impl,                43},
     {"_bigIRT_fisher_dense_cpp_impl",                 (DL_FUNC) &_bigIRT_fisher_dense_cpp_impl,                 43},
     {"_bigIRT_item_info_accum_cpp_impl",              (DL_FUNC) &_bigIRT_item_info_accum_cpp_impl,               4},

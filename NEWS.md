@@ -104,6 +104,160 @@
   each it added the two ability covariates and not the null one, DIF on
   exactly the three DIF items, and the testlet, with or without the topic
   that defines it.
+* `improveModel()` now tries the kinds of change in turn within a round --
+  ability, DIF, asymptotes, group dimensions -- each against the model as it
+  stands after the batches kept before it. Before, every kind was judged
+  against the round's starting model and the kept batches combined, so DIF
+  along a covariate could be judged without that covariate's effect on
+  ability, which DIF then absorbs; the combined refit is gone too.
+* `improveModel(checkpoint = dir)` keeps each completed step (base fit, each
+  round's screens, each batch, the final fit) and a rerun resumes from them,
+  reusing a step only under the same data size, holdout, settings and
+  specification; on large data a run is hours. The result records seconds
+  per batch and `timing` for the fits and screens.
+* `difCovariates` (in `modificationTests()` and `improveModel()`) chooses
+  which covariates get the purified DIF screen; by default all of them.
+* `improveModel()` tries a kind again in a later round only if it, or a kind
+  after it, was kept in the round before; a rejected kind was already judged
+  against everything kept before it, and retrying refitted the same batch.
+* **`fitIRT(dropPerfectScores = FALSE)` is now the default.** Persons (and
+  items) whose responses are all correct or all wrong are kept. Neither
+  estimator needs them dropped: the ability prior keeps such a person's
+  ability finite and the item priors such an item's parameters. Dropping them
+  biased what depends on them. With them dropped, the upper-asymptote screen
+  of `modificationTests()` rejected 15 per cent of true nulls on a simulated
+  adaptive bank (7 with random selection), because all-correct persons are
+  exactly the responses that pull the upper score down; kept, it holds 5.
+  Fits that relied on the old default now include these persons: pass
+  `dropPerfectScores = TRUE` to reproduce them. With `priors = FALSE` an item
+  with all-same responses has no finite estimate (reported as diverged), so
+  drop it or keep the priors.
+* Named item sets now take precedence over overlapping sets found from the
+  scores alone: a labelled set was specified in advance and says what the
+  dimension is; the exploratory route is for structure the labels miss.
+* The group-dimension screen's one-step size (`tau2`) now divides the score by
+  its null information, from two data sets simulated under the fitted model,
+  instead of by the observed outer product. Under the alternative the outer
+  product carries each person's squared mean, which grows with their
+  responses in the set, so the old estimate collapsed exactly where persons
+  answer many items of a set: with true SD 0.5 it gave 0.52, 0.38, 0.20 and
+  0.09 at 5, 15, 40 and 100 items a person, while the new one holds steady.
+  On the Mindsteps bank the old estimate put the three subdomains at SD 0.06,
+  below the 0.3 floor, while a correlated three-subdomain model has residual
+  correlations of .70 to .78 and predicts held-out students far better. The
+  test statistic (z) is unchanged.
+* `improveModel()` adds group dimensions one per round, the strongest set
+  first. Until a real dimension is modelled the general ability leans towards
+  its items and the other items share the leftover covariance; tried in one
+  batch with a real testlet, a 15-item set with no structure of its own rode
+  in with it in 10 per cent of simulated runs once the size estimate above
+  stopped shrinking.
+* Asymptote tests: an item whose other asymptote is free now uses its fitted
+  value (it used 0 or 1, so a second round after freeing c tested d with the
+  wrong derivative); a fit with every item fixed no longer errors; and each
+  test reports `identified`, the share of the asymptote's information left
+  once the item's own parameters are projected out.
+* `scoreTest(contributions = )` takes `scoreContributions(fit)` already
+  computed, for when the fit itself is passed (for `purify` or `adjust`)
+  and the pass over the data would otherwise be repeated; contributions from
+  another fit are refused. `modificationTests()` now computes them once for
+  all its DIF screens, where it computed them again for each covariate.
+* `modificationTests(shape = TRUE)` tests each item's response curve for
+  shape the model lacks: the Hermite terms He2 and He3 of the item's
+  composite, entered in its linear predictor, a 2-df score test per item with
+  one-step coefficients and the largest change they make to the curve
+  (`dP`). The scores are posterior expectations from the quadrature kernel
+  (`shape_out` in `src/agq_backend.cpp`), checked against finite differences
+  of brute-force integration. A curve that rises, flattens and rises again,
+  or flattens early, shows here when no asymptote or DIF covariate captures
+  it.
+* The exploratory dimension screen now proposes its sets on one random half
+  of the persons and tests and sizes them on the other. Found and tested on
+  the same persons, the leading eigenvector's set was tested against a null
+  that had not been chosen to fit it. Set membership still comes from the
+  direction found on all persons.
+* `improveModel()` judges DIF one covariate at a time, and before a
+  covariate's DIF adds its effect on ability if the model lacks one
+  (`difImpact = TRUE`): the covariate's basis columns the ability model does
+  not already span. A DIF covariate without impact modelled has its impact
+  absorbed by DIF on every item. What is missing is judged when the stage is
+  reached, after the ability batch, and a batch that would add nothing is
+  not refitted.
+* `improveModel()` tries two ways of adding asymptotes and keeps the better
+  if it passes: the items the screen selects, or every item free under the
+  asymptote prior, whose mean across items is estimated
+  (`asymptotePooled = TRUE`). That needs no selection, and it collects many
+  small asymptotes that are each too weakly identified to pass a screen.
+* With item sets that partition the items (`partitions = TRUE`),
+  `improveModel()` also tries the partition as correlated dimensions, one
+  per set, as an alternative to a group dimension for its strongest set,
+  and keeps the better if it passes. Group dimensions on a general ability
+  add sets one at a time and orthogonally; on Mindsteps the three subdomains
+  as correlated dimensions predicted held-out students far better.
+
+* `fitIRT(startFrom = fit)` starts the optimisation from a previous fit's
+  estimates, matched by label (items, dimensions, persons, predictors);
+  anything the previous fit lacks keeps its default start. Only the starting
+  point changes: from its own estimates a fit stays at its optimum in a
+  fraction of the evaluations, and a model with DIF terms added, asymptotes
+  freed or one dimension split into correlated ones reaches the optimum its
+  cold start reaches (`test-start-from.R`). `improveModel()` starts every
+  batch, and the final refit, from the current model, so a batch begins at
+  the model it extends and can only climb. On Mindsteps one batch (a 3-D
+  4PL with four DIF terms added) came back 16,551 held-out nats worse than
+  the model it extended, in a run at its memory limit; refitted alone from
+  the priors it was 2.7 nats worse, as it should be. What went wrong in the
+  run was not established.
+* `improveModel(checkpoint = )` no longer holds the base fit in memory
+  through the rounds (it is read back at the end), and holds only the best
+  passing fit of a stage. On Mindsteps a refit held three fits at once and
+  ran out of memory at 67 of 128 GB.
+
+## Fixes
+
+* A fit's stored call (`fit$call`) no longer carries its data, a previous
+  fit passed as `startFrom`, or long vectors such as `trainingRows`: called
+  through `do.call()`, as `improveModel()` calls `fitIRT()`, `match.call()`
+  holds the values themselves, and a warm-started Mindsteps fit stored its
+  20-million-row data and the whole previous fit -- 33 GB where the fit is
+  9 -- which filled the disk. Large values are now placeholders naming their
+  class. `options(bigIRT.checkpoint_compress = TRUE)` writes
+  `improveModel()`'s checkpoint gzipped (about sevenfold smaller).
+* `improveModel()`: DIF added in a later round along a covariate that already
+  had DIF in the model collided with it. Each batch was a separate term
+  whose column took the same name, so the later batch's items overwrote the
+  earlier column -- the earlier items lost their DIF -- and the column was
+  listed twice. On Mindsteps a round-2 batch of 2 age items dropped the age
+  DIF of 3,883 items and ran for ten hours before it was stopped. DIF along
+  one covariate and parameter is now one term over the union of its items,
+  and the build asserts that no predictor is listed twice. The same
+  collision probably explains an earlier round-2 DIF batch that "failed
+  numerically". None of the simulation runs hit it (no run tried round-2
+  DIF along a covariate kept in round 1).
+* `improveModel(checkpoint = )` keeps the fit of the current model only:
+  every other step keeps its verdict (held-out values, gain, z) but drops
+  its fit once a later batch is accepted or another alternative wins. A
+  resumed run needs nothing more. It kept every passing batch's fit, and
+  on Mindsteps, where a fit is 13 GB and a round can accept a batch per DIF
+  covariate, that was more than the disk held.
+* A 0/1 response covariate that is rarely 1 (a repeated attempt at an item,
+  say) got a DIF effect size of zero on every item: read as continuous, its
+  effect contrast was its 90th against its 10th percentile, both 0. No DIF
+  along it could pass `improveModel()`'s effect floor however strong (on
+  Mindsteps 434 items significant, none kept). `modificationTests()` now
+  treats a response covariate with four or fewer values as a factor, as it
+  already did a person covariate, and `scoreTest()` contrasts a covariate's
+  range when its 10th and 90th percentiles coincide.
+* The Laplace and quadrature L-BFGS search now also stops ("noise_floor")
+  when the objective has fallen by less than a tenth of the tolerance over
+  ten iterations together. It stopped only when the predicted gain fell
+  below the tolerance, which it need never do when the gradient is not quite
+  the derivative of what is evaluated -- one person whose mode cannot be
+  resolved is enough -- while line searches keep accepting steps on the
+  objective's noise. A 3-D 3PL fit in the model-building simulations ran to
+  the 500-iteration cap this way on Linux (3,700 evaluations, the objective
+  flat to 3e-5 nats), turning a two-minute replication into hours; on
+  Windows the same fit's noise happened to stop it at iteration 31.
 
 # bigIRT 0.2.0
 

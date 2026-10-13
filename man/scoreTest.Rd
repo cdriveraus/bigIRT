@@ -28,7 +28,8 @@ scoreTest(
   adjustMethod = c("fast", "full"),
   effects = TRUE,
   nodes = NULL,
-  cores = 1L
+  cores = 1L,
+  contributions = NULL
 )
 }
 \arguments{
@@ -117,6 +118,12 @@ person's own ability. These are averaged per item (\code{effects}) and, with
 flagged items they answered (\code{dtf}).}
 
 \item{nodes, cores}{Passed to \code{\link[=scoreContributions]{scoreContributions()}} when \code{fit} is a fit.}
+
+\item{contributions}{Optional: \code{scoreContributions(fit)} already computed,
+with the default \code{nodes} and no \code{exclude}, to use instead of computing
+them again when \code{fit} is passed for \code{purify} or \code{adjust}. On large data
+that pass is the cost of a test. Contributions from another fit are
+refused.}
 }
 \value{
 An object of class \code{bigIRT_scoretest}: a list with \code{tests}, a

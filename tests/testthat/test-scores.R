@@ -244,6 +244,15 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     expect_lt(abs(e1), abs(e0) / 3)
     expect_true(all(as.character(1:4) %in% t1$tests[anchor == FALSE, item]))
     expect_lt(t1$tests[item %in% clean, sum(p_fdr < .05)], t0$tests[item %in% clean, sum(p_fdr < .05)])
+    ## Contributions computed once give the same tests, and another fit's
+    ## are refused.
+    sc <- scoreContributions(f)
+    t2 <- scoreTest(f, cv, parameters = "B", purify = TRUE, contributions = sc)
+    expect_equal(as.data.frame(t2$tests), as.data.frame(t1$tests))
+    expect_equal(as.data.frame(t2$coefficients), as.data.frame(t1$coefficients))
+    f2 <- f; f2$pars$B <- f2$pars$B + .01
+    expect_error(scoreTest(f2, cv, parameters = "B", purify = TRUE, contributions = sc), "do not belong")
+    expect_error(scoreTest(f, cv, parameters = "B", contributions = scoreContributions(f, exclude = "1")), "exclude")
   })
 }
 

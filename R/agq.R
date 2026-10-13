@@ -199,7 +199,7 @@ bigIRT_agq_fg_cpp_impl <- function(id, score, theta_mode, precision,
   Abilitybeta, invspApars, invspAbeta, Bpars, Bbeta, logitCpars, logitCbeta, logitDpars, logitDbeta,
   prior_mean, prior_precision, free_mask, rule, want_person = FALSE, grain_size = 64L,
   block_items = integer(0), row_out = 0L, slot_out = integer(0), row_hold = integer(0),
-  vc_group = integer(0), vc_n = 0L, mv_v = matrix(0, 0, 0)){
+  vc_group = integer(0), vc_n = 0L, mv_v = matrix(0, 0, 0), shape_out = 0L){
   nr <- length(id); K <- ncol(theta_mode)
   .Call(`_bigIRT_agq_fg_cpp_impl`,
     as.integer(id), as.integer(score), as.matrix(theta_mode), as.numeric(precision),
@@ -236,7 +236,10 @@ bigIRT_agq_fg_cpp_impl <- function(id, score, theta_mode, precision,
     as.integer(vc_group), as.integer(vc_n)[1],
     ## Residual-covariance products: each row's weight per direction (rows x
     ## m), for the matrix-free M v of R/modify.R; 0 x 0 for none.
-    as.matrix(mv_v))
+    as.matrix(mv_v),
+    ## Item-shape scores (R/modify.R): 1 asks, per row, for E[g t^p | y],
+    ## p = 1, 2, 3, t the row's ability along its item's loadings.
+    as.integer(shape_out)[1])
 }
 
 ## Second-order Laplace (src/laplace2_backend.cpp): the leading correction to

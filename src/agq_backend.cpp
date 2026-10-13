@@ -248,6 +248,14 @@ struct AgqWorker : public RcppParallel::Worker {
   // rows s (mv_out, Nobs x mv_m); summed by item in R (R/modify.R).
   AgqVec<double> mv_v;
   double* mv_out = nullptr;
+  // Item-shape scores (modificationTests(), R/modify.R), on request: for each
+  // row, E[g t^p | y] for p = 1, 2, 3 over the posterior (held-out rows with
+  // their reweighted nodes), g the row's score in its linear predictor and t
+  // the row's ability along its item's loadings, a'(theta + offset) / |a|.
+  // A term gamma_p t^p added to the linear predictor has exactly this score
+  // at gamma_p = 0 (the Fisher identity), so curvature of the item's response
+  // function beyond the model's can be tested (Nobs x 3).
+  double* shape_out = nullptr;
   // outputs owned by R, written per subject (disjoint)
   double* eap;        // N x K
   double* post_cov;   // K x K x N
@@ -279,7 +287,7 @@ struct AgqWorker : public RcppParallel::Worker {
       want_person(o.want_person), block_items(o.block_items), n_items(o.n_items), S_slots(o.S_slots),
       bl(o.bl), row_score(o.row_score), row_info(o.row_info), Nobs_rows(o.Nobs_rows),
       slot_out(o.slot_out), row_hold(o.row_hold), vc_group(o.vc_group), vc_n(o.vc_n), vc_out(o.vc_out),
-      mv_v(o.mv_v), mv_out(o.mv_out),
+      mv_v(o.mv_v), mv_out(o.mv_out), shape_out(o.shape_out),
       eap(o.eap), post_cov(o.post_cov), value_by_subj(o.value_by_subj),
       value(0.0), failure(0) { zero_like(o); }
 
@@ -541,6 +549,24 @@ struct AgqWorker : public RcppParallel::Worker {
           s_eta += ge; s_c += w[q] * buf_c[ix]; s_d += w[q] * buf_d[ix];
           for (int k = 0; k < K; ++k)
             s_ab(k) += ge * (fixed_ability(o, k) != 0 ? fixed_ability_value(o, k) : th[q](k) + off(oi, k));
+        }
+        if (shape_out) {
+          double an = 0.0;
+          for (int k = 0; k < K; ++k) an += arow(oi, k) * arow(oi, k);
+          an = an > 0.0 ? std::sqrt(an) : 1.0;
+          double t1 = 0.0, t2 = 0.0, t3 = 0.0;
+          for (long q = 0; q < nq; ++q) {
+            const double ge = w[q] * buf_eta[static_cast<std::size_t>(q) * n + oi];
+            double t = 0.0;
+            for (int k = 0; k < K; ++k)
+              t += arow(oi, k) * (fixed_ability(o, k) != 0 ? fixed_ability_value(o, k) : th[q](k) + off(oi, k));
+            t /= an;
+            t1 += ge * t; t2 += ge * t * t; t3 += ge * t * t * t;
+          }
+          const std::size_t No = static_cast<std::size_t>(Nobs_rows);
+          shape_out[static_cast<std::size_t>(o)] = t1;
+          shape_out[static_cast<std::size_t>(o) + No] = t2;
+          shape_out[static_cast<std::size_t>(o) + 2 * No] = t3;
         }
         if (!hold) for (int k = 0; k < K; ++k) {
           if (A_ref(o, k) > 0) {
@@ -820,7 +846,7 @@ extern "C" SEXP _bigIRT_agq_fg_cpp_impl(
     SEXP nodesSEXP, SEXP log_weightsSEXP, SEXP groupsSEXP, SEXP coefsSEXP,
     SEXP want_personSEXP, SEXP grain_sizeSEXP, SEXP block_itemsSEXP,
     SEXP row_outSEXP, SEXP slot_outSEXP, SEXP row_holdSEXP, SEXP vc_groupSEXP, SEXP vc_nSEXP,
-    SEXP mv_vSEXP) {
+    SEXP mv_vSEXP, SEXP shape_outSEXP) {
   BEGIN_RCPP
   Rcpp::IntegerVector id(idSEXP);
   Rcpp::NumericMatrix theta_mode(theta_modeSEXP);
@@ -946,6 +972,11 @@ extern "C" SEXP _bigIRT_agq_fg_cpp_impl(
   if (w.mv_v.nc > 0 && w.mv_v.nr != Nobs) Rcpp::stop("AGQ: mv_v needs one row per response.");
   Rcpp::NumericMatrix mv_res(w.mv_v.nc > 0 ? Nobs : 0, w.mv_v.nc);
   if (w.mv_v.nc > 0) w.mv_out = mv_res.begin();
+  // Item-shape scores: Nobs x 3 (0 x 0 for none). They are written per row,
+  // so they need the row count the per-response output sets.
+  const bool want_shape = Rcpp::as<int>(shape_outSEXP) > 0;
+  Rcpp::NumericMatrix shape_res(want_shape ? Nobs : 0, want_shape ? 3 : 0);
+  if (want_shape) { w.shape_out = shape_res.begin(); w.Nobs_rows = Nobs; }
   w.gA.assign(w.invspApars.count(), 0.0); w.gB.assign(w.Bpars.count(), 0.0);
   w.gC.assign(w.logitCpars.count(), 0.0); w.gD.assign(w.logitDpars.count(), 0.0);
   w.gAb.assign(w.invspAbeta.count(), 0.0); w.gBb.assign(w.Bbeta.count(), 0.0);
@@ -974,6 +1005,6 @@ extern "C" SEXP _bigIRT_agq_fg_cpp_impl(
     Rcpp::Named("S") = S, Rcpp::Named("eap") = eap, Rcpp::Named("post_cov") = post_cov,
     Rcpp::Named("item_blocks") = blocks_out(w),
     Rcpp::Named("row_scores") = row_scores, Rcpp::Named("row_info") = row_info,
-    Rcpp::Named("vc_scores") = vc_scores, Rcpp::Named("mv") = mv_res);
+    Rcpp::Named("vc_scores") = vc_scores, Rcpp::Named("mv") = mv_res, Rcpp::Named("shape") = shape_res);
   END_RCPP
 }

@@ -1,8 +1,10 @@
-## Two defaults that caught a user following the paper's own example.
+## Defaults that caught a user following the paper's own example.
 ##
-## dropPerfectScores (TRUE by default) decided whom to drop from the means of
-## ALL rows, held-out ones included, so a held-out response changed which
-## persons and items were fitted. And a Laplace fit with ebayes = FALSE --
+## dropPerfectScores (TRUE by default until October 2026) decided whom to drop
+## from the means of ALL rows, held-out ones included, so a held-out response
+## changed which persons and items were fitted. It is now off by default and
+## kept persons with all-correct or all-wrong responses; the dropping logic is
+## tested with it asked for explicitly. And a Laplace fit with ebayes = FALSE --
 ## which the paper recommends -- reported no person SDs unless the posterior
 ## covariance was kept, although every fit keeps the per-person precision.
 
@@ -20,7 +22,7 @@ if(identical(Sys.getenv("NOT_CRAN"), "true")){
     d[p1, score := 1]; d[ho1[1], score := 0]
     fit_ids <- function(dd) {
       f <- suppressWarnings(fitIRT(dd, pl = 2, cores = 1, marginalApprox = "laplace",
-        ebayes = FALSE, trainingRows = train, verbose = 0))
+        ebayes = FALSE, trainingRows = train, verbose = 0, dropPerfectScores = TRUE))
       sort(as.character(f$personPars$id))
     }
     ids_a <- fit_ids(d)
@@ -30,6 +32,21 @@ if(identical(Sys.getenv("NOT_CRAN"), "true")){
     ## changing only held-out responses changes nothing about who is fitted.
     expect_false("1" %in% ids_a)
     expect_identical(ids_a, ids_b)
+  })
+
+  ## Persons with every response correct or wrong are kept by default, with
+  ## finite abilities: the ability prior bounds them, and dropping them biased
+  ## the asymptote score tests (R/modify.R).
+  test_that("fitIRT keeps all-correct and all-wrong persons by default", {
+    d <- data.table::as.data.table(sim$dat)
+    d[id == 1, score := 1]; d[id == 2, score := 0]
+    f <- suppressWarnings(fitIRT(d, pl = 2, cores = 1, verbose = 0))
+    expect_identical(as.integer(f$prepared$Nsubs), data.table::uniqueN(d$id))
+    pp <- data.table::as.data.table(f$personPars)
+    a <- pp[[2]][match(c("1", "2"), as.character(pp[[1]]))]
+    expect_true(all(is.finite(a)))
+    expect_gt(a[1], max(pp[[2]][-match(c("1", "2"), as.character(pp[[1]]))]) - 1)
+    expect_lt(a[2], min(pp[[2]][-match(c("1", "2"), as.character(pp[[1]]))]) + 1)
   })
 
   test_that("new persons can be scored against a fully fixed bank under the defaults", {
