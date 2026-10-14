@@ -751,11 +751,18 @@ modificationTests <- function(fit, dat, personCovariates = character(), response
 #' a group dimension's SD on the logit scale); a batch must raise the held-out
 #' log-likelihood by at least `minGain`.
 #'
-#' Within a round the kinds are tried in turn -- ability, then the impact of
-#' DIF covariates, then DIF, then asymptotes, then dimensions -- each against
-#' the model as it stands after the batches kept before it, so a covariate's
-#' effect on ability is in the model before DIF along it is judged (DIF
-#' absorbs impact otherwise).
+#' Within a round the kinds are taken in turn (`order`), the more general
+#' first: ability, then dimensions, then asymptotes, then DIF (with the
+#' impact of DIF covariates just before it). Each kind is screened and judged
+#' at the model as it stands after the batches kept before it. So DIF is
+#' screened with the dimensions in: a group difference specific to one
+#' subdomain is then the covariate's effect on that dimension, not DIF on
+#' its items (in one dimension it looks exactly like DIF, and was kept as
+#' such in 90 to 100 per cent of simulated runs with none). An unmodelled
+#' asymptote likewise looks like DIF between groups of different ability. A
+#' covariate's effect on ability is in the model before DIF along it is
+#' judged (DIF absorbs impact otherwise). While nothing is kept, one screen
+#' serves every kind after it.
 #'
 #' * DIF along each covariate (and parameter) is a batch of its own, the
 #'   strongest first, so each covariate's DIF has to earn its place.
@@ -774,8 +781,8 @@ modificationTests <- function(fit, dat, personCovariates = character(), response
 #' The next round screens the result, for the kinds whose verdict could have
 #' changed: a kind is tried again only if it was kept, or a kind after it
 #' was, in the round before (a kind rejected in a round was already judged
-#' against every batch kept before it). Screens are made at each round's
-#' starting model. The final model is refitted on all persons.
+#' against every batch kept before it). The final model is refitted on all
+#' persons.
 #'
 #' Selection uses the data, so the final model's estimates and standard
 #' errors are conditional on it: the held-out gain is the honest measure of
@@ -822,12 +829,17 @@ modificationTests <- function(fit, dat, personCovariates = character(), response
 #' @param difImpact,asymptotePooled,partitions Offer the impact of DIF
 #'   covariates, pooled asymptotes and partitions into correlated dimensions
 #'   (see Details).
+#' @param order The kinds in the order they are screened and judged within a
+#'   round: each of "ability", "dimensions", "asymptotes" and "dif" once
+#'   (default in that order, the more general first; see Details).
 #' @return A `bigIRT_improved` object: `fit` (final model, all persons),
 #'   `spec` (the terms added), `path` (each batch tried: round, kind, terms,
 #'   held-out log-likelihood before and after, gain and its z, accepted,
-#'   seconds to fit and evaluate), `screens` (the last round's tests),
-#'   `base_fit` (the base model on the training persons), `holdout_persons`,
-#'   `timing` (seconds: base fit, each round's screens, final fit).
+#'   seconds to fit and evaluate), `screens` (each kind's tests, from the
+#'   screen it was last judged on), `screens_all` (every screen made, named by
+#'   step: `round1_screens`, then `round1_screens-<kind>` for a re-screen
+#'   after a kept batch), `base_fit` (the base model on the training persons),
+#'   `holdout_persons`, `timing` (seconds: base fit, each screen, final fit).
 #' @seealso [modificationTests()], [heldoutLogLik()]
 #' @export
 improveModel <- function(dat, score = "score", id = "id", item = "Item", scale = "Scale", pl = 2L,
@@ -836,7 +848,12 @@ improveModel <- function(dat, score = "score", id = "id", item = "Item", scale =
   holdout = 0.2, alpha = 0.05, minEffect = 0.03, minAsymptote = 0.05, minGroupSD = 0.3,
   minZ = stats::qnorm(.95), minGain = 0, nsimDim = 19L, maxRounds = 3L, maxGroups = 2L, seed = 1L, cores = 1L,
   verbose = TRUE, fitArgs = list(laplaceRefine = "agq"), checkpoint = NULL,
-  difImpact = TRUE, asymptotePooled = TRUE, partitions = TRUE){
+  difImpact = TRUE, asymptotePooled = TRUE, partitions = TRUE,
+  order = c("ability", "dimensions", "asymptotes", "dif")){
+  kinds_all <- c("ability", "dimensions", "asymptotes", "dif")
+  order <- match.arg(order, kinds_all, several.ok = TRUE)
+  if(length(order) != length(kinds_all) || anyDuplicated(order))
+    stop("order must name each of 'ability', 'dimensions', 'asymptotes' and 'dif' once.", call. = FALSE)
   dat <- data.table::as.data.table(dat)
   if(!scale %in% names(dat)) { dat <- data.table::copy(dat); data.table::set(dat, j = scale, value = 1L) }
   persons <- unique(dat[[id]])
@@ -866,7 +883,8 @@ improveModel <- function(dat, score = "score", id = "id", item = "Item", scale =
     base = base[c("score", "id", "item", "scale", "pl")],
     fitArgs = base$fitArgs[setdiff(names(base$fitArgs), c("cores", "verbose"))],
     tests = list(personCovariates, responseCovariates, itemSets, dif, difCovariates, asymptotes, alpha, minEffect,
-      minAsymptote, minGroupSD, minZ, minGain, nsimDim, maxGroups, difImpact, asymptotePooled, partitions))
+      minAsymptote, minGroupSD, minZ, minGain, nsimDim, maxGroups, difImpact, asymptotePooled, partitions,
+      order))
   step <- bigIRT_modify_checkpoint(checkpoint, fp)
   secs <- function(t0) proc.time()[[3]] - t0
   timing <- list()
@@ -884,204 +902,247 @@ improveModel <- function(dat, score = "score", id = "id", item = "Item", scale =
   base_fit <- if(is.null(checkpoint)) cur else NULL
   rm(b)
   say("base model: held-out log-likelihood %.1f", cur_ho$loglik)
-  path <- list(); screens <- NULL
-  ## The kinds open to change. A kind rejected in a round already met every
-  ## batch kept before it, so it is tried again only if it was kept or a kind
-  ## after it was (otherwise nothing that could change its verdict changed,
-  ## and a retry would only refit the same candidates).
-  kinds <- c("ability", "impact", "dif", "asymptotes", "groups")
+  path <- list()
+  ## The kinds, in the order they are screened and judged within a round
+  ## (`order`; "dif" brings its impact stage with it). A kind rejected in a
+  ## round already met every batch kept before it, so it is tried again only
+  ## if it was kept or a kind after it was (otherwise nothing that could
+  ## change its verdict changed, and a retry would only refit the same
+  ## candidates).
+  kinds <- unname(c(ability = "ability", dimensions = "groups", asymptotes = "asymptotes", dif = "dif")[order])
   live <- kinds
   ## The accepted step whose stored fit is the current model's (none while
   ## the base is current: the base fit is returned and kept).
   holder <- NULL
-  for(round in seq_len(maxRounds)){
-    covs_in <- vapply(spec$abil, function(a) a$covariate, "")
-    pc_left <- setdiff(personCovariates, c(covs_in, personPreds))
-    more_groups <- !length(spec$partition) && length(spec$groups) < maxGroups && "groups" %in% live
-    sr <- step(sprintf("round%d_screens", round), spec, function(){
+  ## The screen each kind was last judged on (returned as `screens`) and every
+  ## screen made (`screens_all`).
+  judged_on <- list(); screens_all <- list()
+  ## A screen of the kinds still to come, at the model as it stands. A screen
+  ## made before a batch was kept no longer describes the model, so each kind
+  ## is screened at the model it will be judged against; while nothing is
+  ## kept, one screen serves every kind after it. (Screened once per round, at
+  ## the round's start, DIF was judged against a one-dimensional model whose
+  ## subdomain dimensions came later in the round. A group gap specific to one
+  ## subdomain then looks like DIF on that subdomain's items: on a simulated
+  ## bank with no DIF it was kept in 90 to 100 per cent of runs, and on
+  ## Mindsteps it moved the gender and first-language gaps by up to 0.14
+  ## years of growth.)
+  screen_at <- function(left, name){
+    more_groups <- "groups" %in% left && !length(spec$partition) && length(spec$groups) < maxGroups
+    sr <- step(name, spec, function(){
       t0 <- proc.time()[[3]]
       dat_cur <- bigIRT_modify_build(dat, spec, base)$dat
       s <- modificationTests(cur, dat_cur, personCovariates = personCovariates,
         responseCovariates = responseCovariates, itemSets = if(more_groups) itemSets else character(),
-        dif = if("dif" %in% live) dif else character(), difCovariates = difCovariates,
-        asymptotes = if("asymptotes" %in% live) asymptotes else character(),
+        dif = if("dif" %in% left) dif else character(), difCovariates = difCovariates,
+        asymptotes = if("asymptotes" %in% left) asymptotes else character(),
         exploratory = more_groups && nsimDim > 0L, nsimDim = nsimDim,
         cores = cores)
       list(screens = s, seconds = secs(t0))
     })
-    screens <- sr$screens; timing[[sprintf("round%d_screens", round)]] <- sr$seconds
-    ## Candidates, kind by kind. Each stage below is one batch, or a choice
-    ## between alternative batches of one kind, judged in turn against the
-    ## model as it stands after the batches kept before it.
+    timing[[name]] <<- sr$seconds
+    s <- sr$screens; attr(s, "more_groups") <- more_groups
+    screens_all[[name]] <<- s
+    s
+  }
+  ## The batches one kind offers, from its screen: one stage per batch, or a
+  ## choice between alternative batches of the kind.
+  stages_for <- function(kind, screens){
     stages <- list()
     stage <- function(kind, ...) list(kind = kind, alts = list(...))
     alt <- function(label, apply, terms) list(label = label, apply = apply, terms = terms)
-    ab <- screens$ability
-    if("ability" %in% live && !is.null(ab) && nrow(ab)) {
-      ab <- ab[covariate %in% pc_left & p_fdr < alpha]
-      if(nrow(ab)) local({
-        ## (local: each batch's function must keep its own terms, not a loop
-        ## variable that later candidates overwrite.)
-        xa <- lapply(seq_len(nrow(ab)), function(k) list(covariate = ab$covariate[k], kind = ab$kind[k]))
-        stages[[length(stages) + 1L]] <<- stage("ability", alt("ability", function(s){ s$abil <- c(s$abil, xa); s }, length(xa)))
+    if(kind == "ability"){
+      ab <- screens$ability
+      covs_in <- vapply(spec$abil, function(a) a$covariate, "")
+      pc_left <- setdiff(personCovariates, c(covs_in, personPreds))
+      if(!is.null(ab) && nrow(ab)){
+        ab <- ab[covariate %in% pc_left & p_fdr < alpha]
+        if(nrow(ab)) local({
+          ## (local: each batch's function must keep its own terms, not a loop
+          ## variable that later candidates overwrite.)
+          xa <- lapply(seq_len(nrow(ab)), function(k) list(covariate = ab$covariate[k], kind = ab$kind[k]))
+          stages[[length(stages) + 1L]] <<- stage("ability", alt("ability", function(s){ s$abil <- c(s$abil, xa); s }, length(xa)))
+        })
+      }
+    }
+    if(kind == "dif"){
+      di <- screens$dif
+      dif_groups <- list()
+      if(!is.null(di) && nrow(di)){
+        di <- di[!is.na(p_fdr) & p_fdr < alpha & !is.na(dP_abs) & dP_abs >= minEffect]
+        done <- data.table::rbindlist(lapply(spec$dif, function(t) data.table::data.table(covariate = t$covariate,
+          parameter = t$parameter, item = t$items)))
+        if(nrow(done)) di <- di[!done, on = c("covariate", "parameter", "item")]
+        ## DIF along each covariate (and parameter) is its own batch, the
+        ## strongest first, so each covariate's DIF has to earn its place.
+        if(nrow(di)) dif_groups <- lapply(split(di, by = c("covariate", "parameter"), keep.by = TRUE), function(x)
+          list(covariate = x$covariate[1], parameter = x$parameter[1], kind = x$kind[1], items = x$item,
+            strength = sum(x$LM, na.rm = TRUE)))
+        dif_groups <- dif_groups[order(-vapply(dif_groups, `[[`, 0, "strength"))]
+      }
+      ## A DIF covariate whose effect on ability the model lacks (in any form)
+      ## gets it first, as a batch of its own: DIF along it would otherwise
+      ## absorb impact, and judged together the two could not be told apart.
+      ## What is missing is judged against the model as it stands when the
+      ## stage is reached: a batch before it may have added the covariate
+      ## already.
+      if(isTRUE(difImpact) && length(dif_groups)){
+        dif_covs <- unique(vapply(dif_groups, `[[`, "", "covariate"))
+        need_for <- function(s){
+          cand <- setdiff(dif_covs, s$impact)
+          if(!length(cand)) return(character())
+          a <- bigIRT_modify_build(dat, s, base)
+          Filter(function(v){
+            z <- a$dat[[v]]
+            B <- bigIRT_modify_basis(z, if(is.character(z) || is.factor(z) || is.logical(z) ||
+              length(unique(stats::na.omit(z))) <= 4L) "factor" else "linear", NULL)
+            length(bigIRT_modify_unspanned(a$dat, a$personPreds, B)) > 0L
+          }, cand)
+        }
+        if(length(need_for(spec))) stages[[length(stages) + 1L]] <- stage("impact",
+          alt("impact", function(s){ s$impact <- union(s$impact, need_for(s)); s },
+            function(s) length(need_for(s))))
+      }
+      for(x in dif_groups) local({ xx <- x[c("covariate", "parameter", "kind", "items")]
+        stages[[length(stages) + 1L]] <<- stage("dif", alt(paste("dif", make.names(xx$covariate), xx$parameter, sep = "-"),
+          function(s){ s$dif <- bigIRT_modify_merge_dif(c(s$dif, list(xx))); s }, length(xx$items)))
       })
     }
-    di <- screens$dif
-    dif_groups <- list()
-    if("dif" %in% live && !is.null(di) && nrow(di)){
-      di <- di[!is.na(p_fdr) & p_fdr < alpha & !is.na(dP_abs) & dP_abs >= minEffect]
-      done <- data.table::rbindlist(lapply(spec$dif, function(t) data.table::data.table(covariate = t$covariate,
-        parameter = t$parameter, item = t$items)))
-      if(nrow(done)) di <- di[!done, on = c("covariate", "parameter", "item")]
-      ## DIF along each covariate (and parameter) is its own batch, the
-      ## strongest first, so each covariate's DIF has to earn its place.
-      if(nrow(di)) dif_groups <- lapply(split(di, by = c("covariate", "parameter"), keep.by = TRUE), function(x)
-        list(covariate = x$covariate[1], parameter = x$parameter[1], kind = x$kind[1], items = x$item,
-          strength = sum(x$LM, na.rm = TRUE)))
-      dif_groups <- dif_groups[order(-vapply(dif_groups, `[[`, 0, "strength"))]
-    }
-    ## A DIF covariate whose effect on ability the model lacks (in any form)
-    ## gets it first, as a batch of its own: DIF along it would otherwise
-    ## absorb impact, and judged together the two could not be told apart.
-    ## What is missing is judged against the model as it stands when the
-    ## stage is reached: the ability batch before it may have added the
-    ## covariate already (judged at the round's start, the impact batch then
-    ## refitted the same model).
-    if(isTRUE(difImpact) && length(dif_groups)){
-      dif_covs <- unique(vapply(dif_groups, `[[`, "", "covariate"))
-      need_for <- function(s){
-        cand <- setdiff(dif_covs, s$impact)
-        if(!length(cand)) return(character())
-        a <- bigIRT_modify_build(dat, s, base)
-        Filter(function(v){
-          z <- a$dat[[v]]
-          B <- bigIRT_modify_basis(z, if(is.character(z) || is.factor(z) || is.logical(z) ||
-            length(unique(stats::na.omit(z))) <= 4L) "factor" else "linear", NULL)
-          length(bigIRT_modify_unspanned(a$dat, a$personPreds, B)) > 0L
-        }, cand)
-      }
-      if(length(need_for(spec))) stages[[length(stages) + 1L]] <- stage("impact",
-        alt("impact", function(s){ s$impact <- union(s$impact, need_for(s)); s },
-          function(s) length(need_for(s))))
-    }
-    for(x in dif_groups) local({ xx <- x[c("covariate", "parameter", "kind", "items")]
-      stages[[length(stages) + 1L]] <<- stage("dif", alt(paste("dif", make.names(xx$covariate), xx$parameter, sep = "-"),
-        function(s){ s$dif <- bigIRT_modify_merge_dif(c(s$dif, list(xx))); s }, length(xx$items)))
-    })
-    as <- screens$asymptotes
-    as_alts <- list()
-    if("asymptotes" %in% live && !is.null(as) && nrow(as) && length(setdiff(asymptotes, spec$pooled))){
-      as <- as[p_fdr < alpha & estimate >= minAsymptote]
-      if(nrow(as)){
-        lo <- as[side == "lower", item]; up <- as[side == "upper", item]
-        as_alts[[1]] <- alt("asymptotes", function(s){ s$lower <- union(s$lower, lo); s$upper <- union(s$upper, up); s },
-          length(lo) + length(up))
-      }
-      ## The alternative: the asymptote free on EVERY item, pooled by the
-      ## asymptote priors. Where slips or guesses are many, small and each
-      ## barely identified, screening finds only the large ones (on Mindsteps
-      ## a 4PL everywhere beat the screened selection by 431 held-out nats).
-      sa <- screens$asymptotes
-      sides <- setdiff(intersect(asymptotes, unique(sa[!is.na(p_fdr) & p_fdr < alpha, side])), spec$pooled)
-      if(isTRUE(asymptotePooled) && length(sides))
-        as_alts[[length(as_alts) + 1L]] <- alt(paste0("asymptotes-pooled-", paste(sides, collapse = "-")),
-          function(s){ s$pooled <- union(s$pooled, sides); s }, length(unique(screens$asymptotes$item)) * length(sides))
-    }
-    if(length(as_alts)) stages[[length(stages) + 1L]] <- do.call(stage, c(list("asymptotes"), as_alts))
-    gr <- screens$groups
-    gr_alts <- list()
-    if(more_groups && !is.null(gr) && nrow(gr)){
-      ## One group dimension per round, the strongest first. Until a real
-      ## dimension is modelled the general ability leans towards its items,
-      ## and the other items share the leftover covariance: tried together
-      ## with a real testlet, a 15-item set with no structure of its own rode
-      ## in with it in 10 per cent of simulated runs. The next round re-screens
-      ## with the first dimension in the model.
-      keep <- bigIRT_modify_pick_groups(gr, attr(gr, "sets"), unlist(lapply(spec$groups, `[[`, "items")),
-        min(1L, maxGroups - length(spec$groups)), alpha, minGroupSD)
-      if(length(keep)) gr_alts[[1]] <- alt("groups", function(s){ s$groups <- c(s$groups, keep); s }, length(keep))
-      ## The alternative when an item-set column covers every item (a
-      ## partition, such as subdomains): its levels as correlated dimensions,
-      ## which is what a partition calls for; group factors on a general
-      ## ability can add at most maxGroups of its levels, orthogonally.
-      if(isTRUE(partitions) && !length(spec$groups) && !length(spec$partition)){
-        for(v in itemSets){
-          lv <- unique(dat[, c(item, v), with = FALSE])
-          if(anyNA(lv[[v]]) || data.table::uniqueN(lv[[v]]) < 2L || anyDuplicated(lv[[item]])) next
-          gv <- gr[source == v]
-          if(!nrow(gv) || !any(gv$p_fdr < alpha & sqrt(gv$tau2) >= minGroupSD, na.rm = TRUE)) next
-          local({ vv <- v; nl <- data.table::uniqueN(lv[[v]])
-            gr_alts[[length(gr_alts) + 1L]] <<- alt(paste0("partition-", make.names(vv)),
-              function(s){ s$partition <- vv; s }, nl) })
+    if(kind == "asymptotes"){
+      as <- screens$asymptotes
+      as_alts <- list()
+      if(!is.null(as) && nrow(as) && length(setdiff(asymptotes, spec$pooled))){
+        as <- as[p_fdr < alpha & estimate >= minAsymptote]
+        if(nrow(as)){
+          lo <- as[side == "lower", item]; up <- as[side == "upper", item]
+          as_alts[[1]] <- alt("asymptotes", function(s){ s$lower <- union(s$lower, lo); s$upper <- union(s$upper, up); s },
+            length(lo) + length(up))
         }
+        ## The alternative: the asymptote free on EVERY item, pooled by the
+        ## asymptote priors. Where slips or guesses are many, small and each
+        ## barely identified, screening finds only the large ones (on Mindsteps
+        ## a 4PL everywhere beat the screened selection by 431 held-out nats).
+        sa <- screens$asymptotes
+        sides <- setdiff(intersect(asymptotes, unique(sa[!is.na(p_fdr) & p_fdr < alpha, side])), spec$pooled)
+        if(isTRUE(asymptotePooled) && length(sides))
+          as_alts[[length(as_alts) + 1L]] <- alt(paste0("asymptotes-pooled-", paste(sides, collapse = "-")),
+            function(s){ s$pooled <- union(s$pooled, sides); s }, length(unique(screens$asymptotes$item)) * length(sides))
       }
+      if(length(as_alts)) stages[[length(stages) + 1L]] <- do.call(stage, c(list("asymptotes"), as_alts))
     }
-    if(length(gr_alts)) stages[[length(stages) + 1L]] <- do.call(stage, c(list("groups"), gr_alts))
-    if(!length(stages)){ say("round %d: nothing to add", round); break }
-    ho_start <- cur_ho$loglik; kept <- character(); passed <- list()
-    for(sg in stages){
-      ## Each alternative judged against the current model; the best that
-      ## passes the gate is kept.
-      best <- NULL
-      for(a in sg$alts){
-        if(is.function(a$terms)) a$terms <- a$terms(spec)
-        s <- a$apply(spec)
-        ## Nothing left to add once the batches before it are in: no refit.
-        if(identical(s, spec)){ say("round %d, %s: nothing left to add", round, a$label); next }
-        tr <- step(sprintf("round%d_%s", round, a$label), s, function(){
-          t0 <- proc.time()[[3]]
-          ## A batch whose fit or held-out evaluation fails is rejected, and
-          ## the reason kept: a failure is not evidence against the change.
-          err <- NULL
-          f <- tryCatch(fit_spec(s, train, start = cur), error = function(e){ err <<- conditionMessage(e); NULL })
-          h <- if(is.null(f)) NULL else tryCatch(heldoutLogLik(f, cores = cores),
-            error = function(e){ err <<- paste("heldoutLogLik:", conditionMessage(e)); NULL })
-          gm <- if(is.null(h)) list(gain = NA_real_, z = NA_real_) else bigIRT_modify_gain(cur_ho, h)
-          ok <- isTRUE(gm$gain >= minGain && gm$z >= minZ)
-          ## Only a fit that passes is needed again.
-          list(fit = if(ok) f else NULL, h = h, gain = gm$gain, z = gm$z, ok = ok, seconds = secs(t0), error = err)
-        })
-        path[[length(path) + 1L]] <- data.table::data.table(round = round, kind = sg$kind, batch = a$label,
-          terms = a$terms, heldout_before = cur_ho$loglik, heldout_after = if(is.null(tr$h)) NA_real_ else tr$h$loglik,
-          gain = tr$gain, z = tr$z, accepted = FALSE, seconds = tr$seconds,
-          error = if(is.null(tr$error)) NA_character_ else tr$error)
-        if(!is.null(tr$error)) say("round %d, %s: %d terms, failed (%s)", round, a$label, a$terms, tr$error)
-        else say("round %d, %s: %d terms, held-out gain %.1f (z %.1f)%s", round, a$label, a$terms,
-          tr$gain, tr$z, if(tr$ok) " (passes)" else "")
-        if(tr$ok){
-          ## Only the stage's best fit is held in memory; the others keep
-          ## their verdicts.
-          is_best <- is.null(best) || tr$gain > best$tr$gain
-          slim_tr <- tr; slim_tr$fit <- NULL
-          passed[[length(passed) + 1L]] <- list(name = sprintf("round%d_%s", round, a$label), s = s,
-            tr = if(is_best) tr else slim_tr)
-          if(is_best){
-            if(!is.null(best)) passed[[best$slot]]$tr$fit <- NULL
-            best <- list(tr = tr, s = s, at = length(path), slot = length(passed))
+    if(kind == "groups"){
+      gr <- screens$groups
+      gr_alts <- list()
+      if(isTRUE(attr(screens, "more_groups")) && !is.null(gr) && nrow(gr)){
+        ## One group dimension per round, the strongest first. Until a real
+        ## dimension is modelled the general ability leans towards its items,
+        ## and the other items share the leftover covariance: tried together
+        ## with a real testlet, a 15-item set with no structure of its own rode
+        ## in with it in 10 per cent of simulated runs. The next round re-screens
+        ## with the first dimension in the model.
+        keep <- bigIRT_modify_pick_groups(gr, attr(gr, "sets"), unlist(lapply(spec$groups, `[[`, "items")),
+          min(1L, maxGroups - length(spec$groups)), alpha, minGroupSD)
+        if(length(keep)) gr_alts[[1]] <- alt("groups", function(s){ s$groups <- c(s$groups, keep); s }, length(keep))
+        ## The alternative when an item-set column covers every item (a
+        ## partition, such as subdomains): its levels as correlated dimensions,
+        ## which is what a partition calls for; group factors on a general
+        ## ability can add at most maxGroups of its levels, orthogonally.
+        if(isTRUE(partitions) && !length(spec$groups) && !length(spec$partition)){
+          for(v in itemSets){
+            lv <- unique(dat[, c(item, v), with = FALSE])
+            if(anyNA(lv[[v]]) || data.table::uniqueN(lv[[v]]) < 2L || anyDuplicated(lv[[item]])) next
+            gv <- gr[source == v]
+            if(!nrow(gv) || !any(gv$p_fdr < alpha & sqrt(gv$tau2) >= minGroupSD, na.rm = TRUE)) next
+            local({ vv <- v; nl <- data.table::uniqueN(lv[[v]])
+              gr_alts[[length(gr_alts) + 1L]] <<- alt(paste0("partition-", make.names(vv)),
+                function(s){ s$partition <- vv; s }, nl) })
           }
         }
-        tr <- NULL; gc(verbose = FALSE)
       }
-      if(!is.null(best)){
-        spec <- best$s; cur <- best$tr$fit; cur_ho <- best$tr$h; kept <- c(kept, sg$kind)
-        path[[best$at]]$accepted <- TRUE
-        ## Only the latest accepted fit is needed again (a resumed run takes
-        ## its model from it), so the checkpoint keeps every other step's
-        ## verdict but not its fit: the alternatives that passed and lost,
-        ## and the fit this one supersedes. On Mindsteps each fit is 13 GB,
-        ## and a round can accept a batch per DIF covariate.
-        if(!is.null(checkpoint)){
-          slim <- c(passed[-best$slot], if(!is.null(holder)) list(holder))
-          for(x in slim){ v <- x$tr; v$fit <- NULL; bigIRT_modify_store(checkpoint, x$name, fp, x$s, v) }
-        }
-        holder <- passed[[best$slot]]
-      }
-      passed <- list()
+      if(length(gr_alts)) stages[[length(stages) + 1L]] <- do.call(stage, c(list("groups"), gr_alts))
     }
+    stages
+  }
+  for(round in seq_len(maxRounds)){
+    ho_start <- cur_ho$loglik; kept <- character(); passed <- list(); tried <- FALSE
+    scr <- NULL; scr_spec <- NULL
+    for(ki in seq_along(kinds)){
+      kind <- kinds[ki]
+      if(!kind %in% live) next
+      if(is.null(scr) || !identical(scr_spec, spec)){
+        left <- kinds[seq(ki, length(kinds))]; left <- left[left %in% live]
+        scr <- screen_at(left, if(is.null(scr)) sprintf("round%d_screens", round) else sprintf("round%d_screens-%s", round, kind))
+        scr_spec <- spec
+      }
+      judged_on[[kind]] <- scr
+      for(sg in stages_for(kind, scr)){
+        tried <- TRUE
+        ## Each alternative judged against the current model; the best that
+        ## passes the gate is kept.
+        best <- NULL
+        for(a in sg$alts){
+          if(is.function(a$terms)) a$terms <- a$terms(spec)
+          s <- a$apply(spec)
+          ## Nothing left to add once the batches before it are in: no refit.
+          if(identical(s, spec)){ say("round %d, %s: nothing left to add", round, a$label); next }
+          tr <- step(sprintf("round%d_%s", round, a$label), s, function(){
+            t0 <- proc.time()[[3]]
+            ## A batch whose fit or held-out evaluation fails is rejected, and
+            ## the reason kept: a failure is not evidence against the change.
+            err <- NULL
+            f <- tryCatch(fit_spec(s, train, start = cur), error = function(e){ err <<- conditionMessage(e); NULL })
+            h <- if(is.null(f)) NULL else tryCatch(heldoutLogLik(f, cores = cores),
+              error = function(e){ err <<- paste("heldoutLogLik:", conditionMessage(e)); NULL })
+            gm <- if(is.null(h)) list(gain = NA_real_, z = NA_real_) else bigIRT_modify_gain(cur_ho, h)
+            ok <- isTRUE(gm$gain >= minGain && gm$z >= minZ)
+            ## Only a fit that passes is needed again.
+            list(fit = if(ok) f else NULL, h = h, gain = gm$gain, z = gm$z, ok = ok, seconds = secs(t0), error = err)
+          })
+          path[[length(path) + 1L]] <- data.table::data.table(round = round, kind = sg$kind, batch = a$label,
+            terms = a$terms, heldout_before = cur_ho$loglik, heldout_after = if(is.null(tr$h)) NA_real_ else tr$h$loglik,
+            gain = tr$gain, z = tr$z, accepted = FALSE, seconds = tr$seconds,
+            error = if(is.null(tr$error)) NA_character_ else tr$error)
+          if(!is.null(tr$error)) say("round %d, %s: %d terms, failed (%s)", round, a$label, a$terms, tr$error)
+          else say("round %d, %s: %d terms, held-out gain %.1f (z %.1f)%s", round, a$label, a$terms,
+            tr$gain, tr$z, if(tr$ok) " (passes)" else "")
+          if(tr$ok){
+            ## Only the stage's best fit is held in memory; the others keep
+            ## their verdicts.
+            is_best <- is.null(best) || tr$gain > best$tr$gain
+            slim_tr <- tr; slim_tr$fit <- NULL
+            passed[[length(passed) + 1L]] <- list(name = sprintf("round%d_%s", round, a$label), s = s,
+              tr = if(is_best) tr else slim_tr)
+            if(is_best){
+              if(!is.null(best)) passed[[best$slot]]$tr$fit <- NULL
+              best <- list(tr = tr, s = s, at = length(path), slot = length(passed))
+            }
+          }
+          tr <- NULL; gc(verbose = FALSE)
+        }
+        if(!is.null(best)){
+          spec <- best$s; cur <- best$tr$fit; cur_ho <- best$tr$h; kept <- c(kept, sg$kind)
+          path[[best$at]]$accepted <- TRUE
+          ## Only the latest accepted fit is needed again (a resumed run takes
+          ## its model from it), so the checkpoint keeps every other step's
+          ## verdict but not its fit: the alternatives that passed and lost,
+          ## and the fit this one supersedes. On Mindsteps each fit is 13 GB,
+          ## and a round can accept a batch per DIF covariate.
+          if(!is.null(checkpoint)){
+            slim <- c(passed[-best$slot], if(!is.null(holder)) list(holder))
+            for(x in slim){ v <- x$tr; v$fit <- NULL; bigIRT_modify_store(checkpoint, x$name, fp, x$s, v) }
+          }
+          holder <- passed[[best$slot]]
+        }
+        passed <- list()
+      }
+    }
+    if(!tried){ say("round %d: nothing to add", round); break }
     if(!length(kept)) break
     say("round %d: held-out log-likelihood %.1f -> %.1f", round, ho_start, cur_ho$loglik)
-    last_kept <- max(match(kept, kinds))
-    live <- kinds[kinds %in% kept | seq_along(kinds) < last_kept]
+    ## (An impact batch belongs to the DIF kind.)
+    kk <- ifelse(kept == "impact", "dif", kept)
+    last_kept <- max(match(kk, kinds))
+    live <- kinds[kinds %in% kk | seq_along(kinds) < last_kept]
   }
   fin <- step("final", spec, function(){
     t0 <- proc.time()[[3]]; list(fit = fit_spec(spec, NULL, start = cur), seconds = secs(t0))
@@ -1089,8 +1150,13 @@ improveModel <- function(dat, score = "score", id = "id", item = "Item", scale =
   timing$final <- fin$seconds
   rm(cur)
   if(is.null(base_fit)) base_fit <- step("base", base_spec, function() stop("the checkpoint lost the base step"))$fit
+  ## Each kind's tests as it was last judged on them.
+  screens <- list(ability = judged_on$ability$ability, dif = judged_on$dif$dif,
+    asymptotes = judged_on$asymptotes$asymptotes, groups = judged_on$groups$groups,
+    dimensions = judged_on$groups$dimensions)
   structure(list(fit = fin$fit, spec = spec, path = data.table::rbindlist(path, fill = TRUE), screens = screens,
-    base_fit = base_fit, holdout_persons = ho, timing = unlist(timing)), class = "bigIRT_improved")
+    screens_all = screens_all, base_fit = base_fit, holdout_persons = ho, timing = unlist(timing)),
+    class = "bigIRT_improved")
 }
 
 ## Group dimensions to try: significant sets above the size floor that share
