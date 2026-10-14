@@ -604,11 +604,23 @@ modificationTests <- function(fit, dat, personCovariates = character(), response
     out
   }
   fdr <- function(x, col = "p") if(!is.null(x) && nrow(x)) x[, p_fdr := stats::p.adjust(get(col), "BH")] else x
+  ## A screen that fails is left out, but said so: silently dropped, a failed
+  ## DIF screen looked exactly like a covariate with no DIF candidates (on a
+  ## simulated bank, a third of the runs of one design). The screens' own
+  ## warnings are muffled, except that purification fell back on its anchor
+  ## floor, which is passed on.
+  failed <- character(); floored <- character()
+  screen <- function(expr, what) withCallingHandlers(
+    tryCatch(expr, error = function(e){ failed <<- c(failed, sprintf("%s: %s", what, conditionMessage(e))); NULL }),
+    warning = function(w){
+      if(inherits(w, "bigIRT_anchor_floor")) floored <<- c(floored, conditionMessage(w))
+      invokeRestart("muffleWarning")
+    })
   ## Covariates of ability not already in the model.
   ab <- data.table::rbindlist(lapply(personCovariates, function(v){
     cv <- pv(v); isf <- is.factor(cv[[v]])
-    r <- tryCatch(suppressWarnings(scoreTest(sc, cv, parameters = "Ability", form = if(isf) "factor" else "spline")),
-      error = function(e) NULL)
+    r <- screen(scoreTest(sc, cv, parameters = "Ability", form = if(isf) "factor" else "spline"),
+      sprintf("ability, %s", v))
     if(is.null(r) || !nrow(r$tests)) return(NULL)
     data.table::data.table(covariate = v, kind = if(isf) "factor" else "spline", LM = r$tests$LM[1],
       df = r$tests$df[1], p = r$tests$p[1])
@@ -627,9 +639,8 @@ modificationTests <- function(fit, dat, personCovariates = character(), response
         length(unique(stats::na.omit(z))) <= 4L) factor(z) else z)
       names(o) <- v; o
     }
-    r <- tryCatch(suppressWarnings(scoreTest(fit, cv, parameters = par, purify = purify, effects = TRUE, cores = cores,
-      contributions = sc)),
-      error = function(e) NULL)
+    r <- screen(scoreTest(fit, cv, parameters = par, purify = purify, effects = TRUE, cores = cores,
+      contributions = sc), sprintf("DIF in %s along %s", par, v))
     if(is.null(r) || !nrow(r$tests)) next
     e <- r$effects
     eff <- if(is.null(e)) NULL else e[, list(dP = dP[which.max(abs(dP))], dP_abs = max(dP_abs)), by = item]
@@ -639,6 +650,8 @@ modificationTests <- function(fit, dat, personCovariates = character(), response
     dl[[length(dl) + 1L]] <- t
   }
   di <- data.table::rbindlist(dl, fill = TRUE)
+  for(m in floored) warning(warningCondition(m, class = "bigIRT_anchor_floor"))
+  if(length(failed)) warning("These screens failed and are left out: ", paste(failed, collapse = "; "), call. = FALSE)
   ## Asymptotes and group dimensions.
   as <- if(length(asymptotes)) fdr(bigIRT_modify_asymptotes(fit, sc, sides = asymptotes)) else NULL
   gr <- NULL; dims <- NULL
