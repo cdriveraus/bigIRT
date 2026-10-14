@@ -761,8 +761,8 @@ modificationTests <- function(fit, dat, personCovariates = character(), response
 #' such in 90 to 100 per cent of simulated runs with none). An unmodelled
 #' asymptote likewise looks like DIF between groups of different ability. A
 #' covariate's effect on ability is in the model before DIF along it is
-#' judged (DIF absorbs impact otherwise). While nothing is kept, one screen
-#' serves every kind after it.
+#' judged (DIF absorbs impact otherwise). Each kind is screened when its turn
+#' comes, for itself alone.
 #'
 #' * DIF along each covariate (and parameter) is a batch of its own, the
 #'   strongest first, so each covariate's DIF has to earn its place.
@@ -837,8 +837,8 @@ modificationTests <- function(fit, dat, personCovariates = character(), response
 #'   held-out log-likelihood before and after, gain and its z, accepted,
 #'   seconds to fit and evaluate), `screens` (each kind's tests, from the
 #'   screen it was last judged on), `screens_all` (every screen made, named by
-#'   step: `round1_screens`, then `round1_screens-<kind>` for a re-screen
-#'   after a kept batch), `base_fit` (the base model on the training persons),
+#'   step: a round's first screen `round1_screens`, then
+#'   `round1_screens-<kind>`), `base_fit` (the base model on the training persons),
 #'   `holdout_persons`, `timing` (seconds: base fit, each screen, final fit).
 #' @seealso [modificationTests()], [heldoutLogLik()]
 #' @export
@@ -917,16 +917,19 @@ improveModel <- function(dat, score = "score", id = "id", item = "Item", scale =
   ## The screen each kind was last judged on (returned as `screens`) and every
   ## screen made (`screens_all`).
   judged_on <- list(); screens_all <- list()
-  ## A screen of the kinds still to come, at the model as it stands. A screen
-  ## made before a batch was kept no longer describes the model, so each kind
-  ## is screened at the model it will be judged against; while nothing is
-  ## kept, one screen serves every kind after it. (Screened once per round, at
-  ## the round's start, DIF was judged against a one-dimensional model whose
-  ## subdomain dimensions came later in the round. A group gap specific to one
-  ## subdomain then looks like DIF on that subdomain's items: on a simulated
-  ## bank with no DIF it was kept in 90 to 100 per cent of runs, and on
-  ## Mindsteps it moved the gender and first-language gaps by up to 0.14
-  ## years of growth.)
+  ## The screen of one kind, at the model as it stands when its turn comes.
+  ## A screen made before a batch was kept no longer describes the model, so
+  ## each kind is screened at the model it will be judged against. (Screened
+  ## once per round, at the round's start, DIF was judged against a
+  ## one-dimensional model whose subdomain dimensions came later in the round.
+  ## A group gap specific to one subdomain then looks like DIF on that
+  ## subdomain's items: on a simulated bank with no DIF it was kept in 90 to
+  ## 100 per cent of runs, and on Mindsteps it moved the gender and
+  ## first-language gaps by up to 0.14 years of growth.) Each kind is screened
+  ## alone: screened ahead, while nothing was yet kept, a later kind's tests
+  ## were wasted whenever a batch before it was kept, and a DIF screen takes
+  ## hours on Mindsteps (it also warned about anchors for a screen that was
+  ## never used).
   screen_at <- function(left, name){
     more_groups <- "groups" %in% left && !length(spec$partition) && length(spec$groups) < maxGroups
     sr <- step(name, spec, function(){
@@ -1063,17 +1066,21 @@ improveModel <- function(dat, score = "score", id = "id", item = "Item", scale =
     }
     stages
   }
+  ## Whether a kind has anything to test against the model as it stands (a
+  ## screen costs a pass over the data even when it has nothing to do).
+  has_tests <- function(kind) switch(kind,
+    ability = length(setdiff(personCovariates, c(vapply(spec$abil, function(a) a$covariate, ""), personPreds))) > 0L,
+    groups = !length(spec$partition) && length(spec$groups) < maxGroups && (length(itemSets) > 0L || nsimDim > 0L),
+    asymptotes = length(setdiff(asymptotes, spec$pooled)) > 0L,
+    dif = length(dif) > 0L && length(if(is.null(difCovariates)) c(personCovariates, responseCovariates) else difCovariates) > 0L)
   for(round in seq_len(maxRounds)){
     ho_start <- cur_ho$loglik; kept <- character(); passed <- list(); tried <- FALSE
-    scr <- NULL; scr_spec <- NULL
+    first_screen <- TRUE
     for(ki in seq_along(kinds)){
       kind <- kinds[ki]
-      if(!kind %in% live) next
-      if(is.null(scr) || !identical(scr_spec, spec)){
-        left <- kinds[seq(ki, length(kinds))]; left <- left[left %in% live]
-        scr <- screen_at(left, if(is.null(scr)) sprintf("round%d_screens", round) else sprintf("round%d_screens-%s", round, kind))
-        scr_spec <- spec
-      }
+      if(!kind %in% live || !has_tests(kind)) next
+      scr <- screen_at(kind, if(first_screen) sprintf("round%d_screens", round) else sprintf("round%d_screens-%s", round, kind))
+      first_screen <- FALSE
       judged_on[[kind]] <- scr
       for(sg in stages_for(kind, scr)){
         tried <- TRUE
