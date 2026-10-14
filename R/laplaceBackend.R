@@ -752,7 +752,7 @@ bigIRT_laplace_direct_layout <- function(sdat, estimateAbilityCorr = FALSE){
     cursor <<- cursor + n
     idx
   }
-  item_layout$ability_beta <- take(sdat$Nscales * sdat$NpersonPreds)
+  item_layout$ability_beta <- take(bigIRT_beta_nfree(sdat))
   item_layout$ability_mean <- take(if(sdat$fixedAbilityMean == 0L) sdat$Nscales else 0L)
   n_corr <- if(isTRUE(estimateAbilityCorr) && sdat$Nscales > 1L) sdat$Nscales * (sdat$Nscales - 1L) / 2L else 0L
   item_layout$corr <- take(n_corr)
@@ -782,8 +782,69 @@ bigIRT_laplace_beta_frozen <- function(sdat, layout){
   !isTRUE(length(layout$ability_beta) > 0L)
 }
 
-## Per-covariate scale for the ability_beta block, aligned with the column-major
-## unrolling of the Nscales x NpersonPreds coefficient matrix.
+## The person-predictor coefficients as estimated. The Nscales x NpersonPreds
+## matrix Abilitybeta, unrolled column major, maps entry by entry onto the
+## free coefficients (`sdat$abilityBetaMap`): 0 holds an entry at zero, and
+## entries with the same number share one coefficient. A covariate's effect
+## can so be common to several dimensions, or absent from one, as when a
+## dimension is to be judged on the dependence it explains rather than on a
+## group difference it could absorb (improveModel). Without a map every entry
+## is its own coefficient, which is what every fit did before.
+bigIRT_beta_map <- function(sdat){
+  n <- as.integer(sdat$Nscales) * as.integer(sdat$NpersonPreds %||% 0L)
+  m <- sdat$abilityBetaMap
+  if(is.null(m) || !length(m)) return(seq_len(n))
+  m <- as.integer(m)
+  if(length(m) != n) stop("abilityBetaMap must have one entry per scale and person predictor (", n, "), not ",
+    length(m), ".", call. = FALSE)
+  m
+}
+bigIRT_beta_nfree <- function(sdat) max(c(0L, bigIRT_beta_map(sdat)))
+## Whether the map is the identity (every entry its own coefficient, in order).
+bigIRT_beta_identity <- function(sdat){
+  m <- sdat$abilityBetaMap
+  is.null(m) || !length(m) || identical(as.integer(m), seq_along(m))
+}
+## Full (K x P, column major) to free: a gradient sums over the entries a
+## coefficient stands for, a value is their mean (they are equal in a state
+## the map produced).
+bigIRT_beta_collapse <- function(x, sdat, how = c("sum", "mean")){
+  how <- match.arg(how)
+  x <- as.numeric(x)
+  if(bigIRT_beta_identity(sdat)) return(x)
+  m <- bigIRT_beta_map(sdat); nf <- max(c(0L, m))
+  if(nf == 0L) return(numeric(0))
+  x <- x[seq_along(m)]; keep <- m > 0L
+  s <- as.numeric(rowsum(x[keep], m[keep], reorder = TRUE))
+  if(how == "mean") s <- s / tabulate(m[keep], nf)
+  s
+}
+## Free to full: the K x P coefficient matrix.
+bigIRT_beta_expand <- function(free, sdat){
+  K <- as.integer(sdat$Nscales)
+  if(bigIRT_beta_identity(sdat)) return(matrix(as.numeric(free), nrow = K))
+  matrix(c(0, as.numeric(free))[bigIRT_beta_map(sdat) + 1L], nrow = K)
+}
+## The parameter index each entry draws on, 0 for an entry held at zero: for
+## code that walks the K x P entries (the Fisher metric).
+bigIRT_beta_index_full <- function(layout, sdat){
+  idx <- layout$ability_beta
+  if(!length(idx)) return(integer(0))
+  m <- bigIRT_beta_map(sdat)
+  out <- integer(length(m)); out[m > 0L] <- idx[m[m > 0L]]
+  out
+}
+## The map as a K*P x nfree matrix: full = T free.
+bigIRT_beta_T <- function(sdat){
+  m <- bigIRT_beta_map(sdat); nf <- max(c(0L, m))
+  Tm <- matrix(0, length(m), nf)
+  if(nf > 0L) Tm[cbind(which(m > 0L), m[m > 0L])] <- 1
+  Tm
+}
+
+## Per-covariate scale for the ability_beta block, one per free coefficient
+## (the column-major unrolling of the Nscales x NpersonPreds matrix when every
+## entry is free).
 bigIRT_laplace_beta_scale <- function(sdat){
   npred <- as.integer(sdat$NpersonPreds)
   nscale <- as.integer(sdat$Nscales)
@@ -799,7 +860,12 @@ bigIRT_laplace_beta_scale <- function(sdat){
     apply(as.matrix(preds), 2, stats::sd)
   } else rep(1, npred)
   sdk[!is.finite(sdk) | sdk <= 0] <- 1
-  rep(pmin(pmax(base / sdk, 1e-4), 1e4), each = nscale)
+  full <- rep(pmin(pmax(base / sdk, 1e-4), 1e4), each = nscale)
+  if(bigIRT_beta_identity(sdat)) return(full)
+  ## A shared coefficient takes its covariate's scale (entries sharing one are
+  ## of one covariate, or of covariates the caller chose to tie).
+  m <- bigIRT_beta_map(sdat)
+  vapply(seq_len(bigIRT_beta_nfree(sdat)), function(j) full[which(m == j)[1]], 0)
 }
 
 ## Per-parameter optimiser scaling for every block whose gradient aggregates
@@ -893,7 +959,7 @@ bigIRT_laplace_pack_direct_state <- function(state, sdat,
     out[seq_len(n_item_par)] <- bigIRT_laplace_pack_item_state(state, sdat, layout = item_slots)
   }
   if(length(layout$ability_beta)){
-    out[layout$ability_beta] <- as.numeric(state$Abilitybeta)
+    out[layout$ability_beta] <- bigIRT_beta_collapse(state$Abilitybeta, sdat, "mean")
   }
   if(length(layout$ability_mean)){
     out[layout$ability_mean] <- as.numeric(state$AbilityMean)
@@ -921,7 +987,7 @@ bigIRT_laplace_unpack_direct_state <- function(par, state, sdat,
   out <- bigIRT_laplace_unpack_item_state(par, out, sdat, layout = item_slots)
   if(length(layout$ability_beta)){
     out$Abilitybeta <- matrix(
-      as.numeric(par[layout$ability_beta]),
+      bigIRT_beta_expand(par[layout$ability_beta], sdat),
       nrow = nrow(state$Abilitybeta),
       ncol = ncol(state$Abilitybeta)
     )
@@ -1041,8 +1107,11 @@ bigIRT_laplace_item_prior <- function(state, sdat, layout = bigIRT_laplace_item_
   betaScale <- as.numeric(sdat$betaScale)
   if(betaScale > 0){
     if(length(layout$ability_beta)){
-      value <- value + sum(dnorm(as.numeric(state$Abilitybeta), 0, betaScale, log = TRUE))
-      grad[layout$ability_beta] <- grad[layout$ability_beta] - as.numeric(state$Abilitybeta) / (betaScale^2)
+      ## On the free coefficients: a shared one has one prior, not one per
+      ## entry it stands for.
+      ab <- bigIRT_beta_collapse(state$Abilitybeta, sdat, "mean")
+      value <- value + sum(dnorm(ab, 0, betaScale, log = TRUE))
+      grad[layout$ability_beta] <- grad[layout$ability_beta] - ab / (betaScale^2)
     }
     if(length(layout$A_beta)){
       value <- value + sum(dnorm(as.numeric(state$invspAbeta), 0, betaScale, log = TRUE))
@@ -1392,7 +1461,7 @@ bigIRT_laplace_direct_objective <- function(par, state, sdat, prior_precision,
     lay <- context$direct_layout
     if(length(lay$ability_beta))
       approx_grad[lay$ability_beta] <- approx_grad[lay$ability_beta] +
-        as.numeric(direct_fg$item_fg$grad_ability_beta)[seq_along(lay$ability_beta)]
+        bigIRT_beta_collapse(direct_fg$item_fg$grad_ability_beta, sdat, "sum")
     if(length(lay$ability_mean)){
       mu <- as.numeric(curState$AbilityMean)
       g_mu <- as.numeric(direct_fg$item_fg$grad_mean)
@@ -1415,7 +1484,7 @@ bigIRT_laplace_direct_objective <- function(par, state, sdat, prior_precision,
     ## accumulates for the same reason. Against finite differences the missing
     ## piece scaled exactly as 1/betaScale^2 -- invisible at a loose prior,
     ## worth .08 per cent at betaScale 5 and 8 per cent at betaScale 1.
-    approx_grad[context$direct_layout$ability_beta] <- approx_grad[context$direct_layout$ability_beta] + as.numeric(
+    approx_grad[context$direct_layout$ability_beta] <- approx_grad[context$direct_layout$ability_beta] + bigIRT_beta_collapse(
       bigIRT_laplace_ability_beta_contribution(
         state = curState,
         sdat = sdat,
@@ -1433,8 +1502,7 @@ bigIRT_laplace_direct_objective <- function(par, state, sdat, prior_precision,
         person_terms = person_terms,
         row_effective = row_effective,
         fused_beta = if(!is.null(fused)) fused$beta else NULL
-      )
-    )
+      ), sdat, "sum")
   }
   ability_mean_sec <- 0
   if(is.null(agq_rule) && length(context$direct_layout$ability_mean)){
@@ -1492,7 +1560,7 @@ bigIRT_laplace_direct_objective <- function(par, state, sdat, prior_precision,
     if(sdat$NBitemPreds > 0) add_blk(lay$B_beta, l2$grad_B_beta)
     if(sdat$NCitemPreds > 0) add_blk(lay$C_beta, l2$grad_C_beta)
     if(sdat$NDitemPreds > 0) add_blk(lay$D_beta, l2$grad_D_beta)
-    add_blk(lay$ability_beta, l2$grad_ability_beta)
+    add_blk(lay$ability_beta, bigIRT_beta_collapse(l2$grad_ability_beta, sdat, "sum"))
     add_blk(lay$ability_mean, l2$grad_mean)
     if(isTRUE(context$estimateAbilityCorr) && length(lay$corr))
       add_blk(lay$corr, bigIRT_laplace2_corr_grad(curState$AbilityCorrPars, l2$grad_P0, sdat,

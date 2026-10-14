@@ -543,6 +543,13 @@ bigIRT_covariate_vcov <- function(fit, eps = 1e-4, cores = 1L, person_tol = 1e-8
   ## Undo the internal rescaling so the result is on the coefficient's own scale.
   bs <- attr(d$layout, "beta_scale")
   if(length(bs) == n) V <- V * outer(bs, bs)
+  ## Shared or fixed coefficients (abilityBetaMap): back to one row per entry
+  ## of the K x P matrix, a shared coefficient's variance on each entry it
+  ## stands for and zero for an entry held at zero.
+  if(!bigIRT_beta_identity(d$sdat)){
+    Tm <- bigIRT_beta_T(d$sdat)
+    V <- Tm %*% V %*% t(Tm); n <- nrow(V)
+  }
   nm <- colnames(fit$pars$Abilitybeta)
   if(length(nm) && nrow(fit$pars$Abilitybeta) * length(nm) == n)
     dimnames(V) <- list(rep(nm, each = nrow(fit$pars$Abilitybeta)),
