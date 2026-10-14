@@ -75,6 +75,7 @@ fitIRT(
   verbose = 0L,
   keepInternals = FALSE,
   startFrom = NULL,
+  abilityBetaMap = NULL,
   ...
 )
 }
@@ -632,6 +633,17 @@ unchanged; only the starting point is. For refitting a model with a few
 terms added: the fit then begins at the model it extends and can only
 climb from there, and gets there in far fewer evaluations than from the
 priors (where every free asymptote starts at c = .25 and d = .75).}
+
+\item{abilityBetaMap}{Optional: which person-predictor coefficients are
+estimated, as a matrix with the scales as row names and the person
+predictors as column names. 0 holds an entry at zero, and entries with
+the same positive number share one coefficient; entries the matrix does
+not name are each free, as they are without a map. With several
+dimensions this makes a covariate's effect common to them (one number
+across a column) or absent from one (0), as when a dimension is to be
+judged on the dependence it explains rather than on a group difference
+it could absorb (\code{improveModel()}). \code{fit$pars$Abilitybeta}
+reports every entry.}
 
 \item{...}{Accepted only for arguments of earlier versions, so that old
 code keeps running. \code{plot} and \code{noptimsteps}, which never

@@ -97,11 +97,15 @@ bigIRT_laplace_row_derivatives <- function(ev, sdat, context, layout){
   if(length(layout$D_beta)) for(m in seq_len(ncol(rc$D_pred)))
     add(keepD, beta_col(layout$D_beta, st$logitDbeta, rc$D_beta_row[keepD], m), vD * rc$D_pred[keepD, m])
   ## Person covariates enter each row's ability: Abilitybeta is K x npred,
-  ## packed column major.
+  ## packed column major, each entry drawing on its free coefficient (a
+  ## shared one collects every entry it stands for: the sparse assembly sums
+  ## duplicates; an entry held at zero has index 0 and drops out).
   lo <- matrix(as.numeric(re$loadings), nrow = nr)
+  abi <- bigIRT_beta_index_full(layout, sdat)
   if(length(layout$ability_beta)) for(m in seq_len(ncol(rc$person_pred))) for(k in seq_len(K)){
+    if(abi[(m - 1L) * K + k] == 0L) next
     rows <- which(!rc$fixed_ability[, k])
-    add(rows, rep(layout$ability_beta[(m - 1L) * K + k], length(rows)),
+    add(rows, rep(abi[(m - 1L) * K + k], length(rows)),
       s[rows] * lo[rows, k] * rc$person_pred[rows, m] * w[rows])
   }
   V <- Matrix::sparseMatrix(i = unlist(Ii[seq_len(n_add)]), j = unlist(Jj[seq_len(n_add)]),
@@ -543,7 +547,7 @@ bigIRT_fisher_kernel_call <- function(entry, ev, sdat, context, layout, ps, prio
     as.numeric(st$logitDpars), as.matrix(st$logitDbeta), as.matrix(ev$prior_mats$precision),
     iv(layout$A), iv(layout$B), iv(layout$C), iv(layout$D),
     iv(layout$A_beta), iv(layout$B_beta), iv(layout$C_beta), iv(layout$D_beta),
-    iv(layout$ability_beta), iv(layout$ability_mean), item_par, as.numeric(ps),
+    iv(bigIRT_beta_index_full(layout, sdat)), iv(layout$ability_mean), item_par, as.numeric(ps),
     as.numeric(prior_diag), as.integer(context$grain_size %||% 64L))
   ## Literal .Call()s: configure regenerates the native registration by
   ## scanning the R code for them, so the routine must be named at the call.

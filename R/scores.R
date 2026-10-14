@@ -336,6 +336,29 @@ bigIRT_score_refit_ability <- function(st, rule, maxit = 50L, tol = 1e-7, jitter
     X <- cbind(if(free_mean) matrix(1, nrow(Xr), 1) else NULL, Xr)
   }
   nc <- if(is.null(X)) 0L else ncol(X)
+  ## Shared or fixed coefficients (abilityBetaMap) stay so: the step is taken
+  ## in the free coefficients, Tm mapping them onto the K x nc entries
+  ## ((k - 1) * nc + column). A predictor added here (adjust) is shared across
+  ## the dimensions when the fit shares any; left free, it would take a group
+  ## difference specific to one dimension that the fit deliberately does not.
+  tied <- nc > 0L && P > 0L && !bigIRT_beta_identity(sdat)
+  if(tied){
+    Pfit <- as.integer(sdat$NpersonPreds)
+    m0 <- matrix(bigIRT_beta_map(sdat), K, Pfit)
+    mm <- matrix(0L, K, nc); nf <- 0L
+    if(free_mean){ mm[, 1] <- seq_len(K); nf <- K }
+    off <- if(free_mean) 1L else 0L
+    pk <- min(Pfit, P)
+    if(pk > 0L){
+      mf <- m0[, seq_len(pk), drop = FALSE]
+      mm[, off + seq_len(pk)] <- ifelse(mf > 0L, mf + nf, 0L)
+      nf <- nf + max(c(0L, mf))
+    }
+    if(P > Pfit) for(p in (Pfit + 1L):P){ nf <- nf + 1L; mm[, off + p] <- nf }
+    mvec <- as.integer(t(mm))
+    Tm <- matrix(0, K * nc, nf); Tm[cbind(which(mvec > 0L), mvec[mvec > 0L])] <- 1
+    first <- match(seq_len(nf), mvec)
+  }
   ## The fit's own penalty on these (R/laplaceBackend.R): the mean's
   ## hyperprior and the coefficients' N(0, betaScale^2), both under `priors`.
   ## Without them the re-estimate sits off the fit's optimum even on the full
@@ -387,15 +410,32 @@ bigIRT_score_refit_ability <- function(st, rule, maxit = 50L, tol = 1e-7, jitter
       }
       U <- colSums(Ui); H <- crossprod(Ui)
     }
-    if(nc > 0L && pri) for(k in seq_len(K)){
-      ix <- (k - 1L) * nc + seq_len(nc)
-      cur <- c(if(free_mean) st$args$prior_mean[1, k], if(P > 0L) st$args$Abilitybeta[k, seq_len(P)])
-      cen <- c(if(free_mean) mu0[k], if(P > 0L) rep(0, P))
-      prec <- c(if(free_mean) 1 / mu_sd[k]^2, if(P > 0L) rep(if(bsc > 0) 1 / bsc^2 else 0, P))
-      U[ix] <- U[ix] - prec * (cur - cen)
-      H[cbind(ix, ix)] <- H[cbind(ix, ix)] + prec
+    if(tied){
+      ## In the free coefficients, each with its prior once.
+      Uf <- as.numeric(crossprod(Tm, U)); Hf <- crossprod(Tm, H %*% Tm)
+      if(pri){
+        cur <- cen <- prec <- numeric(K * nc)
+        for(k in seq_len(K)){
+          ix <- (k - 1L) * nc + seq_len(nc)
+          cur[ix] <- c(if(free_mean) st$args$prior_mean[1, k], st$args$Abilitybeta[k, seq_len(P)])
+          cen[ix] <- c(if(free_mean) mu0[k], rep(0, P))
+          prec[ix] <- c(if(free_mean) 1 / mu_sd[k]^2, rep(if(bsc > 0) 1 / bsc^2 else 0, P))
+        }
+        Uf <- Uf - prec[first] * (cur[first] - cen[first])
+        Hf[cbind(seq_along(first), seq_along(first))] <- Hf[cbind(seq_along(first), seq_along(first))] + prec[first]
+      }
+      step <- as.numeric(Tm %*% (bigIRT_score_pinv(Hf)$inv %*% Uf))
+    } else {
+      if(nc > 0L && pri) for(k in seq_len(K)){
+        ix <- (k - 1L) * nc + seq_len(nc)
+        cur <- c(if(free_mean) st$args$prior_mean[1, k], if(P > 0L) st$args$Abilitybeta[k, seq_len(P)])
+        cen <- c(if(free_mean) mu0[k], if(P > 0L) rep(0, P))
+        prec <- c(if(free_mean) 1 / mu_sd[k]^2, if(P > 0L) rep(if(bsc > 0) 1 / bsc^2 else 0, P))
+        U[ix] <- U[ix] - prec * (cur - cen)
+        H[cbind(ix, ix)] <- H[cbind(ix, ix)] + prec
+      }
+      step <- if(nc > 0L) as.numeric(bigIRT_score_pinv(H)$inv %*% U) else 0
     }
-    step <- if(nc > 0L) as.numeric(bigIRT_score_pinv(H)$inv %*% U) else 0
     ## The outer-product step is not exact Newton; keep an early one from
     ## overshooting on an ability scale.
     capped <- varies && max(abs(step)) > 1
@@ -753,6 +793,10 @@ bigIRT_score_compute <- function(fit, nodes = NULL, information = TRUE, cores = 
     n_input_rows = length(fit$pars$p %||% numeric(0)),
     person_preds = if(isTRUE(sdat$NpersonPreds > 0)) colnames(as.matrix(fit$pars$Abilitybeta)) %||% character(0) else character(0),
     person_pred_means = if(isTRUE(sdat$NpersonPreds > 0)) bigIRT_laplace_person_means_by_id(sdat) else NULL,
+    ## Which coefficients the fit shares across dimensions or holds at zero
+    ## (abilityBetaMap; NULL when each is free), for the ability tests' nuisance.
+    ability_beta_map = if(isTRUE(sdat$NpersonPreds > 0) && !bigIRT_beta_identity(fit$prepared))
+      bigIRT_beta_map(fit$prepared) else NULL,
     excluded = if(length(ex)) item_labels[ex] else character(0),
     ability_beta = { ab <- st$args$Abilitybeta[, seq_len(st$P_real), drop = FALSE]
       colnames(ab) <- st$pred_names; ab },
@@ -930,16 +974,42 @@ bigIRT_score_kron_s <- function(X, S, sx)
 
 ## The C(alpha) pieces for one item (or one person-side block): the efficient
 ## score and its variance for directions G x test slots, with Nb x nuis slots
-## projected out. Returns U (raw), Ustar, V.
-bigIRT_score_lm_pieces <- function(G, Nb, S, info, test, nuis){
+## projected out. Returns U (raw), Ustar, V. `ntrans`, when given, maps the
+## Nb x nuis directions (slot-major, basis-minor) onto the nuisance the model
+## actually has: a coefficient shared across dimensions is one direction, the
+## sum of its entries', and one held at zero is none
+## (bigIRT_score_nuis_map). Projecting each entry out separately would remove
+## exactly what a test of an effect differing by dimension is after.
+bigIRT_score_lm_pieces <- function(G, Nb, S, info, test, nuis, ntrans = NULL){
   Sg <- bigIRT_score_kron_s(G, S, test)
   Sn <- bigIRT_score_kron_s(Nb, S, nuis)
   Igg <- bigIRT_score_kron(G, G, info, test, test)
   Ign <- bigIRT_score_kron(G, Nb, info, test, nuis)
   Inn <- bigIRT_score_kron(Nb, Nb, info, nuis, nuis)
+  if(!is.null(ntrans)){
+    Sn <- as.numeric(crossprod(ntrans, Sn)); Ign <- Ign %*% ntrans
+    Inn <- crossprod(ntrans, Inn %*% ntrans)
+  }
   pin <- bigIRT_score_pinv(Inn)
   Bt <- Ign %*% pin$inv
   list(U = Sg, Ustar = as.numeric(Sg - Bt %*% Sn), V = Igg - Bt %*% t(Ign))
+}
+
+## The person-side nuisance as the model has it, for bigIRT_score_lm_pieces'
+## `ntrans`: an intercept on each dimension, then each person predictor's
+## free coefficients as the fit's abilityBetaMap shares or zeroes them. Rows
+## are the Nb x slot directions (slot-major; Nb is the intercept, then the P
+## predictors), columns the K intercepts and then the free coefficients. NULL
+## without a map.
+bigIRT_score_nuis_map <- function(map, K, P){
+  if(is.null(map) || length(map) != K * P) return(NULL)
+  m <- matrix(as.integer(map), K, P); nf <- max(c(0L, m))
+  Tn <- matrix(0, K * (1L + P), K + nf)
+  for(k in seq_len(K)){
+    Tn[(k - 1L) * (1L + P) + 1L, k] <- 1
+    for(p in seq_len(P)) if(m[k, p] > 0L) Tn[(k - 1L) * (1L + P) + 1L + p, K + m[k, p]] <- 1
+  }
+  Tn
 }
 
 ## Basis for a covariate over the units: linear, natural spline (knots fixed
@@ -1018,7 +1088,7 @@ bigIRT_sup_bb_cdf <- function(x){
 ## The fluctuation test for one unit set: the process of the efficient score
 ## at every breakpoint, its exact covariance from the information accrued
 ## between breakpoints, and simulated p-values for three functionals.
-bigIRT_score_fluct <- function(z, S, info, Nb, test, nuis, ngrid, trim, nsim){
+bigIRT_score_fluct <- function(z, S, info, Nb, test, nuis, ngrid, trim, nsim, ntrans = NULL){
   n <- length(z)
   block <- bigIRT_score_blocks(z, ngrid)
   M <- max(block)
@@ -1042,6 +1112,13 @@ bigIRT_score_fluct <- function(z, S, info, Nb, test, nuis, ngrid, trim, nsim){
   }
   Inn <- bigIRT_score_kron(Nb, Nb, info, nuis, nuis)
   Sn <- bigIRT_score_kron_s(Nb, S, nuis)
+  ## The model's own nuisance (bigIRT_score_lm_pieces).
+  if(!is.null(ntrans)){
+    Sn <- as.numeric(crossprod(ntrans, Sn)); Inn <- crossprod(ntrans, Inn %*% ntrans)
+    Ipn2 <- array(0, c(M, p, ncol(ntrans)))
+    for(i in seq_len(p)) Ipn2[, i, ] <- matrix(Ipn[, i, ], nrow = M) %*% ntrans
+    Ipn <- Ipn2; nn <- ncol(ntrans)
+  }
   pin <- bigIRT_score_pinv(Inn)
   ## Cumulate over blocks; drop the last breakpoint (the whole sample).
   cS <- apply(Sb, 2, cumsum); if(is.null(dim(cS))) cS <- matrix(cS, nrow = M)
@@ -1802,14 +1879,17 @@ bigIRT_score_test_ability <- function(sc, zall, zlevel, form, df, dims, ngrid, t
   info_cols <- character(0)
   for(l in seq_len(K)) for(k in seq_len(l)) info_cols <- c(info_cols, paste0("Imu.", k, ".", l))
   info <- as.matrix(P[keep, info_cols, with = FALSE])
-  ## Nuisance: the ability mean and any person predictors already in the fit.
+  ## Nuisance: the ability mean and any person predictors already in the fit,
+  ## each predictor's coefficients as the fit has them (shared across
+  ## dimensions or held at zero by abilityBetaMap).
   Nb <- matrix(1, sum(keep), 1)
   if(!is.null(sc$person_pred_means) && length(sc$person_preds))
     Nb <- cbind(Nb, as.matrix(sc$person_pred_means)[keep, , drop = FALSE])
+  ntrans <- bigIRT_score_nuis_map(sc$ability_beta_map, K, ncol(Nb) - 1L)
   test <- if(is.null(dims)) seq_len(K) else as.integer(dims)
   nuis <- seq_len(K)
   if(form == "fluctuation"){
-    fl <- bigIRT_score_fluct(as.numeric(z[keep]), S, info, Nb, test, nuis, ngrid, trim, max(nsim, 1L))
+    fl <- bigIRT_score_fluct(as.numeric(z[keep]), S, info, Nb, test, nuis, ngrid, trim, max(nsim, 1L), ntrans = ntrans)
     if(is.null(fl)) return(NULL)
     return(list(tests = data.table::data.table(item = "Ability", parameters = "Ability",
       n = fl$n, blocks = fl$blocks, DM = fl$stat[["DM"]], p_DM = fl$p[["DM"]], p_DM_bb = fl$p_bb,
@@ -1818,7 +1898,7 @@ bigIRT_score_test_ability <- function(sc, zall, zlevel, form, df, dims, ngrid, t
   }
   G <- bigIRT_score_basis(z[keep], form, df)
   if(is.null(G)) return(NULL)
-  pc <- bigIRT_score_lm_pieces(G, Nb, S, info, test, nuis)
+  pc <- bigIRT_score_lm_pieces(G, Nb, S, info, test, nuis, ntrans = ntrans)
   pv <- bigIRT_score_pinv(pc$V)
   lm <- as.numeric(crossprod(pc$Ustar, pv$inv %*% pc$Ustar))
   est <- as.numeric(pv$inv %*% pc$Ustar); se <- sqrt(pmax(diag(pv$inv), 0))

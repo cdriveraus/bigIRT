@@ -50,6 +50,37 @@ a_matrix_to_vector <- function(x){
   as.array(as.vector(t(as.matrix(x))))
 }
 
+## fitIRT's abilityBetaMap as the internal map: one integer per entry of the
+## Nscales x NpersonPreds coefficient matrix, column major, 0 for an entry
+## held at zero and equal positive numbers for entries sharing a coefficient,
+## numbered densely in order of first appearance. NULL when every entry is
+## its own coefficient (no map, or one that changes nothing). Rows and columns
+## are aligned by name to the internal scale order and the predictors; an
+## entry the matrix does not name is free.
+bigIRT_ability_beta_map_input <- function(m, scaleNames, predNames){
+  if(is.null(m)) return(NULL)
+  K <- length(scaleNames); P <- length(predNames)
+  if(P == 0L) return(NULL)
+  m <- as.matrix(m)
+  if(is.null(rownames(m)) || is.null(colnames(m)))
+    stop("abilityBetaMap needs row names (the scales) and column names (the person predictors).", call. = FALSE)
+  bad <- c(setdiff(rownames(m), scaleNames), setdiff(colnames(m), predNames))
+  if(length(bad)) stop("abilityBetaMap names unknown scales or person predictors: ",
+    paste(bad, collapse = ", "), call. = FALSE)
+  if(anyNA(m) || any(m < 0 | m != round(m)))
+    stop("abilityBetaMap entries must be 0 (held at zero) or positive whole numbers (equal ones share a coefficient).",
+      call. = FALSE)
+  full <- matrix(NA_real_, K, P)
+  full[match(rownames(m), scaleNames), match(colnames(m), predNames)] <- m
+  given <- full[!is.na(full) & full > 0]
+  nxt <- if(length(given)) max(given) else 0
+  na <- which(is.na(full)); full[na] <- nxt + seq_along(na)
+  v <- as.integer(full); pos <- v > 0L
+  v[pos] <- match(v[pos], unique(v[pos]))
+  if(identical(v, seq_along(v))) return(NULL)
+  v
+}
+
 ## fitIRT's signedLoadings as an Nitems x Nscales logical matrix: TRUE where a
 ## free loading takes the identity link rather than softplus. `fixed` is the
 ## final fixed/free pattern, `itemScale` each item's own scale index, and the
@@ -1530,6 +1561,16 @@ bigIRT_validate_fit_inputs <- function(dat, score, id, item, scale, pl, controls
 #'   comparing fits across designs of very different sizes, but note that it
 #'   is far stricter at large N: a tolerance chosen for \code{\"relative\"}
 #'   should not be carried over unchanged.
+#' @param abilityBetaMap Optional: which person-predictor coefficients are
+#'   estimated, as a matrix with the scales as row names and the person
+#'   predictors as column names. 0 holds an entry at zero, and entries with
+#'   the same positive number share one coefficient; entries the matrix does
+#'   not name are each free, as they are without a map. With several
+#'   dimensions this makes a covariate's effect common to them (one number
+#'   across a column) or absent from one (0), as when a dimension is to be
+#'   judged on the dependence it explains rather than on a group difference
+#'   it could absorb (\code{improveModel()}). \code{fit$pars$Abilitybeta}
+#'   reports every entry.
 #' @param startFrom Optional: a previous fit from \code{fitIRT()} to start
 #'   the optimisation from, rather than from the priors. Its estimates are
 #'   matched to this model by label -- items, dimensions, persons and
@@ -1882,7 +1923,7 @@ fitIRT <- function(dat, score = 'score', id = 'id', item = 'Item', scale = 'Scal
   laplacePlotEvery = 1L,
   normalise = FALSE, normaliseScale = 1, normaliseMean = 0,
   dropPerfectScores = FALSE, trainingRows = 1:nrow(dat),
-  cores = 6, verbose = 0L, keepInternals = FALSE, startFrom = NULL, ...){
+  cores = 6, verbose = 0L, keepInternals = FALSE, startFrom = NULL, abilityBetaMap = NULL, ...){
 
   bigIRT_check_dots(list(...))
   if(!is.null(startFrom) && !inherits(startFrom, "bigIRT_fit") && is.null(startFrom$prepared))
@@ -2130,6 +2171,11 @@ fitIRT <- function(dat, score = 'score', id = 'id', item = 'Item', scale = 'Scal
   ## The prepared data: indices, response vectors, fixed-value maps and prior
   ## hyperparameters, in the person-sorted internal order. Returned as
   ## fit$prepared.
+  abilityBetaMap <- bigIRT_ability_beta_map_input(abilityBetaMap, scaleIndex$original,
+    if(NCOL(personPreds) > 0L) colnames(personPreds) else character(0))
+  if(!is.null(abilityBetaMap) && isTRUE(normalise))
+    warning("normalise = TRUE rescales the person-predictor coefficients dimension by dimension, ",
+      "which can undo abilityBetaMap's shared ones; prefer normalise = FALSE.", call. = FALSE)
   sdat <- list(
     Nobs=nrow(dat),
     Nsubs=Nsubs,
@@ -2199,6 +2245,7 @@ fitIRT <- function(dat, score = 'score', id = 'id', item = 'Item', scale = 'Scal
     fixedAbilityMean=as.integer(!'Ability' %in% estMeans & !'ability' %in% estMeans),
     originalRow=array(as.integer(dat[["__bigIRT_input_row__"]]))
   )
+  if(!is.null(abilityBetaMap)) sdat$abilityBetaMap <- abilityBetaMap
 
   sdat$freeAref=array(as.integer(cumsum(1-as.numeric(sdat$fixedAlog))))
   sdat$freeBref=array(as.integer(cumsum(1-as.numeric(sdat$fixedB))))
@@ -2506,6 +2553,13 @@ fitIRT <- function(dat, score = 'score', id = 'id', item = 'Item', scale = 'Scal
   directSec <- wall_time_sec() - t_direct
   state <- directFit$state
   sdat$AbilityCorr <- if(!is.null(state$AbilityCorr)) state$AbilityCorr else sdat$AbilityCorr
+  ## The pass's prior precision was built from the correlation it started
+  ## from. With the correlation estimated, the stored one must be the
+  ## estimate's: fit$internals$priorPrecision is what the score tests and
+  ## heldoutLogLik read first, and with the starting (identity) correlation
+  ## the ability score test for a group gap read 33.9 against a likelihood
+  ## ratio of 18.8 (18.7 with the estimate).
+  if(estimateAbilityCorr) priorPrecision <- bigIRT_laplace_prior_mats(sdat, jitter = laplaceJitter)$precision_array
   finalPosterior <- directFit$eval$posterior
   state$AbilityBase <- finalPosterior$theta_mode
 

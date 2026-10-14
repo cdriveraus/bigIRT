@@ -96,7 +96,7 @@ bigIRT_map_objective <- function(par, state, sdat, prior_precision,
   if(sdat$NCitemPreds > 0) add(lay$C_beta, ig$grad_C_beta)
   if(sdat$NDitemPreds > 0) add(lay$D_beta, ig$grad_D_beta)
   if(length(prior$grad)) grad[seq_along(prior$grad)] <- grad[seq_along(prior$grad)] + prior$grad
-  add(lay$ability_beta, ig$grad_ability_beta)
+  add(lay$ability_beta, bigIRT_beta_collapse(ig$grad_ability_beta, sdat, "sum"))
   if(length(lay$ability_mean)){
     g_mu <- as.numeric(ig$grad_mean)
     if(isTRUE(as.logical(sdat$dopriors))){
