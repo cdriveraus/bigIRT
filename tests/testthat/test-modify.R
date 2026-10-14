@@ -303,12 +303,27 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     ii <- rep(seq_len(N), 3 * J); jj <- rep(seq_len(3 * J), each = N)
     d <- data.frame(id = ii, Item = jj, Scale = 1, sub = sub[jj], g = g[ii],
       score = stats::rbinom(N * 3 * J, 1, stats::plogis(a[jj] * th[cbind(ii, match(sub[jj], c("A", "B", "C")))] - b[jj])))
-    run <- function(...) suppressWarnings(suppressMessages(improveModel(d, pl = 2, personPreds = "g",
-      personCovariates = "g", difCovariates = "g", itemSets = "sub", dif = "B", asymptotes = character(),
-      nsimDim = 0L, maxRounds = 2L, cores = 1, verbose = FALSE, ...)))
+    ## (The warnings are kept by class, not suppressed, so that their absence
+    ## can be checked.)
+    run <- function(...){
+      w <- character()
+      r <- withCallingHandlers(suppressMessages(improveModel(d, pl = 2, personPreds = "g",
+        personCovariates = "g", difCovariates = "g", itemSets = "sub", dif = "B", asymptotes = character(),
+        nsimDim = 0L, maxRounds = 2L, cores = 1, verbose = FALSE, ...)),
+        warning = function(x){ w <<- c(w, class(x)); invokeRestart("muffleWarning") })
+      attr(r, "warning_classes") <- w
+      r
+    }
     r <- run()
     expect_identical(r$spec$partition, "sub")
     expect_length(r$spec$dif, 0L)
+    ## Each kind is screened when its turn comes, for itself: DIF is never
+    ## screened at the one-dimensional base. (Screened ahead, those tests were
+    ## wasted once the partition was kept, and purification warned about
+    ## anchors for a screen nobody used.)
+    expect_equal(NROW(r$screens_all[["round1_screens"]]$dif), 0L)
+    expect_gt(NROW(r$screens_all[["round1_screens-dif"]]$dif), 0L)
+    expect_false("bigIRT_anchor_floor" %in% attr(r, "warning_classes"))
     ## The gap is the group's effect on subdomain B's dimension.
     bb <- as.matrix(r$fit$pars$Abilitybeta)[, "g"]
     expect_gt(bb[2] - max(bb[c(1, 3)]), .4)

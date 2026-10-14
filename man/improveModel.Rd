@@ -99,8 +99,8 @@ A \code{bigIRT_improved} object: \code{fit} (final model, all persons),
 held-out log-likelihood before and after, gain and its z, accepted,
 seconds to fit and evaluate), \code{screens} (each kind's tests, from the
 screen it was last judged on), \code{screens_all} (every screen made, named by
-step: \code{round1_screens}, then \verb{round1_screens-<kind>} for a re-screen
-after a kept batch), \code{base_fit} (the base model on the training persons),
+step: a round's first screen \code{round1_screens}, then
+\verb{round1_screens-<kind>}), \code{base_fit} (the base model on the training persons),
 \code{holdout_persons}, \code{timing} (seconds: base fit, each screen, final fit).
 }
 \description{
@@ -130,8 +130,8 @@ its items (in one dimension it looks exactly like DIF, and was kept as
 such in 90 to 100 per cent of simulated runs with none). An unmodelled
 asymptote likewise looks like DIF between groups of different ability. A
 covariate's effect on ability is in the model before DIF along it is
-judged (DIF absorbs impact otherwise). While nothing is kept, one screen
-serves every kind after it.
+judged (DIF absorbs impact otherwise). Each kind is screened when its turn
+comes, for itself alone.
 \itemize{
 \item DIF along each covariate (and parameter) is a batch of its own, the
 strongest first, so each covariate's DIF has to earn its place.
