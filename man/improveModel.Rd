@@ -35,7 +35,8 @@ improveModel(
   checkpoint = NULL,
   difImpact = TRUE,
   asymptotePooled = TRUE,
-  partitions = TRUE
+  partitions = TRUE,
+  order = c("ability", "dimensions", "asymptotes", "dif")
 )
 }
 \arguments{
@@ -87,14 +88,20 @@ interrupted run resumes; \code{NULL} (default) keeps nothing.}
 \item{difImpact, asymptotePooled, partitions}{Offer the impact of DIF
 covariates, pooled asymptotes and partitions into correlated dimensions
 (see Details).}
+
+\item{order}{The kinds in the order they are screened and judged within a
+round: each of "ability", "dimensions", "asymptotes" and "dif" once
+(default in that order, the more general first; see Details).}
 }
 \value{
 A \code{bigIRT_improved} object: \code{fit} (final model, all persons),
 \code{spec} (the terms added), \code{path} (each batch tried: round, kind, terms,
 held-out log-likelihood before and after, gain and its z, accepted,
-seconds to fit and evaluate), \code{screens} (the last round's tests),
-\code{base_fit} (the base model on the training persons), \code{holdout_persons},
-\code{timing} (seconds: base fit, each round's screens, final fit).
+seconds to fit and evaluate), \code{screens} (each kind's tests, from the
+screen it was last judged on), \code{screens_all} (every screen made, named by
+step: \code{round1_screens}, then \verb{round1_screens-<kind>} for a re-screen
+after a kept batch), \code{base_fit} (the base model on the training persons),
+\code{holdout_persons}, \code{timing} (seconds: base fit, each screen, final fit).
 }
 \description{
 Starting from a base model, repeatedly tests candidate changes at the
@@ -113,11 +120,18 @@ a group dimension's SD on the logit scale); a batch must raise the held-out
 log-likelihood by at least \code{minGain}.
 }
 \details{
-Within a round the kinds are tried in turn -- ability, then the impact of
-DIF covariates, then DIF, then asymptotes, then dimensions -- each against
-the model as it stands after the batches kept before it, so a covariate's
-effect on ability is in the model before DIF along it is judged (DIF
-absorbs impact otherwise).
+Within a round the kinds are taken in turn (\code{order}), the more general
+first: ability, then dimensions, then asymptotes, then DIF (with the
+impact of DIF covariates just before it). Each kind is screened and judged
+at the model as it stands after the batches kept before it. So DIF is
+screened with the dimensions in: a group difference specific to one
+subdomain is then the covariate's effect on that dimension, not DIF on
+its items (in one dimension it looks exactly like DIF, and was kept as
+such in 90 to 100 per cent of simulated runs with none). An unmodelled
+asymptote likewise looks like DIF between groups of different ability. A
+covariate's effect on ability is in the model before DIF along it is
+judged (DIF absorbs impact otherwise). While nothing is kept, one screen
+serves every kind after it.
 \itemize{
 \item DIF along each covariate (and parameter) is a batch of its own, the
 strongest first, so each covariate's DIF has to earn its place.
@@ -137,8 +151,8 @@ correlated ability dimensions.
 The next round screens the result, for the kinds whose verdict could have
 changed: a kind is tried again only if it was kept, or a kind after it
 was, in the round before (a kind rejected in a round was already judged
-against every batch kept before it). Screens are made at each round's
-starting model. The final model is refitted on all persons.
+against every batch kept before it). The final model is refitted on all
+persons.
 
 Selection uses the data, so the final model's estimates and standard
 errors are conditional on it: the held-out gain is the honest measure of

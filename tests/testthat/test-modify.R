@@ -274,13 +274,49 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     expect_length(s$groups, 1L)
     expect_setequal(s$groups[[1]]$items, as.character(11:15))
     expect_true(all(r$path$accepted[r$path$kind %in% c("ability", "dif", "groups")]))
-    ## Kinds are judged in turn: DIF against the model that already has g's
-    ## effect on ability, not against the base (where DIF would absorb it).
+    ## Kinds are judged in turn, the more general first: DIF against the
+    ## model that already has g's effect on ability and the testlet (the last
+    ## batch kept before it), not against the base (where DIF would absorb
+    ## the impact).
     p1 <- r$path[r$path$round == 1]
-    expect_equal(p1$heldout_before[p1$kind == "dif"], p1$heldout_after[p1$kind == "ability"])
+    at <- which(p1$kind == "dif")[1]
+    expect_true(which(p1$kind == "groups" & p1$accepted)[1] < at)
+    expect_equal(p1$heldout_before[at], utils::tail(p1$heldout_after[seq_len(at - 1L)][p1$accepted[seq_len(at - 1L)]], 1))
     ## g's impact came in with the ability batch, so no impact batch is
     ## refitted (judged at the round's start, it refitted the same model).
     expect_false(any(r$path$kind == "impact"))
+  })
+
+  ## A group gap that lives in one subdomain looks like DIF on that
+  ## subdomain's items in one dimension. With dimensions judged before DIF
+  ## (the default), the subdomains go in first and no DIF is added; judged
+  ## after DIF, the gap was kept as DIF (on a simulated bank, in 90 to 100
+  ## per cent of runs with no DIF at all).
+  test_that("improveModel judges dimensions before DIF, so a subdomain-specific gap is not taken for DIF", {
+    skip_on_cran()
+    set.seed(5); N <- 3000L; J <- 10L
+    R <- matrix(.6, 3, 3); diag(R) <- 1
+    g <- stats::rbinom(N, 1, .5)
+    th <- matrix(stats::rnorm(3 * N), N) %*% chol(R) + outer(g, c(0, .8, 0))
+    sub <- rep(c("A", "B", "C"), each = J)
+    a <- stats::runif(3 * J, .9, 1.6); b <- stats::rnorm(3 * J, 0, .8)
+    ii <- rep(seq_len(N), 3 * J); jj <- rep(seq_len(3 * J), each = N)
+    d <- data.frame(id = ii, Item = jj, Scale = 1, sub = sub[jj], g = g[ii],
+      score = stats::rbinom(N * 3 * J, 1, stats::plogis(a[jj] * th[cbind(ii, match(sub[jj], c("A", "B", "C")))] - b[jj])))
+    run <- function(...) suppressWarnings(suppressMessages(improveModel(d, pl = 2, personPreds = "g",
+      personCovariates = "g", difCovariates = "g", itemSets = "sub", dif = "B", asymptotes = character(),
+      nsimDim = 0L, maxRounds = 2L, cores = 1, verbose = FALSE, ...)))
+    r <- run()
+    expect_identical(r$spec$partition, "sub")
+    expect_length(r$spec$dif, 0L)
+    ## The gap is the group's effect on subdomain B's dimension.
+    bb <- as.matrix(r$fit$pars$Abilitybeta)[, "g"]
+    expect_gt(bb[2] - max(bb[c(1, 3)]), .4)
+    ## Judged the other way round, the same data get DIF on B's items.
+    r0 <- run(order = c("ability", "dif", "asymptotes", "dimensions"))
+    d0 <- unlist(lapply(r0$spec$dif, `[[`, "items"))
+    expect_gt(length(d0), 0L)
+    expect_gt(mean(sub[as.integer(d0)] == "B"), .7)
   })
 
   ## A kind rejected in a round is not tried again when only kinds before it
