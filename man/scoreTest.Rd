@@ -22,6 +22,7 @@ scoreTest(
   purify = FALSE,
   purifyAlpha = 0.05,
   purifyMaxIter = 5L,
+  purifyMinAnchor = 0.1,
   information = c("expected", "observed", "opg"),
   adjust = c("auto", "none"),
   adjustDf = 3L,
@@ -73,6 +74,19 @@ automatically when a p-value lies near the first batch's resolution).}
 \item{purify, purifyAlpha, purifyMaxIter}{Iterative purification against
 DIF contamination (see above), the adjusted-p threshold for flagging,
 and the maximum number of anchoring rounds. Item tests by item only.}
+
+\item{purifyMinAnchor}{The fewest items purification may leave as anchors:
+a share of the tested items when below 1 (default .1), a count
+otherwise. When the flagged set would leave fewer, the items with the
+least evidence of DIF (largest p) are kept as anchors instead -- a
+rank-based constant anchor (Woods, 2009; Kopf, Zeileis & Strobl, 2015)
+-- and a warning of class \code{bigIRT_anchor_floor} says so. Purification
+that flags nearly every item had nothing left to anchor on, and stopped
+with an error. It usually means the covariate's effect is not uniform
+over the items for a reason the model lacks, such as a dimension on
+which the groups differ more: in one dimension, a group difference
+specific to a subdomain makes that subdomain's items look easier and the
+rest harder.}
 
 \item{information}{Which information the item tests use.
 \code{"expected"} (default): each response's score is exactly the score of

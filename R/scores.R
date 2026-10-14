@@ -1216,6 +1216,18 @@ bigIRT_score_fluct <- function(z, S, info, Nb, test, nuis, ngrid, trim, nsim){
 #' @param purify,purifyAlpha,purifyMaxIter Iterative purification against
 #'   DIF contamination (see above), the adjusted-p threshold for flagging,
 #'   and the maximum number of anchoring rounds. Item tests by item only.
+#' @param purifyMinAnchor The fewest items purification may leave as anchors:
+#'   a share of the tested items when below 1 (default .1), a count
+#'   otherwise. When the flagged set would leave fewer, the items with the
+#'   least evidence of DIF (largest p) are kept as anchors instead -- a
+#'   rank-based constant anchor (Woods, 2009; Kopf, Zeileis & Strobl, 2015)
+#'   -- and a warning of class `bigIRT_anchor_floor` says so. Purification
+#'   that flags nearly every item had nothing left to anchor on, and stopped
+#'   with an error. It usually means the covariate's effect is not uniform
+#'   over the items for a reason the model lacks, such as a dimension on
+#'   which the groups differ more: in one dimension, a group difference
+#'   specific to a subdomain makes that subdomain's items look easier and the
+#'   rest harder.
 #' @param information Which information the item tests use.
 #'   `"expected"` (default): each response's score is exactly the score of
 #'   the Bernoulli for that response given the person's other responses (with
@@ -1299,7 +1311,7 @@ scoreTest <- function(fit, covariates, parameters = "B",
   by = "item", items = NULL, df = 3L, dims = NULL,
   level = c("auto", "person", "row"),
   ngrid = 50L, trim = 0.1, nsim = 1000L, seed = NULL, minN = 20L,
-  purify = FALSE, purifyAlpha = 0.05, purifyMaxIter = 5L,
+  purify = FALSE, purifyAlpha = 0.05, purifyMaxIter = 5L, purifyMinAnchor = 0.1,
   information = c("expected", "observed", "opg"),
   adjust = c("auto", "none"), adjustDf = 3L, adjustMethod = c("fast", "full"),
   effects = TRUE, nodes = NULL, cores = 1L, contributions = NULL){
@@ -1358,7 +1370,12 @@ scoreTest <- function(fit, covariates, parameters = "B",
       if(isTRUE(purify) && !is.null(out)){
         pu <- bigIRT_score_purify(fit, out, zall, cv$level, parameters, f_v, items, df,
           ngrid, trim, nsim, minN, purifyAlpha, purifyMaxIter, nodes, cores, information,
-          add_preds = Badj, effects = effects)
+          add_preds = Badj, effects = effects, min_anchor = purifyMinAnchor)
+        if(isTRUE(pu$anchor_floor))
+          warning(warningCondition(sprintf(paste0("Purification along '%s' flagged nearly every item; the %d ",
+            "with the least evidence of DIF were kept as anchors. DIF along '%s' is then barely identified, ",
+            "which usually means the model lacks something the covariate's effect differs on, such as a ",
+            "dimension."), v, pu$n_anchor, v), class = "bigIRT_anchor_floor"))
         ## Effects relative to the anchors when anything was flagged; with
         ## nothing flagged every item is an anchor and the first stage stands.
         if(!is.null(pu$effects)){ out$effects <- pu$effects; out$own <- pu$own }
@@ -1472,12 +1489,31 @@ print.bigIRT_scoretest <- function(x, n = 10L, ...){
 ## ability coefficients from unflagged items only), retest the rest, repeat.
 bigIRT_score_purify <- function(fit, out, zall, zlevel, parameters, form, items, df,
   ngrid, trim, nsim, minN, alpha, maxit, nodes, cores, information = "observed",
-  add_preds = NULL, effects = FALSE){
+  add_preds = NULL, effects = FALSE, min_anchor = 0.1){
   oA <- NULL; scA <- NULL; anchored_on <- character(0)
   pcol <- if(form == "fluctuation") "p_DM" else "p"
   tst <- data.table::copy(out$tests); cf <- out$coefficients
   tst[, `:=`(anchor = TRUE, stage = 1L)]
-  flag_of <- function(t) t$item[!is.na(t[[pcol]]) & stats::p.adjust(t[[pcol]], "BH") < alpha]
+  ## An anchor floor. Purification that flags (nearly) every item has nothing
+  ## left to anchor on: every person's posterior would be the prior, and the
+  ## score setup stopped ("leaves no responses"). On a simulated bank where a
+  ## group gap lived in one of three subdomains, a one-dimensional screen did
+  ## that in a third of replications, and improveModel, whose screens catch
+  ## errors, went on as if there were no DIF candidates. Instead the items
+  ## with the least evidence of DIF stay anchors (a rank-based constant
+  ## anchor), and the caller is told (`anchor_floor`).
+  floor_hit <- FALSE; n_anchor <- NA_integer_
+  flag_of <- function(t){
+    ok <- !is.na(t[[pcol]])
+    fl <- t$item[ok & stats::p.adjust(t[[pcol]], "BH") < alpha]
+    tested <- t$item[ok]
+    need <- if(min_anchor < 1) max(1L, as.integer(ceiling(min_anchor * length(tested)))) else
+      min(length(tested), as.integer(min_anchor))
+    if(!length(fl) || length(setdiff(tested, fl)) >= need) return(fl)
+    floor_hit <<- TRUE; n_anchor <<- need
+    keep <- tested[order(t[[pcol]][ok], decreasing = TRUE)][seq_len(need)]
+    setdiff(fl, keep)
+  }
   flagged <- flag_of(tst)
   tst[item %in% flagged, anchor := FALSE]
   all_items <- if(is.null(items)) unique(tst$item) else as.character(items)
@@ -1506,7 +1542,7 @@ bigIRT_score_purify <- function(fit, out, zall, zlevel, parameters, form, items,
   ## The last anchored stage: its effects are relative to the anchors, and its
   ## persons carry the ability side estimated on the anchors alone.
   list(tests = tst, coefficients = cf, effects = oA$effects, own = oA$own,
-    persons_anchor = scA$persons, anchored_on = anchored_on)
+    persons_anchor = scA$persons, anchored_on = anchored_on, anchor_floor = floor_hit, n_anchor = n_anchor)
 }
 
 ## The basis a covariate enters the ability regression with when `adjust`
