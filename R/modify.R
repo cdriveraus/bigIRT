@@ -280,11 +280,81 @@ bigIRT_modify_build <- function(dat, spec, base){
     for(k in seq_along(spec$groups)) L[items %in% spec$groups[[k]]$items, paste0(".g", k)] <- NA
     loadings <- L
   }
+  ## The ability predictors' effects across dimensions (base$commonEffects):
+  ## one effect common to a partition's dimensions, none on a group
+  ## dimension, so that a dimension is judged on the dependence it explains
+  ## and not on group differences. The covariates in spec$bydim have their
+  ## own effect on each dimension.
+  map <- NULL
+  if(isTRUE(base$commonEffects) && length(pp) && (length(spec$partition) || length(spec$groups))){
+    own <- bigIRT_modify_bydim_terms(spec, pp, base)
+    if(length(spec$partition)){
+      rows <- unique(as.character(d[[spec$partition]])); gen <- rep(FALSE, length(rows))
+    } else {
+      rows <- colnames(loadings); gen <- rows %in% as.character(unique(d[[base$scale]]))
+    }
+    map <- matrix(0L, length(rows), length(pp), dimnames = list(rows, pp)); n <- 0L
+    for(p in pp){
+      if(length(spec$partition) && !p %in% own){ n <- n + 1L; map[, p] <- n; next }
+      ## Each general dimension's own, as without groups; a group dimension's
+      ## only for the covariates freed by dimension.
+      fr <- gen | p %in% own
+      map[fr, p] <- n + seq_len(sum(fr)); n <- n + sum(fr)
+    }
+  }
   args <- c(list(dat = d, score = base$score, id = base$id, item = base$item, scale = scale, pl = pl,
     personPreds = pp, BitemPreds = Bp, AitemPreds = Ap, itemSpecificBetas = length(c(Bp, Ap)) > 0,
-    itemDat = itemDat, loadings = loadings, normalise = FALSE), fa)
+    itemDat = itemDat, loadings = loadings, normalise = FALSE, abilityBetaMap = map), fa)
   args
 }
+
+## Tests of each covariate's effect on ability differing by dimension, at a
+## fit whose ability regression shares it across dimensions (abilityBetaMap).
+## `terms` names, for each covariate, the ability predictors that carry its
+## effect; their person means are tested on every dimension, against the
+## nuisance the fit has (an intercept per dimension, and every predictor's
+## coefficients as shared or zeroed), so what is tested is what freeing
+## them by dimension would add: K - 1 directions per term on a partition,
+## one per group dimension. With many responses a person, a gap specific to
+## one dimension is taken up by that dimension's abilities and barely shows
+## item by item as DIF; it shows here, as a misfit of the ability
+## regression. (Offered only after DIF flags, the alternative was never
+## reached for a subdomain-specific gap on simulated data.) A row-varying
+## predictor enters by its person mean, an approximation for a screen.
+bigIRT_modify_bydim_tests <- function(sc, terms){
+  K <- sc$K; P <- sc$persons
+  if(K < 2L || !length(terms) || is.null(sc$person_pred_means) || is.null(sc$ability_beta_map)) return(NULL)
+  dn <- as.character(seq_len(K))
+  S <- as.matrix(P[, paste0("mu", dn), with = FALSE])
+  ic <- character()
+  for(l in seq_len(K)) for(k in seq_len(l)) ic <- c(ic, paste0("Imu.", k, ".", l))
+  info <- as.matrix(P[, ic, with = FALSE])
+  X <- as.matrix(sc$person_pred_means)
+  Nb <- cbind(1, X)
+  ntrans <- bigIRT_score_nuis_map(sc$ability_beta_map, K, ncol(X))
+  if(is.null(ntrans)) return(NULL)
+  data.table::rbindlist(lapply(names(terms), function(v){
+    j <- match(terms[[v]], sc$person_preds)
+    if(!length(j) || anyNA(j)) return(NULL)
+    pc <- bigIRT_score_lm_pieces(X[, j, drop = FALSE], Nb, S, info, seq_len(K), seq_len(K), ntrans = ntrans)
+    pv <- bigIRT_score_pinv(pc$V)
+    if(pv$rank == 0L) return(NULL)
+    lm <- as.numeric(crossprod(pc$Ustar, pv$inv %*% pc$Ustar))
+    data.table::data.table(covariate = v, terms = length(j), LM = lm, df = pv$rank,
+      p = stats::pchisq(lm, pv$rank, lower.tail = FALSE))
+  }))
+}
+
+## The ability predictors that carry a covariate's effect, among `pp`: the
+## predictor of that name, those `abilityTerms` names for it, and the terms
+## improveModel() added for it (its ability terms and its impact).
+bigIRT_modify_cov_terms <- function(v, pp, abilityTerms = list()){
+  mn <- gsub(".", "\\.", make.names(v), fixed = TRUE)
+  pp[pp %in% c(v, abilityTerms[[v]]) | grepl(paste0("^\\.(abil|imp)_", mn, "_[0-9]+$"), pp)]
+}
+
+bigIRT_modify_bydim_terms <- function(spec, pp, base)
+  unique(unlist(lapply(spec$bydim, bigIRT_modify_cov_terms, pp = pp, abilityTerms = base$abilityTerms)))
 
 ## DIF along one covariate and parameter is one term -- one set of columns,
 ## with a coefficient per item -- so a later batch along a covariate already
@@ -578,15 +648,19 @@ bigIRT_modify_null_p <- function(x, null){
 #'   own parameters cannot express (`shape`, below). Diagnostic only:
 #'   [improveModel()] does not add such terms.
 #' @param cores Threads.
+#' @param byDimension A named list: for each covariate, the ability
+#'   predictors that carry its effect, tested for an effect that differs by
+#'   dimension. Only meaningful at a fit that shares those effects across its
+#'   dimensions ([fitIRT()]'s `abilityBetaMap`); [improveModel()] supplies it.
 #' @return A list of data.tables: `ability`, `dif` (with effect sizes),
-#'   `asymptotes`, `groups`; each with p-values adjusted by Benjamini-Hochberg
-#'   (`p_fdr`) within its kind; and `dimensions`, the exploratory eigenpairs
-#'   with their null draws.
+#'   `asymptotes`, `groups`, `bydim` (effects by dimension); each with
+#'   p-values adjusted by Benjamini-Hochberg (`p_fdr`) within its kind; and
+#'   `dimensions`, the exploratory eigenpairs with their null draws.
 #' @seealso [improveModel()], [scoreTest()]
 #' @export
 modificationTests <- function(fit, dat, personCovariates = character(), responseCovariates = character(),
   itemSets = character(), dif = c("B", "A"), difCovariates = NULL, asymptotes = c("lower", "upper"), purify = TRUE,
-  exploratory = TRUE, nsimDim = 19L, minSetItems = 3L, shape = FALSE, cores = 1L){
+  exploratory = TRUE, nsimDim = 19L, minSetItems = 3L, shape = FALSE, cores = 1L, byDimension = list()){
   if(is.null(difCovariates)) difCovariates <- c(personCovariates, responseCovariates)
   if(length(bad <- setdiff(difCovariates, c(personCovariates, responseCovariates))))
     stop("difCovariates not among personCovariates or responseCovariates: ", paste(bad, collapse = ", "))
@@ -650,6 +724,9 @@ modificationTests <- function(fit, dat, personCovariates = character(), response
     dl[[length(dl) + 1L]] <- t
   }
   di <- data.table::rbindlist(dl, fill = TRUE)
+  ## Effects by dimension, for covariates whose effect the fit shares across
+  ## dimensions.
+  bd <- if(length(byDimension)) fdr(screen(bigIRT_modify_bydim_tests(sc, byDimension), "effects by dimension")) else NULL
   for(m in floored) warning(warningCondition(m, class = "bigIRT_anchor_floor"))
   if(length(failed)) warning("These screens failed and are left out: ", paste(failed, collapse = "; "), call. = FALSE)
   ## Asymptotes and group dimensions.
@@ -731,7 +808,7 @@ modificationTests <- function(fit, dat, personCovariates = character(), response
     attr(gr, "sets_tested") <- c(sets, eig_sets)
   }
   sh <- if(isTRUE(shape)) fdr(bigIRT_modify_shape(fit, cores = cores)) else NULL
-  list(ability = ab, dif = di, asymptotes = as, groups = gr, dimensions = dims, shape = sh)
+  list(ability = ab, dif = di, asymptotes = as, groups = gr, dimensions = dims, shape = sh, bydim = bd)
 }
 
 #' Improve a model by score tests and held-out likelihood
@@ -755,9 +832,9 @@ modificationTests <- function(fit, dat, personCovariates = character(), response
 #' first: ability, then dimensions, then asymptotes, then DIF (with the
 #' impact of DIF covariates just before it). Each kind is screened and judged
 #' at the model as it stands after the batches kept before it. So DIF is
-#' screened with the dimensions in: a group difference specific to one
-#' subdomain is then the covariate's effect on that dimension, not DIF on
-#' its items (in one dimension it looks exactly like DIF, and was kept as
+#' judged with the dimensions in, where a group difference specific to one
+#' subdomain can be the covariate's effect on that dimension rather than DIF
+#' on its items (in one dimension it looks exactly like DIF, and was kept as
 #' such in 90 to 100 per cent of simulated runs with none). An unmodelled
 #' asymptote likewise looks like DIF between groups of different ability. A
 #' covariate's effect on ability is in the model before DIF along it is
@@ -777,6 +854,19 @@ modificationTests <- function(fit, dat, personCovariates = character(), response
 #'   `partitions`, an item-set column that covers every item (a partition,
 #'   such as subdomains) is offered as an alternative: its levels as
 #'   correlated ability dimensions.
+#' * With `commonEffects`, a dimension is judged on the dependence it
+#'   explains, not on group differences: the ability predictors keep one
+#'   effect common to a partition's dimensions and have none on a group
+#'   dimension. Freed by dimension, a covariate's effects would let a
+#'   dimension take in DIF on a few of its items. In the DIF stage each DIF
+#'   covariate's effect on ability is then also screened for differing by
+#'   dimension (DIF on all of a dimension's items at once), by a score test
+#'   of its own: a dimension's abilities take up most of such a gap, so the
+#'   item DIF screens barely see it. Where a covariate has both, the two are
+#'   alternatives and the better that passes the gate is kept; the next
+#'   round screens both again. A covariate's effect is carried by the
+#'   predictor of that name, the terms added for it here, and any
+#'   `abilityTerms` names for it.
 #'
 #' The next round screens the result, for the kinds whose verdict could have
 #' changed: a kind is tried again only if it was kept, or a kind after it
@@ -832,6 +922,13 @@ modificationTests <- function(fit, dat, personCovariates = character(), response
 #' @param order The kinds in the order they are screened and judged within a
 #'   round: each of "ability", "dimensions", "asymptotes" and "dif" once
 #'   (default in that order, the more general first; see Details).
+#' @param commonEffects Judge dimensions with the ability predictors'
+#'   effects common to them, and offer each DIF covariate's effect by
+#'   dimension as an alternative to its item DIF (see Details). `FALSE`
+#'   gives every dimension its own effects as soon as it is added.
+#' @param abilityTerms A named list: for a covariate, the `personPreds` that
+#'   carry its effect on ability under other names (an age covariate entering
+#'   as a person mean and a deviation, say), freed with it by dimension.
 #' @return A `bigIRT_improved` object: `fit` (final model, all persons),
 #'   `spec` (the terms added), `path` (each batch tried: round, kind, terms,
 #'   held-out log-likelihood before and after, gain and its z, accepted,
@@ -839,7 +936,9 @@ modificationTests <- function(fit, dat, personCovariates = character(), response
 #'   screen it was last judged on), `screens_all` (every screen made, named by
 #'   step: a round's first screen `round1_screens`, then
 #'   `round1_screens-<kind>`), `base_fit` (the base model on the training persons),
-#'   `holdout_persons`, `timing` (seconds: base fit, each screen, final fit).
+#'   `holdout_persons`, `timing` (seconds: base fit, each screen, final fit),
+#'   `base` (the settings a specification is built under: to refit `spec`
+#'   elsewhere, pass this rather than rebuilding it).
 #' @seealso [modificationTests()], [heldoutLogLik()]
 #' @export
 improveModel <- function(dat, score = "score", id = "id", item = "Item", scale = "Scale", pl = 2L,
@@ -849,11 +948,15 @@ improveModel <- function(dat, score = "score", id = "id", item = "Item", scale =
   minZ = stats::qnorm(.95), minGain = 0, nsimDim = 19L, maxRounds = 3L, maxGroups = 2L, seed = 1L, cores = 1L,
   verbose = TRUE, fitArgs = list(laplaceRefine = "agq"), checkpoint = NULL,
   difImpact = TRUE, asymptotePooled = TRUE, partitions = TRUE,
-  order = c("ability", "dimensions", "asymptotes", "dif")){
+  order = c("ability", "dimensions", "asymptotes", "dif"), commonEffects = TRUE, abilityTerms = list()){
   kinds_all <- c("ability", "dimensions", "asymptotes", "dif")
   order <- match.arg(order, kinds_all, several.ok = TRUE)
   if(length(order) != length(kinds_all) || anyDuplicated(order))
     stop("order must name each of 'ability', 'dimensions', 'asymptotes' and 'dif' once.", call. = FALSE)
+  if(length(abilityTerms) && (!is.list(abilityTerms) || is.null(names(abilityTerms)) || any(names(abilityTerms) == "")))
+    stop("abilityTerms must be a named list: covariate = the ability predictors that carry its effect.", call. = FALSE)
+  if(length(bad <- setdiff(unlist(abilityTerms), personPreds)))
+    stop("abilityTerms names predictors not in personPreds: ", paste(bad, collapse = ", "), call. = FALSE)
   dat <- data.table::as.data.table(dat)
   if(!scale %in% names(dat)) { dat <- data.table::copy(dat); data.table::set(dat, j = scale, value = 1L) }
   persons <- unique(dat[[id]])
@@ -862,7 +965,8 @@ improveModel <- function(dat, score = "score", id = "id", item = "Item", scale =
     sample(persons, round(holdout * length(persons))) })
   train <- which(!dat[[id]] %in% ho)
   fa <- utils::modifyList(list(cores = cores, verbose = 0, laplaceCertify = FALSE), fitArgs)
-  base <- list(score = score, id = id, item = item, scale = scale, pl = as.integer(pl), fitArgs = fa)
+  base <- list(score = score, id = id, item = item, scale = scale, pl = as.integer(pl), fitArgs = fa,
+    commonEffects = isTRUE(commonEffects), abilityTerms = abilityTerms)
   ## A batch is the current model with terms added, so it starts from the
   ## current model's estimates (`start`): it begins at the model it extends
   ## and can only climb, in far fewer evaluations. (On Mindsteps one batch, a
@@ -880,7 +984,7 @@ improveModel <- function(dat, score = "score", id = "id", item = "Item", scale =
   ## What a cached step must match to be reused. Threads and printing do not
   ## change results, so they are left out.
   fp <- list(n = nrow(dat), cols = names(dat), holdout = sort(as.character(ho)),
-    base = base[c("score", "id", "item", "scale", "pl")],
+    base = base[c("score", "id", "item", "scale", "pl", "commonEffects", "abilityTerms")],
     fitArgs = base$fitArgs[setdiff(names(base$fitArgs), c("cores", "verbose"))],
     tests = list(personCovariates, responseCovariates, itemSets, dif, difCovariates, asymptotes, alpha, minEffect,
       minAsymptote, minGroupSD, minZ, minGain, nsimDim, maxGroups, difImpact, asymptotePooled, partitions,
@@ -889,7 +993,7 @@ improveModel <- function(dat, score = "score", id = "id", item = "Item", scale =
   secs <- function(t0) proc.time()[[3]] - t0
   timing <- list()
   spec <- list(personPreds = personPreds, abil = list(), impact = character(), dif = list(), lower = character(),
-    upper = character(), pooled = character(), groups = list(), partition = character())
+    upper = character(), pooled = character(), groups = list(), partition = character(), bydim = character())
   base_spec <- spec
   b <- step("base", spec, function(){
     t0 <- proc.time()[[3]]; f <- fit_spec(spec, train)
@@ -917,6 +1021,9 @@ improveModel <- function(dat, score = "score", id = "id", item = "Item", scale =
   ## The screen each kind was last judged on (returned as `screens`) and every
   ## screen made (`screens_all`).
   judged_on <- list(); screens_all <- list()
+  ## Whether the model has dimensions whose covariate effects are shared
+  ## (commonEffects), so that an effect by dimension can be screened.
+  multi_dims <- function(s) isTRUE(base$commonEffects) && (length(s$partition) > 0L || length(s$groups) > 0L)
   ## The screen of one kind, at the model as it stands when its turn comes.
   ## A screen made before a batch was kept no longer describes the model, so
   ## each kind is screened at the model it will be judged against. (Screened
@@ -934,13 +1041,21 @@ improveModel <- function(dat, score = "score", id = "id", item = "Item", scale =
     more_groups <- "groups" %in% left && !length(spec$partition) && length(spec$groups) < maxGroups
     sr <- step(name, spec, function(){
       t0 <- proc.time()[[3]]
-      dat_cur <- bigIRT_modify_build(dat, spec, base)$dat
-      s <- modificationTests(cur, dat_cur, personCovariates = personCovariates,
+      a_cur <- bigIRT_modify_build(dat, spec, base)
+      ## With dimensions whose covariate effects are shared (commonEffects),
+      ## the DIF screen also tests each DIF covariate's effect by dimension.
+      bdt <- list()
+      if("dif" %in% left && multi_dims(spec)){
+        dcovs <- setdiff(if(is.null(difCovariates)) c(personCovariates, responseCovariates) else difCovariates, spec$bydim)
+        bdt <- Filter(length, stats::setNames(lapply(dcovs, bigIRT_modify_cov_terms, pp = a_cur$personPreds,
+          abilityTerms = base$abilityTerms), dcovs))
+      }
+      s <- modificationTests(cur, a_cur$dat, personCovariates = personCovariates,
         responseCovariates = responseCovariates, itemSets = if(more_groups) itemSets else character(),
         dif = if("dif" %in% left) dif else character(), difCovariates = difCovariates,
         asymptotes = if("asymptotes" %in% left) asymptotes else character(),
         exploratory = more_groups && nsimDim > 0L, nsimDim = nsimDim,
-        cores = cores)
+        cores = cores, byDimension = bdt)
       list(screens = s, seconds = secs(t0))
     })
     timing[[name]] <<- sr$seconds
@@ -1006,9 +1121,37 @@ improveModel <- function(dat, score = "score", id = "id", item = "Item", scale =
           alt("impact", function(s){ s$impact <- union(s$impact, need_for(s)); s },
             function(s) length(need_for(s))))
       }
+      ## With dimensions in the model and the covariates' effects common to
+      ## them (commonEffects), a covariate's effect on ability may differ by
+      ## dimension: DIF in a broad sense, on all of a dimension's items at
+      ## once. It has a screen of its own (bigIRT_modify_bydim_tests), since
+      ## a dimension's abilities take up most of such a gap and item DIF
+      ## screens barely see it. Where the covariate also has item DIF, the
+      ## two are alternatives, judged against each other, and the better that
+      ## passes the gate is kept; the next round screens both again at the
+      ## new model. (Judged after dimensions with free effects instead, a
+      ## dimension took in DIF on a few of its items: recall of true DIF fell
+      ## from 66 to 34 per cent on a simulated bank.) Effects by dimension
+      ## without item DIF are offered first, as the more general change.
+      bd <- screens$bydim
+      bd_ok <- if(multi_dims(spec) && !is.null(bd) && nrow(bd)) bd[!is.na(p_fdr) & p_fdr < alpha & !covariate %in% spec$bydim] else NULL
+      bydim_alt <- function(v){
+        nd <- if(length(spec$partition)) data.table::uniqueN(dat[[spec$partition]]) - 1L else length(spec$groups)
+        alt(paste("bydim", make.names(v), sep = "-"), function(s){ s$bydim <- union(s$bydim, v); s },
+          nd * bd_ok$terms[match(v, bd_ok$covariate)])
+      }
+      dif_covs <- unique(vapply(dif_groups, `[[`, "", "covariate"))
+      if(!is.null(bd_ok)) for(v in bd_ok[order(-LM)][!covariate %in% dif_covs, covariate]) local({ vv <- v
+        stages[[length(stages) + 1L]] <<- stage("dif", bydim_alt(vv))
+      })
+      offered <- character()
       for(x in dif_groups) local({ xx <- x[c("covariate", "parameter", "kind", "items")]
-        stages[[length(stages) + 1L]] <<- stage("dif", alt(paste("dif", make.names(xx$covariate), xx$parameter, sep = "-"),
+        alts <- list(alt(paste("dif", make.names(xx$covariate), xx$parameter, sep = "-"),
           function(s){ s$dif <- bigIRT_modify_merge_dif(c(s$dif, list(xx))); s }, length(xx$items)))
+        if(!is.null(bd_ok) && xx$covariate %in% bd_ok$covariate && !xx$covariate %in% offered){
+          alts <- c(alts, list(bydim_alt(xx$covariate))); offered <<- c(offered, xx$covariate)
+        }
+        stages[[length(stages) + 1L]] <<- do.call(stage, c(list("dif"), alts))
       })
     }
     if(kind == "asymptotes"){
@@ -1160,9 +1303,9 @@ improveModel <- function(dat, score = "score", id = "id", item = "Item", scale =
   ## Each kind's tests as it was last judged on them.
   screens <- list(ability = judged_on$ability$ability, dif = judged_on$dif$dif,
     asymptotes = judged_on$asymptotes$asymptotes, groups = judged_on$groups$groups,
-    dimensions = judged_on$groups$dimensions)
+    dimensions = judged_on$groups$dimensions, bydim = judged_on$dif$bydim)
   structure(list(fit = fin$fit, spec = spec, path = data.table::rbindlist(path, fill = TRUE), screens = screens,
-    screens_all = screens_all, base_fit = base_fit, holdout_persons = ho, timing = unlist(timing)),
+    screens_all = screens_all, base_fit = base_fit, holdout_persons = ho, timing = unlist(timing), base = base),
     class = "bigIRT_improved")
 }
 
@@ -1235,6 +1378,7 @@ print.bigIRT_improved <- function(x, ...){
   cat(sprintf("  lower asymptotes freed: %s; upper: %s\n",
     if("lower" %in% s$pooled) "all (pooled)" else length(s$lower), if("upper" %in% s$pooled) "all (pooled)" else length(s$upper)))
   if(length(s$partition)) cat(sprintf("  correlated dimensions: the levels of %s\n", s$partition))
+  if(length(s$bydim)) cat(sprintf("  covariates with an effect of their own on each dimension: %s\n", paste(s$bydim, collapse = ", ")))
   cat(sprintf("  group dimensions: %s\n", if(length(s$groups)) paste(vapply(s$groups, `[[`, "", "name"), collapse = ", ") else "none"))
   if(nrow(x$path)) { cat("Batches tried:\n"); print(x$path) }
   invisible(x)

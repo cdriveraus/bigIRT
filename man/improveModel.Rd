@@ -36,7 +36,9 @@ improveModel(
   difImpact = TRUE,
   asymptotePooled = TRUE,
   partitions = TRUE,
-  order = c("ability", "dimensions", "asymptotes", "dif")
+  order = c("ability", "dimensions", "asymptotes", "dif"),
+  commonEffects = TRUE,
+  abilityTerms = list()
 )
 }
 \arguments{
@@ -92,6 +94,15 @@ covariates, pooled asymptotes and partitions into correlated dimensions
 \item{order}{The kinds in the order they are screened and judged within a
 round: each of "ability", "dimensions", "asymptotes" and "dif" once
 (default in that order, the more general first; see Details).}
+
+\item{commonEffects}{Judge dimensions with the ability predictors'
+effects common to them, and offer each DIF covariate's effect by
+dimension as an alternative to its item DIF (see Details). \code{FALSE}
+gives every dimension its own effects as soon as it is added.}
+
+\item{abilityTerms}{A named list: for a covariate, the \code{personPreds} that
+carry its effect on ability under other names (an age covariate entering
+as a person mean and a deviation, say), freed with it by dimension.}
 }
 \value{
 A \code{bigIRT_improved} object: \code{fit} (final model, all persons),
@@ -101,7 +112,9 @@ seconds to fit and evaluate), \code{screens} (each kind's tests, from the
 screen it was last judged on), \code{screens_all} (every screen made, named by
 step: a round's first screen \code{round1_screens}, then
 \verb{round1_screens-<kind>}), \code{base_fit} (the base model on the training persons),
-\code{holdout_persons}, \code{timing} (seconds: base fit, each screen, final fit).
+\code{holdout_persons}, \code{timing} (seconds: base fit, each screen, final fit),
+\code{base} (the settings a specification is built under: to refit \code{spec}
+elsewhere, pass this rather than rebuilding it).
 }
 \description{
 Starting from a base model, repeatedly tests candidate changes at the
@@ -124,9 +137,9 @@ Within a round the kinds are taken in turn (\code{order}), the more general
 first: ability, then dimensions, then asymptotes, then DIF (with the
 impact of DIF covariates just before it). Each kind is screened and judged
 at the model as it stands after the batches kept before it. So DIF is
-screened with the dimensions in: a group difference specific to one
-subdomain is then the covariate's effect on that dimension, not DIF on
-its items (in one dimension it looks exactly like DIF, and was kept as
+judged with the dimensions in, where a group difference specific to one
+subdomain can be the covariate's effect on that dimension rather than DIF
+on its items (in one dimension it looks exactly like DIF, and was kept as
 such in 90 to 100 per cent of simulated runs with none). An unmodelled
 asymptote likewise looks like DIF between groups of different ability. A
 covariate's effect on ability is in the model before DIF along it is
@@ -146,6 +159,19 @@ that passes the gate is kept.
 \code{partitions}, an item-set column that covers every item (a partition,
 such as subdomains) is offered as an alternative: its levels as
 correlated ability dimensions.
+\item With \code{commonEffects}, a dimension is judged on the dependence it
+explains, not on group differences: the ability predictors keep one
+effect common to a partition's dimensions and have none on a group
+dimension. Freed by dimension, a covariate's effects would let a
+dimension take in DIF on a few of its items. In the DIF stage each DIF
+covariate's effect on ability is then also screened for differing by
+dimension (DIF on all of a dimension's items at once), by a score test
+of its own: a dimension's abilities take up most of such a gap, so the
+item DIF screens barely see it. Where a covariate has both, the two are
+alternatives and the better that passes the gate is kept; the next
+round screens both again. A covariate's effect is carried by the
+predictor of that name, the terms added for it here, and any
+\code{abilityTerms} names for it.
 }
 
 The next round screens the result, for the kinds whose verdict could have

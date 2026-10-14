@@ -18,7 +18,8 @@ modificationTests(
   nsimDim = 19L,
   minSetItems = 3L,
   shape = FALSE,
-  cores = 1L
+  cores = 1L,
+  byDimension = list()
 )
 }
 \arguments{
@@ -60,12 +61,17 @@ own parameters cannot express (\code{shape}, below). Diagnostic only:
 \code{\link[=improveModel]{improveModel()}} does not add such terms.}
 
 \item{cores}{Threads.}
+
+\item{byDimension}{A named list: for each covariate, the ability
+predictors that carry its effect, tested for an effect that differs by
+dimension. Only meaningful at a fit that shares those effects across its
+dimensions (\code{\link[=fitIRT]{fitIRT()}}'s \code{abilityBetaMap}); \code{\link[=improveModel]{improveModel()}} supplies it.}
 }
 \value{
 A list of data.tables: \code{ability}, \code{dif} (with effect sizes),
-\code{asymptotes}, \code{groups}; each with p-values adjusted by Benjamini-Hochberg
-(\code{p_fdr}) within its kind; and \code{dimensions}, the exploratory eigenpairs
-with their null draws.
+\code{asymptotes}, \code{groups}, \code{bydim} (effects by dimension); each with
+p-values adjusted by Benjamini-Hochberg (\code{p_fdr}) within its kind; and
+\code{dimensions}, the exploratory eigenpairs with their null draws.
 }
 \description{
 Tests candidate changes to a fit at the fit itself, without fitting any
