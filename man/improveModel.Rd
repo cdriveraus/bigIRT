@@ -108,14 +108,16 @@ as a person mean and a deviation, say), freed with it by dimension.}
 A \code{bigIRT_improved} object: \code{fit} (final model, all persons),
 \code{spec} (the terms added), \code{path} (each batch tried: round, kind, terms,
 held-out log-likelihood before and after, gain and its z, accepted,
-seconds to fit and evaluate, and for a larger alternative its gain and z
-over the smaller), \code{screens} (each kind's tests, from the
+seconds to fit and evaluate, for a larger alternative its gain and z
+over the smaller, and the batch fit's warnings, such as a fit that
+stopped on unresolved person modes), \code{screens} (each kind's tests, from the
 screen it was last judged on), \code{screens_all} (every screen made, named by
 step: a round's first screen \code{round1_screens}, then
 \verb{round1_screens-<kind>}), \code{base_fit} (the base model on the training persons),
 \code{holdout_persons}, \code{timing} (seconds: base fit, each screen, final fit),
 \code{base} (the settings a specification is built under: to refit \code{spec}
-elsewhere, pass this rather than rebuilding it).
+elsewhere, pass this rather than rebuilding it), \code{fit_warnings} (the
+base and final fits' warnings).
 }
 \description{
 Starting from a base model, repeatedly tests candidate changes at the

@@ -33,6 +33,27 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     expect_true(is.na(pref(alt(small, 20), a_tie)$z))
   })
 
+  ## A batch fit's warnings were suppressed, so a fit that stopped short (an
+  ## iteration limit here; unresolved person modes on simulated data, where
+  ## such fits ended up to 33,000 nats below a normal one) looked like a
+  ## batch that did not help. They are kept in the path and the result.
+  test_that("a batch fit's warnings are kept, not dropped", {
+    skip_on_cran()
+    set.seed(5); N <- 600; J <- 12
+    g <- stats::rbinom(N, 1, .5); th <- stats::rnorm(N) + .8 * g
+    a <- stats::runif(J, .9, 1.6); b <- stats::rnorm(J)
+    ii <- rep(seq_len(N), J); jj <- rep(seq_len(J), each = N)
+    d <- data.frame(id = ii, Item = jj, Scale = 1, g = g[ii],
+      score = stats::rbinom(N * J, 1, stats::plogis(a[jj] * th[ii] - b[jj])))
+    r <- suppressWarnings(suppressMessages(improveModel(d, pl = 2, personCovariates = "g", dif = character(),
+      asymptotes = character(), nsimDim = 0L, maxRounds = 1L, cores = 1, verbose = FALSE,
+      fitArgs = list(laplaceRefine = "none", laplaceOuterIter = 2L))))
+    expect_true(any(grepl("iteration limit", r$fit_warnings$base)))
+    expect_true(any(grepl("iteration limit", r$fit_warnings$final)))
+    expect_gte(nrow(r$path), 1L)
+    expect_true(all(grepl("iteration limit", r$path$fit_warnings)))
+  })
+
   ## On a resumed run the chosen alternative's fit may be missing from the
   ## checkpoint (it lost under the rule the run was made with, so only its
   ## verdict was kept). The current model is then refitted when it is next
