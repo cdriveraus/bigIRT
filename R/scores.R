@@ -318,8 +318,16 @@ bigIRT_score_refit_ability <- function(st, rule, maxit = 50L, tol = 1e-7, jitter
   P <- as.integer(st$P_real %||% 0L)
   if(!free_mean && P == 0L && !isTRUE(est_sd)) return(st)
   ap <- st$args_post
-  Xr <- if(P > 0L) as.matrix(ap$person_pred)[, seq_len(P), drop = FALSE] else NULL
-  varies <- P > 0L && any(bigIRT_laplace_person_pred_varies(Xr, ap$id))
+  ## (The whole matrix when it is all the fit's predictors: subsetting every
+  ## column copied it.)
+  Xr <- if(P > 0L){
+    pm <- ap$person_pred
+    if(!is.matrix(pm)) pm <- as.matrix(pm)
+    if(ncol(pm) == P) pm else pm[, seq_len(P), drop = FALSE]
+  } else NULL
+  first <- if(P > 0L) match(ap$id, ap$id) else integer(0)
+  xvar <- if(P > 0L) bigIRT_laplace_person_pred_varies(Xr, ap$id, first = first) else logical(0)
+  varies <- any(xvar)
   if(!varies){
     Xp <- NULL
     if(P > 0L){
@@ -333,9 +341,19 @@ bigIRT_score_refit_ability <- function(st, rule, maxit = 50L, tol = 1e-7, jitter
     lo <- bigIRT_laplace_row_effective(st$state, sdat, thetaBase = matrix(0, N, K),
       rows = st$rc$rows, context = st$rc)$loadings[keep, , drop = FALSE]
     free_k <- as.matrix(ap$fixed_ability) == 0
-    X <- cbind(if(free_mean) matrix(1, nrow(Xr), 1) else NULL, Xr)
+    ## By column: the mean and the predictors constant within person enter
+    ## by person, their weight factoring out of the person's sum; only the
+    ## ones that vary need the responses. The response-length product of the
+    ## whole predictor matrix, made for every dimension on every pass, was
+    ## the largest allocation of a purified DIF screen.
+    xv <- c(if(free_mean) FALSE, xvar)
+    Xpc <- matrix(0, N, length(xv))
+    ## (Constant within person, so each person's first response holds it.)
+    f1 <- which(first == seq_along(first)); p1 <- ap$id[f1]
+    for(j in which(!xv)) Xpc[p1, j] <- if(free_mean && j == 1L) 1 else Xr[f1, j - free_mean]
+    X <- NULL
   }
-  nc <- if(is.null(X)) 0L else ncol(X)
+  nc <- if(varies) length(xv) else if(is.null(X)) 0L else ncol(X)
   ## Shared or fixed coefficients (abilityBetaMap) stay so: the step is taken
   ## in the free coefficients, Tm mapping them onto the K x nc entries
   ## ((k - 1) * nc + column). A predictor added here (adjust) is shared across
@@ -404,9 +422,12 @@ bigIRT_score_refit_ability <- function(st, rule, maxit = 50L, tol = 1e-7, jitter
         rule = rule, row_out = 1L, slot_out = integer(0), want_person = isTRUE(est_sd))))
       seta <- aq$row_scores[, 1]
       Ui <- matrix(0, N, K * nc)
+      idp <- st$args_post$id
       for(k in seq_len(K)){
-        smk <- rowsum(X * (lo[, k] * seta * free_k[, k]), st$args_post$id, reorder = TRUE)
-        Ui[as.integer(rownames(smk)), (k - 1L) * nc + seq_len(nc)] <- smk
+        wk <- lo[, k] * seta * free_k[, k]
+        sk <- rowsum(wk, idp, reorder = TRUE); ii <- as.integer(rownames(sk))
+        for(j in seq_len(nc)) Ui[ii, (k - 1L) * nc + j] <- if(!xv[j]) Xpc[ii, j] * sk[, 1] else
+          rowsum(Xr[, j - free_mean] * wk, idp, reorder = TRUE)[, 1]
       }
       U <- colSums(Ui); H <- crossprod(Ui)
     }

@@ -243,7 +243,12 @@ bigIRT_modify_shape <- function(fit, cores = 1L, nodes = NULL, minN = 50L){
 ## item-set column that covers every item, whose levels become correlated
 ## ability dimensions.
 bigIRT_modify_build <- function(dat, spec, base){
-  d <- data.table::copy(data.table::as.data.table(dat))
+  ## A new table on the same column vectors, not a copy of them: the build
+  ## only adds whole columns (set() with a full-length value replaces a
+  ## column, it never writes into one), and a full copy for every batch and
+  ## screen held a second copy of the data beside each fit (on Mindsteps
+  ## about 6 GB).
+  d <- data.table::setDT(as.list(dat))
   it <- as.character(d[[base$item]])
   pp <- spec$personPreds
   for(a in spec$abil){
@@ -959,14 +964,16 @@ modificationTests <- function(fit, dat, personCovariates = character(), response
 #' @return A `bigIRT_improved` object: `fit` (final model, all persons),
 #'   `spec` (the terms added), `path` (each batch tried: round, kind, terms,
 #'   held-out log-likelihood before and after, gain and its z, accepted,
-#'   seconds to fit and evaluate, and for a larger alternative its gain and z
-#'   over the smaller), `screens` (each kind's tests, from the
+#'   seconds to fit and evaluate, for a larger alternative its gain and z
+#'   over the smaller, and the batch fit's warnings, such as a fit that
+#'   stopped on unresolved person modes), `screens` (each kind's tests, from the
 #'   screen it was last judged on), `screens_all` (every screen made, named by
 #'   step: a round's first screen `round1_screens`, then
 #'   `round1_screens-<kind>`), `base_fit` (the base model on the training persons),
 #'   `holdout_persons`, `timing` (seconds: base fit, each screen, final fit),
 #'   `base` (the settings a specification is built under: to refit `spec`
-#'   elsewhere, pass this rather than rebuilding it).
+#'   elsewhere, pass this rather than rebuilding it), `fit_warnings` (the
+#'   base and final fits' warnings).
 #' @seealso [modificationTests()], [heldoutLogLik()]
 #' @export
 improveModel <- function(dat, score = "score", id = "id", item = "Item", scale = "Scale", pl = 2L,
@@ -1006,8 +1013,19 @@ improveModel <- function(dat, score = "score", id = "id", item = "Item", scale =
     a <- bigIRT_modify_build(dat, spec, base)
     if(!is.null(rows)) a$trainingRows <- rows
     if(!is.null(start)) a$startFrom <- start
-    suppressWarnings(do.call(fitIRT, a))
+    ## A fit's warnings are kept (attribute fit_warnings; the batch's row of
+    ## `path`), not dropped. Suppressed, a fit that stopped short -- on
+    ## unresolved person modes, say, which on simulated data left fits up to
+    ## 33,000 nats below a normal one -- looked exactly like a batch that did
+    ## not help.
+    w <- character()
+    f <- withCallingHandlers(do.call(fitIRT, a), warning = function(x){
+      w <<- c(w, conditionMessage(x)); invokeRestart("muffleWarning")
+    })
+    attr(f, "fit_warnings") <- unique(w)
+    f
   }
+  fit_warns <- function(f) if(is.null(f)) character() else attr(f, "fit_warnings") %||% character()
   say <- function(...) if(isTRUE(verbose)) message(sprintf(...))
   ## What a cached step must match to be reused. Threads and printing do not
   ## change results, so they are left out.
@@ -1025,9 +1043,9 @@ improveModel <- function(dat, score = "score", id = "id", item = "Item", scale =
   base_spec <- spec
   b <- step("base", spec, function(){
     t0 <- proc.time()[[3]]; f <- fit_spec(spec, train)
-    list(fit = f, h = heldoutLogLik(f, cores = cores), seconds = secs(t0))
+    list(fit = f, h = heldoutLogLik(f, cores = cores), seconds = secs(t0), warnings = fit_warns(f))
   })
-  cur <- b$fit; cur_ho <- b$h; timing$base <- b$seconds
+  cur <- b$fit; cur_ho <- b$h; timing$base <- b$seconds; b_warnings <- b$warnings %||% character()
   ## With a checkpoint the base fit is read back at the end rather than held
   ## through the rounds: on large data each fit is many GB, and a refit holds
   ## the current fit and the new one besides.
@@ -1289,16 +1307,19 @@ improveModel <- function(dat, score = "score", id = "id", item = "Item", scale =
             gm <- if(is.null(h)) list(gain = NA_real_, z = NA_real_) else bigIRT_modify_gain(cur_ho, h)
             ok <- isTRUE(gm$gain >= minGain && gm$z >= minZ)
             ## Only a fit that passes is needed again.
-            list(fit = if(ok) f else NULL, h = h, gain = gm$gain, z = gm$z, ok = ok, seconds = secs(t0), error = err)
+            list(fit = if(ok) f else NULL, h = h, gain = gm$gain, z = gm$z, ok = ok, seconds = secs(t0), error = err,
+              warnings = fit_warns(f))
           })
           path[[length(path) + 1L]] <- data.table::data.table(round = round, kind = sg$kind, batch = a$label,
             terms = a$terms, heldout_before = cur_ho$loglik, heldout_after = if(is.null(tr$h)) NA_real_ else tr$h$loglik,
             gain = tr$gain, z = tr$z, accepted = FALSE, seconds = tr$seconds,
             error = if(is.null(tr$error)) NA_character_ else tr$error,
-            vs_smaller_gain = NA_real_, vs_smaller_z = NA_real_)
+            vs_smaller_gain = NA_real_, vs_smaller_z = NA_real_,
+            fit_warnings = if(length(tr$warnings)) paste(tr$warnings, collapse = " | ") else NA_character_)
           if(!is.null(tr$error)) say("round %d, %s: %d terms, failed (%s)", round, a$label, a$terms, tr$error)
           else say("round %d, %s: %d terms, held-out gain %.1f (z %.1f)%s", round, a$label, a$terms,
             tr$gain, tr$z, if(tr$ok) " (passes)" else "")
+          if(length(tr$warnings)) say("  (the fit warned: %s)", paste(tr$warnings, collapse = " | "))
           if(tr$ok){
             ## Only the stage's best fit is held in memory; the others keep
             ## their verdicts.
@@ -1351,7 +1372,8 @@ improveModel <- function(dat, score = "score", id = "id", item = "Item", scale =
     live <- kinds[kinds %in% kk | seq_along(kinds) < last_kept]
   }
   fin <- step("final", spec, function(){
-    t0 <- proc.time()[[3]]; list(fit = fit_spec(spec, NULL, start = ensure_cur()), seconds = secs(t0))
+    t0 <- proc.time()[[3]]; f <- fit_spec(spec, NULL, start = ensure_cur())
+    list(fit = f, seconds = secs(t0), warnings = fit_warns(f))
   })
   timing$final <- fin$seconds
   rm(cur)
@@ -1361,7 +1383,8 @@ improveModel <- function(dat, score = "score", id = "id", item = "Item", scale =
     asymptotes = judged_on$asymptotes$asymptotes, groups = judged_on$groups$groups,
     dimensions = judged_on$groups$dimensions, bydim = judged_on$dif$bydim)
   structure(list(fit = fin$fit, spec = spec, path = data.table::rbindlist(path, fill = TRUE), screens = screens,
-    screens_all = screens_all, base_fit = base_fit, holdout_persons = ho, timing = unlist(timing), base = base),
+    screens_all = screens_all, base_fit = base_fit, holdout_persons = ho, timing = unlist(timing), base = base,
+    fit_warnings = list(base = b_warnings, final = fin$warnings %||% character())),
     class = "bigIRT_improved")
 }
 

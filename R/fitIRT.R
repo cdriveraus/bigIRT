@@ -2152,7 +2152,8 @@ fitIRT <- function(dat, score = 'score', id = 'id', item = 'Item', scale = 'Scal
 
   trainingLogical <- array(as.integer(dat[["__bigIRT_training__"]]))
   if(!any(trainingLogical)) stop("No selected `trainingRows` remain after filtering.")
-  trainDat <- dat[trainingLogical == 1L]
+  ## (The items with a training response, without copying the training rows.)
+  train_items <- unique(dat[[itemref.]][trainingLogical == 1L])
   ## Items and persons are not in the same position here. An item with no
   ## training response has no data from which to calibrate its parameters, so
   ## it remains an error. A person with no training response does not: their
@@ -2160,7 +2161,7 @@ fitIRT <- function(dat, score = 'score', id = 'id', item = 'Item', scale = 'Scal
   ## `personPreds` are supplied and the prior mean otherwise. Allowing that is
   ## what makes it possible to hold out whole people and ask what the
   ## covariates alone say about them.
-  if(length(unique(trainDat[[itemref.]])) < Nitems)
+  if(length(train_items) < Nitems)
     stop("`trainingRows` must include at least one response for every item retained for estimation.")
   ## Persons with no training response are permitted: their posterior is the
   ## prior, so their fitted ability is the covariate prediction exactly. This
@@ -2301,7 +2302,10 @@ fitIRT <- function(dat, score = 'score', id = 'id', item = 'Item', scale = 'Scal
     fit
   }
 
-  rm(dat)
+  ## The predictors are in sdat now. Kept, these per-response tables held a
+  ## full copy of every predictor through the whole fit.
+  item_pred_names <- colnames(itemPreds); person_pred_names <- colnames(personPreds)
+  rm(dat, personPreds, itemPreds)
 
   ## ---- Estimation -------------------------------------------------------
   ## Both estimators optimise the item-side parameters -- item parameters,
@@ -2360,7 +2364,7 @@ fitIRT <- function(dat, score = 'score', id = 'id', item = 'Item', scale = 'Scal
     state <- bigIRT_laplace_warm_state(state, sdat, startFrom, labels = list(
       items = bigIRT_index_labels(itemIndex), scales = bigIRT_index_labels(scaleIndex),
       ids = bigIRT_index_labels(idIndex),
-      personPreds = if(sdat$NpersonPreds > 0L) colnames(personPreds) else character(),
+      personPreds = if(sdat$NpersonPreds > 0L) person_pred_names else character(),
       Bpreds = BitemPreds, estimate_corr = estimateAbilityCorr))
     laplace_trace(1, "Laplace: starting from the estimates of a previous fit (startFrom).")
   }
@@ -2972,8 +2976,8 @@ fitIRT <- function(dat, score = 'score', id = 'id', item = 'Item', scale = 'Scal
     colnames(loadingCols) <- paste0("A_", colnames(fit$pars$A))
     fit$itemPars <- cbind(fit$itemPars, loadingCols)
   }
-  if(ncol(itemPreds)>0){
-    colnames(fit$pars$itemPredsMean) <- colnames(itemPreds)
+  if(length(item_pred_names)>0){
+    colnames(fit$pars$itemPredsMean) <- item_pred_names
     fit$itemPars <- cbind(fit$itemPars, fit$pars$itemPredsMean)
   }
 
@@ -2999,41 +3003,41 @@ fitIRT <- function(dat, score = 'score', id = 'id', item = 'Item', scale = 'Scal
     colnames(abilitySD) <- paste0(colnames(fit$pars$Ability), "_SD")
     fit$personPars <- cbind(fit$personPars, abilitySD)
   }
-  if(ncol(personPreds)>0){
-    colnames(fit$pars$personPredsMean) <- colnames(personPreds)
+  if(length(person_pred_names)>0){
+    colnames(fit$pars$personPredsMean) <- person_pred_names
     fit$personPars <- cbind(fit$personPars, fit$pars$personPredsMean)
   }
 
   ###Covariate effect summary
   fit$covariateEffects <- list()
   if(fit$prepared$NpersonPreds > 0){
-    colnames(fit$pars$Abilitybeta) <- colnames(personPreds)
+    colnames(fit$pars$Abilitybeta) <- person_pred_names
     fit$covariateEffects$Ability <- fit$pars$Abilitybeta
     ability_sd <- apply(as.matrix(fit$pars$Ability), 2, sd)
     ability_sd[!is.finite(ability_sd) | ability_sd == 0] <- 1
-    pred_sd <- apply(fit$prepared$personPreds, 2, sd)
+    pred_sd <- bigIRT_col_sd(fit$prepared$personPreds, seq_len(ncol(fit$prepared$personPreds)))
     fit$covariateEffects$AbilityStd <- sweep(fit$pars$Abilitybeta, 1, ability_sd, "/")
     fit$covariateEffects$AbilityStd <- sweep(fit$covariateEffects$AbilityStd, 2, pred_sd, "*")
   }
   if(fit$prepared$NAitemPreds > 0 && pl > 1){
     dimnames(fit$pars$Abeta)[[2]] <- (AitemPreds)
     fit$covariateEffects$A <- fit$pars$Abeta
-    fit$covariateEffects$AStd <- t(t(fit$pars$Abeta) * apply(fit$prepared$itemPreds[,fit$prepared$AitemPreds,drop=FALSE],2,sd) / sd(fit$pars$A))
+    fit$covariateEffects$AStd <- t(t(fit$pars$Abeta) * bigIRT_col_sd(fit$prepared$itemPreds, fit$prepared$AitemPreds) / sd(fit$pars$A))
   }
   if(fit$prepared$NBitemPreds > 0){
     dimnames(fit$pars$Bbeta)[[2]] <- (BitemPreds)
     fit$covariateEffects$B<- fit$pars$Bbeta
-    fit$covariateEffects$BStd <- t(t(fit$pars$Bbeta) * apply(fit$prepared$itemPreds[,fit$prepared$BitemPreds,drop=FALSE],2,sd) / sd(fit$pars$B))
+    fit$covariateEffects$BStd <- t(t(fit$pars$Bbeta) * bigIRT_col_sd(fit$prepared$itemPreds, fit$prepared$BitemPreds) / sd(fit$pars$B))
   }
   if(fit$prepared$NCitemPreds > 0 && pl > 2){
     dimnames(fit$pars$Cbeta)[[2]] <- (CitemPreds)
     fit$covariateEffects$C<- fit$pars$Cbeta
-    fit$covariateEffects$CStd <- t(t(fit$pars$Cbeta) * apply(fit$prepared$itemPreds[,fit$prepared$CitemPreds,drop=FALSE],2,sd) / sd(fit$pars$C))
+    fit$covariateEffects$CStd <- t(t(fit$pars$Cbeta) * bigIRT_col_sd(fit$prepared$itemPreds, fit$prepared$CitemPreds) / sd(fit$pars$C))
   }
   if(fit$prepared$NDitemPreds > 0 && pl > 3){
     dimnames(fit$pars$Dbeta)[[2]] <- (DitemPreds)
     fit$covariateEffects$D<- fit$pars$Dbeta
-    fit$covariateEffects$DStd <- t(t(fit$pars$Dbeta) * apply(fit$prepared$itemPreds[,fit$prepared$DitemPreds,drop=FALSE],2,sd) / sd(fit$pars$D))
+    fit$covariateEffects$DStd <- t(t(fit$pars$Dbeta) * bigIRT_col_sd(fit$prepared$itemPreds, fit$prepared$DitemPreds) / sd(fit$pars$D))
   }
 
   if(all(c("b_row", "c_row", "d_row", "row_loadings") %in% names(fit$pars))){

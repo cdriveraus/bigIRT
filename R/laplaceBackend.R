@@ -417,6 +417,27 @@ bigIRT_laplace_row_context <- function(sdat, rows = bigIRT_laplace_training_rows
   items <- sdat$item[rows]
   item_offsets <- (items - 1L) * K
 
+  ## The person predictors at these rows, taken once (a response-length
+  ## matrix); which of them vary within person; and the constant ones by
+  ## person.
+  if(sdat$NpersonPreds > 0){
+    ## (All rows: the stored matrix itself, not a copy; converting a shared
+    ## object, even to the same mode, would duplicate it.)
+    person_pred <- if(identical(rows, seq_len(nrow(sdat$personPreds)))) sdat$personPreds else
+      sdat$personPreds[rows, , drop = FALSE]
+    if(!is.matrix(person_pred) || !is.double(person_pred)) person_pred <- bigIRT_as_numeric_matrix(person_pred)
+    first <- match(ids, ids)
+    person_pred_varies <- bigIRT_laplace_person_pred_varies(person_pred, ids, first = first)
+    const_cols <- which(!person_pred_varies)
+    person_pred_person <- matrix(0, sdat$Nsubs, length(const_cols))
+    ## (Constant within person, so each person's first response holds it.)
+    f1 <- which(first == seq_along(first))
+    if(length(const_cols)) person_pred_person[ids[f1], ] <- person_pred[f1, const_cols, drop = FALSE]
+  } else {
+    person_pred <- matrix(0, nrow = nrows, ncol = 0); person_pred_varies <- logical(0)
+    person_pred_person <- matrix(0, sdat$Nsubs, 0)
+  }
+
   fixed_ability <- matrix(FALSE, nrow = nrows, ncol = K)
   fixed_ability_value <- matrix(0, nrow = nrows, ncol = K)
   fixed_A <- matrix(FALSE, nrow = nrows, ncol = K)
@@ -481,10 +502,14 @@ bigIRT_laplace_row_context <- function(sdat, rows = bigIRT_laplace_training_rows
     D_beta_row = if(sdat$NDitemPreds > 0) {
       if(sdat$itemSpecificBetas == 1L) D_ref else ifelse(D_ref > 0L, 1L, 0L)
     } else integer(nrows),
-    person_pred = if(sdat$NpersonPreds > 0) as.matrix(sdat$personPreds[rows,, drop = FALSE]) else matrix(0, nrow = nrows, ncol = 0),
+    person_pred = person_pred,
     ## Constant for the life of the fit; see the note on the accessor.
-    person_pred_varies = if(sdat$NpersonPreds > 0)
-      bigIRT_laplace_person_pred_varies(sdat$personPreds[rows,, drop = FALSE], ids) else logical(0),
+    person_pred_varies = person_pred_varies,
+    ## The predictors that are constant within person, one row per person:
+    ## the ability-coefficient gradient needs them at that level, and built
+    ## from the response rows on every evaluation they cost a
+    ## response-length copy each time (bigIRT_laplace_ability_beta_contribution).
+    person_pred_person = person_pred_person,
     ## The native ability-beta kernel wants these in a fixed storage mode. They
     ## do not change while the fit runs, and converting 8 million responses on
     ## every gradient evaluation was showing up in the profile.
@@ -2489,14 +2514,16 @@ bigIRT_laplace_person_pred_within_varying <- function(row_context, tol = 1e-10){
   bigIRT_laplace_person_pred_varies(row_context$person_pred, row_context$ids, tol)
 }
 
-bigIRT_laplace_person_pred_varies <- function(X, ids, tol = 1e-10){
-  if(is.null(X) || !ncol(X)) return(logical(0))
-  X <- as.matrix(X)
-  ids <- as.integer(ids)
-  n <- rowsum(rep(1, length(ids)), group = ids)
-  m <- rowsum(X, group = ids) / as.numeric(n)
-  idx <- match(ids, as.integer(rownames(m)))
-  apply(abs(X - m[idx, , drop = FALSE]), 2L, max) > tol
+bigIRT_laplace_person_pred_varies <- function(X, ids, tol = 1e-10, first = match(ids, ids)){
+  if(is.null(X) || !NCOL(X)) return(logical(0))
+  ## Column by column, against each person's first response: on the whole
+  ## matrix, against person means, this held three response-length copies of
+  ## every predictor at once (on Mindsteps, 27 columns of 18 million
+  ## responses), and a per-person sum per column besides.
+  vapply(seq_len(NCOL(X)), function(j){
+    x <- if(is.matrix(X)) X[, j] else X[[j]]
+    max(abs(x - x[first])) > tol
+  }, logical(1))
 }
 
 bigIRT_laplace_ability_beta_contribution <- function(state, sdat, posterior, row_context, layout, prior_precision, person_terms, row_effective = NULL, impl = c("cpp", "R"),
@@ -2553,8 +2580,13 @@ bigIRT_laplace_ability_beta_contribution <- function(state, sdat, posterior, row
   ## the exact path.
   const_idx <- which(!varying)
   if(length(const_idx)){
-    xmat <- matrix(0, N, length(const_idx))
-    xmat[ids, ] <- as.matrix(row_context$person_pred)[, const_idx, drop = FALSE]
+    ## (Built once with the row context; a context made elsewhere without it
+    ## falls back to building it here.)
+    xmat <- row_context$person_pred_person
+    if(is.null(xmat) || ncol(xmat) != length(const_idx)){
+      xmat <- matrix(0, N, length(const_idx))
+      for(j in seq_along(const_idx)) xmat[ids, j] <- row_context$person_pred[, const_idx[j]]
+    }
     out[, const_idx] <- t(reduce(sacc, gacc)) %*% xmat
   }
 
@@ -3124,6 +3156,11 @@ bigIRT_posterior_sd_vector <- function(cov_arr){
 
 ## data.table or data.frame of predictors to a plain numeric matrix, without
 ## unlisting several million values into an intermediate vector first.
+## Standard deviations of some columns of a response-length matrix, a column
+## at a time (apply() on the column subset copied all of them first).
+bigIRT_col_sd <- function(X, cols)
+  vapply(as.integer(cols), function(j) stats::sd(X[, j]), numeric(1))
+
 bigIRT_as_numeric_matrix <- function(x){
   m <- if(is.matrix(x)) x else as.matrix(x)
   storage.mode(m) <- "double"
