@@ -108,7 +108,8 @@ as a person mean and a deviation, say), freed with it by dimension.}
 A \code{bigIRT_improved} object: \code{fit} (final model, all persons),
 \code{spec} (the terms added), \code{path} (each batch tried: round, kind, terms,
 held-out log-likelihood before and after, gain and its z, accepted,
-seconds to fit and evaluate), \code{screens} (each kind's tests, from the
+seconds to fit and evaluate, and for a larger alternative its gain and z
+over the smaller), \code{screens} (each kind's tests, from the
 screen it was last judged on), \code{screens_all} (every screen made, named by
 step: a round's first screen \code{round1_screens}, then
 \verb{round1_screens-<kind>}), \code{base_fit} (the base model on the training persons),
@@ -153,8 +154,7 @@ in any form (judged by the span of the ability predictors) first gets it,
 as a batch of its own; a response covariate's within-person effect
 included.
 \item With \code{asymptotePooled}, the screened asymptotes have an alternative: the
-asymptote free on every item, pooled by its prior. The better of the two
-that passes the gate is kept.
+asymptote free on every item, pooled by its prior.
 \item Group dimensions go in one per round, the strongest first. With
 \code{partitions}, an item-set column that covers every item (a partition,
 such as subdomains) is offered as an alternative: its levels as
@@ -168,11 +168,18 @@ covariate's effect on ability is then also screened for differing by
 dimension (DIF on all of a dimension's items at once), by a score test
 of its own: a dimension's abilities take up most of such a gap, so the
 item DIF screens barely see it. Where a covariate has both, the two are
-alternatives and the better that passes the gate is kept; the next
-round screens both again. A covariate's effect is carried by the
-predictor of that name, the terms added for it here, and any
-\code{abilityTerms} names for it.
+alternatives; the next round screens both again. A covariate's effect is
+carried by the predictor of that name, the terms added for it here, and
+any \code{abilityTerms} names for it.
 }
+
+Of alternatives that pass the gate, the one with fewer terms is kept,
+unless a larger one beats it on the held-out persons by the gate itself
+(\code{minGain}, \code{minZ}, the larger against the smaller). Chosen by the larger
+gain alone, near ties went to noise: DIF on all of a subdomain's items
+beat the subdomain's own effect, 20 terms against 2, by under 3 nats out
+of about 100. The comparison is in \code{path} (\code{vs_smaller_gain},
+\code{vs_smaller_z}).
 
 The next round screens the result, for the kinds whose verdict could have
 changed: a kind is tried again only if it was kept, or a kind after it

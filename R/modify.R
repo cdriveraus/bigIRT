@@ -71,6 +71,27 @@ heldoutLogLik <- function(fit, cores = 1L, nodes = NULL){
 
 ## Held-out gain of model b over model a, paired by person: total gain and
 ## its z (mean gain over its standard error across persons).
+## Between two alternatives that both passed the gate (each a list with the
+## batch's `tr` -- its held-out evaluation `h` and `gain` -- and its number
+## of `terms`): the one with fewer terms, unless the larger beats it on the
+## held-out persons by the gate itself (gain >= minGain, paired z >= minZ).
+## With equal terms, the larger gain. Choosing by the larger gain alone left
+## near ties to noise: with a gap specific to one subdomain at 20,000
+## simulated persons, DIF on all 20 of its items beat the 2-term effect by
+## dimension in 9 of 50 runs, by 0.02 to 2.7 nats out of about 100. Returns
+## whether `cand` replaces `best`, and the larger's gain and z over the
+## smaller.
+bigIRT_modify_prefer <- function(best, cand, minGain, minZ){
+  if(isTRUE(all.equal(cand$terms, best$terms)))
+    return(list(cand = isTRUE(cand$tr$gain > best$tr$gain), gain = NA_real_, z = NA_real_))
+  cand_small <- cand$terms < best$terms
+  small <- if(cand_small) cand else best
+  large <- if(cand_small) best else cand
+  gm <- bigIRT_modify_gain(small$tr$h, large$tr$h)
+  large_wins <- isTRUE(gm$gain >= minGain && gm$z >= minZ)
+  list(cand = if(cand_small) !large_wins else large_wins, gain = gm$gain, z = gm$z)
+}
+
 bigIRT_modify_gain <- function(a, b){
   p <- intersect(names(a$by_person), names(b$by_person))
   dlt <- b$by_person[p] - a$by_person[p]
@@ -848,8 +869,7 @@ modificationTests <- function(fit, dat, personCovariates = character(), response
 #'   as a batch of its own; a response covariate's within-person effect
 #'   included.
 #' * With `asymptotePooled`, the screened asymptotes have an alternative: the
-#'   asymptote free on every item, pooled by its prior. The better of the two
-#'   that passes the gate is kept.
+#'   asymptote free on every item, pooled by its prior.
 #' * Group dimensions go in one per round, the strongest first. With
 #'   `partitions`, an item-set column that covers every item (a partition,
 #'   such as subdomains) is offered as an alternative: its levels as
@@ -863,10 +883,17 @@ modificationTests <- function(fit, dat, personCovariates = character(), response
 #'   dimension (DIF on all of a dimension's items at once), by a score test
 #'   of its own: a dimension's abilities take up most of such a gap, so the
 #'   item DIF screens barely see it. Where a covariate has both, the two are
-#'   alternatives and the better that passes the gate is kept; the next
-#'   round screens both again. A covariate's effect is carried by the
-#'   predictor of that name, the terms added for it here, and any
-#'   `abilityTerms` names for it.
+#'   alternatives; the next round screens both again. A covariate's effect is
+#'   carried by the predictor of that name, the terms added for it here, and
+#'   any `abilityTerms` names for it.
+#'
+#' Of alternatives that pass the gate, the one with fewer terms is kept,
+#' unless a larger one beats it on the held-out persons by the gate itself
+#' (`minGain`, `minZ`, the larger against the smaller). Chosen by the larger
+#' gain alone, near ties went to noise: DIF on all of a subdomain's items
+#' beat the subdomain's own effect, 20 terms against 2, by under 3 nats out
+#' of about 100. The comparison is in `path` (`vs_smaller_gain`,
+#' `vs_smaller_z`).
 #'
 #' The next round screens the result, for the kinds whose verdict could have
 #' changed: a kind is tried again only if it was kept, or a kind after it
@@ -932,7 +959,8 @@ modificationTests <- function(fit, dat, personCovariates = character(), response
 #' @return A `bigIRT_improved` object: `fit` (final model, all persons),
 #'   `spec` (the terms added), `path` (each batch tried: round, kind, terms,
 #'   held-out log-likelihood before and after, gain and its z, accepted,
-#'   seconds to fit and evaluate), `screens` (each kind's tests, from the
+#'   seconds to fit and evaluate, and for a larger alternative its gain and z
+#'   over the smaller), `screens` (each kind's tests, from the
 #'   screen it was last judged on), `screens_all` (every screen made, named by
 #'   step: a round's first screen `round1_screens`, then
 #'   `round1_screens-<kind>`), `base_fit` (the base model on the training persons),
@@ -1018,6 +1046,20 @@ improveModel <- function(dat, score = "score", id = "id", item = "Item", scale =
   ## The accepted step whose stored fit is the current model's (none while
   ## the base is current: the base fit is returned and kept).
   holder <- NULL
+  ## The current model's fit when it is needed (a screen, a batch's start,
+  ## the final refit). A resumed run whose choice between alternatives now
+  ## falls the other way has no fit for the chosen one in the checkpoint;
+  ## it is refitted here, once, and stored under its step.
+  ensure_cur <- function(){
+    if(is.null(cur)){
+      say("refitting the current model: its fit is not in the checkpoint")
+      cur <<- fit_spec(spec, train)
+      if(!is.null(checkpoint) && !is.null(holder)){
+        v <- holder$tr; v$fit <- cur; bigIRT_modify_store(checkpoint, holder$name, fp, holder$s, v)
+      }
+    }
+    cur
+  }
   ## The screen each kind was last judged on (returned as `screens`) and every
   ## screen made (`screens_all`).
   judged_on <- list(); screens_all <- list()
@@ -1050,7 +1092,7 @@ improveModel <- function(dat, score = "score", id = "id", item = "Item", scale =
         bdt <- Filter(length, stats::setNames(lapply(dcovs, bigIRT_modify_cov_terms, pp = a_cur$personPreds,
           abilityTerms = base$abilityTerms), dcovs))
       }
-      s <- modificationTests(cur, a_cur$dat, personCovariates = personCovariates,
+      s <- modificationTests(ensure_cur(), a_cur$dat, personCovariates = personCovariates,
         responseCovariates = responseCovariates, itemSets = if(more_groups) itemSets else character(),
         dif = if("dif" %in% left) dif else character(), difCovariates = difCovariates,
         asymptotes = if("asymptotes" %in% left) asymptotes else character(),
@@ -1227,8 +1269,9 @@ improveModel <- function(dat, score = "score", id = "id", item = "Item", scale =
       judged_on[[kind]] <- scr
       for(sg in stages_for(kind, scr)){
         tried <- TRUE
-        ## Each alternative judged against the current model; the best that
-        ## passes the gate is kept.
+        ## Each alternative judged against the current model. Of those that
+        ## pass the gate, the one with fewer terms is kept unless a larger one
+        ## beats it by the gate as well (bigIRT_modify_prefer).
         best <- NULL
         for(a in sg$alts){
           if(is.function(a$terms)) a$terms <- a$terms(spec)
@@ -1240,7 +1283,7 @@ improveModel <- function(dat, score = "score", id = "id", item = "Item", scale =
             ## A batch whose fit or held-out evaluation fails is rejected, and
             ## the reason kept: a failure is not evidence against the change.
             err <- NULL
-            f <- tryCatch(fit_spec(s, train, start = cur), error = function(e){ err <<- conditionMessage(e); NULL })
+            f <- tryCatch(fit_spec(s, train, start = ensure_cur()), error = function(e){ err <<- conditionMessage(e); NULL })
             h <- if(is.null(f)) NULL else tryCatch(heldoutLogLik(f, cores = cores),
               error = function(e){ err <<- paste("heldoutLogLik:", conditionMessage(e)); NULL })
             gm <- if(is.null(h)) list(gain = NA_real_, z = NA_real_) else bigIRT_modify_gain(cur_ho, h)
@@ -1251,25 +1294,38 @@ improveModel <- function(dat, score = "score", id = "id", item = "Item", scale =
           path[[length(path) + 1L]] <- data.table::data.table(round = round, kind = sg$kind, batch = a$label,
             terms = a$terms, heldout_before = cur_ho$loglik, heldout_after = if(is.null(tr$h)) NA_real_ else tr$h$loglik,
             gain = tr$gain, z = tr$z, accepted = FALSE, seconds = tr$seconds,
-            error = if(is.null(tr$error)) NA_character_ else tr$error)
+            error = if(is.null(tr$error)) NA_character_ else tr$error,
+            vs_smaller_gain = NA_real_, vs_smaller_z = NA_real_)
           if(!is.null(tr$error)) say("round %d, %s: %d terms, failed (%s)", round, a$label, a$terms, tr$error)
           else say("round %d, %s: %d terms, held-out gain %.1f (z %.1f)%s", round, a$label, a$terms,
             tr$gain, tr$z, if(tr$ok) " (passes)" else "")
           if(tr$ok){
             ## Only the stage's best fit is held in memory; the others keep
             ## their verdicts.
-            is_best <- is.null(best) || tr$gain > best$tr$gain
+            cand <- list(tr = tr, s = s, at = length(path), terms = a$terms)
+            is_best <- is.null(best) || {
+              pr <- bigIRT_modify_prefer(best, cand, minGain, minZ)
+              ## The comparison, recorded on the larger alternative's row.
+              li <- if(isTRUE(all.equal(cand$terms, best$terms))) NA_integer_ else
+                if(cand$terms > best$terms) cand$at else best$at
+              if(!is.na(li)){ path[[li]]$vs_smaller_gain <- pr$gain; path[[li]]$vs_smaller_z <- pr$z }
+              pr$cand
+            }
             slim_tr <- tr; slim_tr$fit <- NULL
             passed[[length(passed) + 1L]] <- list(name = sprintf("round%d_%s", round, a$label), s = s,
               tr = if(is_best) tr else slim_tr)
             if(is_best){
               if(!is.null(best)) passed[[best$slot]]$tr$fit <- NULL
-              best <- list(tr = tr, s = s, at = length(path), slot = length(passed))
+              best <- c(cand, list(slot = length(passed)))
             }
+            cand <- NULL
           }
           tr <- NULL; gc(verbose = FALSE)
         }
         if(!is.null(best)){
+          ## (On a resumed run the chosen alternative's fit may not be in the
+          ## checkpoint, if it lost under the rule the run was made with:
+          ## ensure_cur refits it when it is next needed.)
           spec <- best$s; cur <- best$tr$fit; cur_ho <- best$tr$h; kept <- c(kept, sg$kind)
           path[[best$at]]$accepted <- TRUE
           ## Only the latest accepted fit is needed again (a resumed run takes
@@ -1295,7 +1351,7 @@ improveModel <- function(dat, score = "score", id = "id", item = "Item", scale =
     live <- kinds[kinds %in% kk | seq_along(kinds) < last_kept]
   }
   fin <- step("final", spec, function(){
-    t0 <- proc.time()[[3]]; list(fit = fit_spec(spec, NULL, start = cur), seconds = secs(t0))
+    t0 <- proc.time()[[3]]; list(fit = fit_spec(spec, NULL, start = ensure_cur()), seconds = secs(t0))
   })
   timing$final <- fin$seconds
   rm(cur)
