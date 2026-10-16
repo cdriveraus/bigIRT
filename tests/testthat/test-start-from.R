@@ -59,7 +59,7 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     expect_equal(warm_k$abilityPrior$corr, cold_k$abilityPrior$corr, tolerance = 1e-2)
     expect_gt(min(cold_k$abilityPrior$corr[lower.tri(cold_k$abilityPrior$corr)]), .5)
     ## Fixed correlations stay as given, though the previous fit estimated them.
-    fixed_k <- fit_q(d, pl = 2, personPreds = "g", scale = "sub", startFrom = cold_k)
+    fixed_k <- fit_q(d, pl = 2, personPreds = "g", scale = "sub", estimateAbilityCorr = FALSE, startFrom = cold_k)
     expect_equal(as.numeric(fixed_k$prepared$AbilityCorr), as.numeric(diag(3)))
   })
 }

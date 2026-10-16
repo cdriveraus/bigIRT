@@ -76,7 +76,13 @@ if(identical(Sys.getenv("NOT_CRAN"), "true")){
 ## rewritten abilityPrior, so it moved as well.
 if(identical(Sys.getenv("NOT_CRAN"), "true")){
   test_that("normalise = TRUE changes nothing a fit predicts or reports about measurement", {
-    for(K in 1:2){
+    ## (With an estimated correlation the normalising map whitens the
+    ## abilities -- theta' = (theta - centre) L^-1, which mixes the dimensions
+    ## -- so per-dimension reliability is a property of different variables
+    ## and is checked only where the map is diagonal; everything else must
+    ## hold either way.)
+    for(cfg in list(list(K = 1L, ecorr = FALSE), list(K = 2L, ecorr = FALSE), list(K = 2L, ecorr = TRUE))){
+      K <- cfg$K
       set.seed(70 + K)
       s <- simIRT(Nsubs = 600, Nitems = 15 * K, Nscales = K, NitemsAnswered = 15 * K,
         AMean = 1.5, ASD = .3, BMean = .5, BSD = 1, logitCMean = -20, logitCSD = 0)
@@ -85,13 +91,15 @@ if(identical(Sys.getenv("NOT_CRAN"), "true")){
       d[, score := as.integer(stats::runif(.N) <
         stats::plogis(stats::qlogis(pmin(pmax(p, 1e-6), 1 - 1e-6)) + .8 * x))]
       args <- list(dat = d, pl = 2, cores = 1, personPreds = "x", laplaceKeepCovariance = TRUE,
-        dropPerfectScores = FALSE, laplaceRefine = "none", laplaceCertify = FALSE)
+        dropPerfectScores = FALSE, laplaceRefine = "none", laplaceCertify = FALSE,
+        estimateAbilityCorr = cfg$ecorr)
       f0 <- suppressWarnings(do.call(fitIRT, c(args, list(normalise = FALSE))))
       f1 <- suppressWarnings(do.call(fitIRT, c(args, list(normalise = TRUE, normaliseMean = .3))))
-      lab <- paste0("K = ", K)
+      lab <- paste0("K = ", K, if(cfg$ecorr) ", correlation estimated" else "")
       ## Asserted first, so the rest cannot pass by nothing having moved.
       expect_gt(max(abs(f1$pars$Ability - f0$pars$Ability)), .1, label = lab)
-      expect_equal(reliability(f1)$empirical, reliability(f0)$empirical, tolerance = 1e-8, label = lab)
+      if(!cfg$ecorr)
+        expect_equal(reliability(f1)$empirical, reliability(f0)$empirical, tolerance = 1e-8, label = lab)
       expect_equal(as.numeric(logLik(f1)), as.numeric(logLik(f0)), tolerance = 1e-10, label = lab)
       ## Abilities are still base + xbar' beta, on the new metric.
       recon <- f1$personPosterior$mode + f1$pars$personPredsMean %*% t(f1$pars$Abilitybeta)
