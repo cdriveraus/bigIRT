@@ -261,12 +261,23 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     ## The recorded failure. Started at raw 20, tanh is exactly 1 and its
     ## derivative exactly 0, so the gradient in that coordinate is exactly
     ## zero, the optimiser cannot move it, and its own rule reports
-    ## convergence at rho = 1 on data generated at 0.6. Asserted first, so
-    ## this test cannot pass by the failure not reproducing.
+    ## convergence at rho = 1 on data generated at 0.6. The optimiser now
+    ## holds each partial correlation within +-.999 (bigIRT_laplace_corr_bounds,
+    ## test-corr-saturation.R), which clamps that start back to where the
+    ## gradient acts: it recovers, and is certified. With the bound out of the
+    ## way (as close to 1 as tanh can represent) the failure reproduces --
+    ## asserted first, so this test cannot pass by it not reproducing -- and the
+    ## certificate must still catch it.
     set.seed(77)
     s <- simIRT(Nsubs = 800, Nitems = 10, Nscales = 2, AMean = 1, ASD = .3, BMean = 0,
       BSD = 1, AbilityCorr = matrix(c(1, .6, .6, 1), 2), logitCMean = -20, logitCSD = 0)
-    d <- direct_fit(s, 2L, ecorr = TRUE, modify = function(st){ st$AbilityCorrPars <- 20; st })
+    park <- function(st){ st$AbilityCorrPars <- 20; st }
+    back <- direct_fit(s, 2L, ecorr = TRUE, modify = park)
+    expect_lt(abs(back$state$AbilityCorr[1, 2] - .6), .1)
+    expect_equal(back$optim$certificate$status, "certified")
+    old <- options(bigIRT.corr_max = 1 - 1e-15); on.exit(options(old))
+    d <- direct_fit(s, 2L, ecorr = TRUE, modify = park)
+    options(old)
     expect_true(d$optim$terminate$what %in% c("gain", "noise_floor"))
     expect_equal(d$state$AbilityCorr[1, 2], 1)
     expect_equal(d$optim$grad[d$optim$layout$corr], 0)
