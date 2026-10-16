@@ -1722,6 +1722,8 @@ bigIRT_laplace_optimize_direct <- function(state, sdat, prior_precision,
   context <- bigIRT_laplace_item_context(sdat, layout = item_layout)
   context$grain_size <- bigIRT_laplace_subject_grain(sdat$Nsubs, cores)
   context$direct_layout <- direct_layout
+  ## The latent correlations stay inside +-.999 (bigIRT_laplace_corr_bounds).
+  corr_bounds <- bigIRT_laplace_corr_bounds(direct_layout, corr_paramization)
   context$map <- identical(objective, "map")
   ## Data, not parameters: taken once rather than subset on every evaluation.
   context$score_rows <- as.integer(sdat$score[context$train_rows])
@@ -1909,7 +1911,7 @@ bigIRT_laplace_optimize_direct <- function(state, sdat, prior_precision,
     lap_tol <- if(!is.null(refine)) max(tol, getOption("bigIRT.agq_switch_gain", 0.1)) else tol
     fit <- bigIRT_laplace_lbfgs(init, fg_f, minv = minv, maxit = as.integer(niter),
       gain_tol = lap_tol, refresh = refresh,
-      refresh_every = as.integer(getOption("bigIRT.fisher_refresh", 10L)))
+      refresh_every = as.integer(getOption("bigIRT.fisher_refresh", 10L)), bounds = corr_bounds)
     fit$metric <- attr(minv, "metric")
   } else {
     fit <- mize::mize(
@@ -2126,7 +2128,7 @@ bigIRT_laplace_optimize_direct <- function(state, sdat, prior_precision,
         rounds <<- rounds + 1L; nround <- nround + 1L
         rf <- bigIRT_laplace_lbfgs(x_r, fg_f, minv = m_r, maxit = as.integer(niter),
           gain_tol = tol, refresh = refresh_r,
-          refresh_every = as.integer(getOption("bigIRT.fisher_refresh", 10L)))
+          refresh_every = as.integer(getOption("bigIRT.fisher_refresh", 10L)), bounds = corr_bounds)
         rf_iter <<- rf_iter + rf$iter
         x_r <- rf$par
         more <- FALSE
@@ -2258,7 +2260,7 @@ bigIRT_laplace_optimize_direct <- function(state, sdat, prior_precision,
       e_l <- fg_f(lap_par)
       rl <- bigIRT_laplace_lbfgs(lap_par, fg_f, minv = solver(e_l), maxit = as.integer(niter),
         gain_tol = tol, refresh = function(e){ m <- solver(e); get_eval(e$x); m },
-        refresh_every = as.integer(getOption("bigIRT.fisher_refresh", 10L)))
+        refresh_every = as.integer(getOption("bigIRT.fisher_refresh", 10L)), bounds = corr_bounds)
       fit$refine$rejected_par <- rf$par   # where the refinement went, for diagnosis
       fit$par <- rl$par; fit$iter <- rl$iter; fit$terminate <- rl$terminate
       fit$refine$reverted <- TRUE

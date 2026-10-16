@@ -333,30 +333,48 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
   })
 
   test_that("the closed-form correlation information matches its direct definition", {
-    ## 1/2 sum_i tr(W_i dS_j W_i dS_l), W_i = (Sigma + D_i^-1)^-1, computed the
-    ## long way -- explicit inverses and traces -- against the Kronecker
-    ## accumulation and the D - D V D identity the package uses.
+    ## Fisher, 1/2 sum_i tr(W_i dS_j W_i dS_l) with W_i = (Sigma + D_i^-1)^-1,
+    ## and the observed information of the same Gaussian model, written with
+    ## the measurement mhat_i itself rather than through W_i mhat_i = P0 (m_i -
+    ## mu): each computed the long way -- explicit inverses, traces and second
+    ## differences of Sigma -- against the Kronecker accumulation and the
+    ## identities the package uses. (Whether the observed information is the
+    ## objective's curvature is test-corr-saturation.R's question.)
     set.seed(3)
-    K <- 3L; N <- 40L; sdv <- c(1, 1.5, 0.8)
-    cp <- c(0.4, -0.3, 0.2)
-    Sig <- function(p) diag(sdv) %*% bigIRT:::bigIRT_laplace_corr_from_packed(p, K,
-      paramization = "normalized_chol") %*% diag(sdv)
-    S0 <- Sig(cp); P0 <- solve(S0)
-    Dl <- lapply(seq_len(N), function(i){ X <- matrix(rnorm(K * 5), 5, K); crossprod(X) })
-    H <- array(0, c(K, K, N)); for(i in seq_len(N)) H[, , i] <- P0 + Dl[[i]]
-    ev <- list(posterior = list(precision = H), prior_mats = list(precision = P0),
-      state = list(AbilityCorrPars = cp))
-    sdat <- list(Nscales = K, Nsubs = N, AbilitySD = sdv)
-    lay <- list(corr = 1:3); attr(lay, "par_scale") <- c(1, 1, 1)
-    Fa <- bigIRT:::bigIRT_laplace_corr_fisher(ev, sdat, lay, paramization = "normalized_chol")
-    dS <- lapply(1:3, function(j){ h <- 1e-6; pp <- cp; pm <- cp; pp[j] <- pp[j] + h; pm[j] <- pm[j] - h
-      (Sig(pp) - Sig(pm)) / (2 * h) })
-    Fd <- matrix(0, 3, 3)
-    for(i in seq_len(N)){
-      W <- solve(S0 + solve(Dl[[i]]))
-      for(j in 1:3) for(l in 1:3) Fd[j, l] <- Fd[j, l] + 0.5 * sum(diag(W %*% dS[[j]] %*% W %*% dS[[l]]))
+    for(par_kind in c("normalized_chol", "stan_corsqrt")){
+      K <- 3L; N <- 40L; sdv <- c(1, 1.5, 0.8)
+      cp <- c(0.4, -0.3, 0.2)
+      Sig <- function(p) diag(sdv) %*% bigIRT:::bigIRT_laplace_corr_from_packed(p, K,
+        paramization = par_kind) %*% diag(sdv)
+      S0 <- Sig(cp); P0 <- solve(S0)
+      mu <- c(.2, -.1, 0)
+      Dl <- lapply(seq_len(N), function(i){ X <- matrix(rnorm(K * 5), 5, K); crossprod(X) })
+      mhat <- lapply(seq_len(N), function(i) mu + as.numeric(t(chol(S0 + solve(Dl[[i]]))) %*% rnorm(K)) * 1.5)
+      H <- array(0, c(K, K, N)); for(i in seq_len(N)) H[, , i] <- P0 + Dl[[i]]
+      ## The posterior mode the measurement implies.
+      m <- t(vapply(seq_len(N), function(i) as.numeric(solve(H[, , i], P0 %*% mu + Dl[[i]] %*% mhat[[i]])), numeric(K)))
+      ev <- list(posterior = list(precision = H, theta_mode = m), prior_mats = list(precision = P0),
+        state = list(AbilityCorrPars = cp, AbilityMean = mu))
+      sdat <- list(Nscales = K, Nsubs = N, AbilitySD = sdv)
+      cc <- bigIRT:::bigIRT_laplace_corr_curvature(ev, sdat, paramization = par_kind)
+      h <- 1e-5
+      dS <- lapply(1:3, function(j){ pp <- cp; pm <- cp; pp[j] <- pp[j] + h; pm[j] <- pm[j] - h
+        (Sig(pp) - Sig(pm)) / (2 * h) })
+      d2S <- function(j, l){ e <- function(a, b){ p <- cp; p[j] <- p[j] + a; p[l] <- p[l] + b; Sig(p) }
+        (e(h, h) - e(h, -h) - e(-h, h) + e(-h, -h)) / (4 * h^2) }
+      Fd <- Od <- matrix(0, 3, 3)
+      for(i in seq_len(N)){
+        W <- solve(S0 + solve(Dl[[i]])); r <- mhat[[i]] - mu
+        for(j in 1:3) for(l in 1:3){
+          tr <- sum(diag(W %*% dS[[j]] %*% W %*% dS[[l]]))
+          Fd[j, l] <- Fd[j, l] + 0.5 * tr
+          Od[j, l] <- Od[j, l] - 0.5 * tr + as.numeric(t(r) %*% W %*% dS[[l]] %*% W %*% dS[[j]] %*% W %*% r) +
+            0.5 * sum(diag(W %*% d2S(j, l))) - 0.5 * as.numeric(t(r) %*% W %*% d2S(j, l) %*% W %*% r)
+        }
+      }
+      expect_lt(max(abs(cc$fisher - Fd)) / max(abs(Fd)), 1e-6)
+      expect_lt(max(abs(cc$observed - (Od + t(Od)) / 2)) / max(abs(Od)), 1e-4)
     }
-    expect_lt(max(abs(Fa - Fd)) / max(abs(Fd)), 1e-6)
   })
 
   test_that("forced to the block-diagonal metric, the optimiser still reaches the mize optimum", {

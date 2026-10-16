@@ -1514,11 +1514,24 @@ bigIRT_validate_fit_inputs <- function(dat, score, id, item, scale, pl, controls
 #'   for a normal-normal hierarchy, and stops early once every hyperparameter
 #'   moves by less than a thousandth. Ignored when \code{ebayes = FALSE}.
 #'   Default is 5.
-#' @param estimateAbilityCorr Logical. If \code{TRUE}, estimate the latent
+#' @param estimateAbilityCorr \code{TRUE}, \code{FALSE} or \code{"auto"}
+#'   (default). If \code{TRUE}, estimate the latent
 #'   ability correlation matrix while keeping \code{AbilitySD} fixed, so that
 #'   only the correlation is free (the latent scale is not identified
-#'   separately from the loadings). The Laplace estimator optimises it as
-#'   part of the parameter vector. Under \code{marginalApprox = "map"} it is an
+#'   separately from the loadings). \code{"auto"} estimates it wherever it is
+#'   identified and the estimator can: several dimensions, each item loading
+#'   on one of them (the default \code{loadings}, or a matrix with one free
+#'   or nonzero entry per item), \code{marginalApprox = "laplace"}, and no
+#'   \code{AbilityCorr} supplied. Otherwise it is held at \code{AbilityCorr}:
+#'   with cross-loadings, or group dimensions loading alongside a general one,
+#'   a correlation trades off against the loadings and is not identified, and
+#'   a correlation supplied is one to hold. Holding a correlation at zero that
+#'   is not zero is a strong assumption -- it discards what one dimension says
+#'   about another -- so a fixed identity should be a choice.
+#'   The Laplace estimator optimises it as
+#'   part of the parameter vector, each partial correlation within
+#'   \eqn{\pm}0.999 (\code{options(bigIRT.corr_max)}), with a warning if one
+#'   ends there. Under \code{marginalApprox = "map"} it is an
 #'   error: as a parameter of the joint posterior the correlation runs to the
 #'   boundary (the prior's normalising constant grows without bound as a
 #'   correlation goes to one, while the likelihood need not fall), and set by
@@ -1529,11 +1542,11 @@ bigIRT_validate_fit_inputs <- function(dat, score, id, item, scale, pl, controls
 #'   person posterior covariances are required: modes are shrunk towards zero
 #'   by the prior, so their cross-product alone understates the correlation.
 #'   The result is returned in \code{fit$abilityPrior$corr}, with
-#'   \code{fit$abilityPrior$estimated} recording whether it was estimated or
+#'   \code{fit$abilityPrior$estimated_corr} recording whether it was estimated or
 #'   held fixed. This prior-level correlation is the quantity to report: the
 #'   correlation among fitted ability point estimates is biased, downwards
 #'   under an independent prior and upwards under a correlated one.
-#'   Default is FALSE.
+#'   Default is \code{"auto"} (\code{FALSE} until October 2026).
 #' @param laplaceOuterIter Integer. Maximum optimiser iterations, under
 #'   either estimator. This is a fallback limit rather than the primary
 #'   convergence criterion. Default is 500.
@@ -1911,7 +1924,7 @@ fitIRT <- function(dat, score = 'score', id = 'id', item = 'Item', scale = 'Scal
   AMeanSD = 1, BMeanSD = BSD, logitCMeanSD = logitCSD, logitDMeanSD = logitDSD,
   AbilityMeanSD = array(1, dim = c(length(unique(dat[[scale]])))),
   estMeans = c('A', 'B', 'C', 'D'),
-  estimateAbilityCorr = FALSE,
+  estimateAbilityCorr = "auto",
   laplaceCorrParam = c("stan_corsqrt", "normalized_chol"),
   ebayes = FALSE, ebayesMethod = c("laplace", "moment"), ebayesIter = 5L, ebayesCoarse = 1000,
   ebayesMinSD = 0.05, ebayesmultiplier = 2,
@@ -1968,6 +1981,10 @@ fitIRT <- function(dat, score = 'score', id = 'id', item = 'Item', scale = 'Scal
   if(signedAsked && pl < 2)
     stop("signedLoadings needs pl >= 2: a 1PL has no free loadings.", call. = FALSE)
   ebayesMethod <- match.arg(ebayesMethod)
+  ## (Read before anything assigns to it: a correlation supplied is one to hold.)
+  abilityCorrGiven <- !missing(AbilityCorr)
+  if(!(isTRUE(estimateAbilityCorr) || isFALSE(estimateAbilityCorr) || identical(estimateAbilityCorr, "auto")))
+    stop("estimateAbilityCorr must be TRUE, FALSE or \"auto\".", call. = FALSE)
   laplaceCorrParam <- match.arg(laplaceCorrParam)
   laplaceOptimizer <- match.arg(laplaceOptimizer)
   laplaceRefine <- match.arg(laplaceRefine)
@@ -2340,6 +2357,14 @@ fitIRT <- function(dat, score = 'score', id = 'id', item = 'Item', scale = 'Scal
     }
   } else NULL
   wall_time_sec <- function() as.numeric(proc.time()[["elapsed"]])
+  ## "auto": estimated wherever it is identified and the estimator can
+  ## estimate it -- several dimensions, each item loading on one of them
+  ## (free, or fixed away from zero), the Laplace estimator, and no
+  ## correlation supplied to hold.
+  if(identical(estimateAbilityCorr, "auto")){
+    perItem <- rowSums(is.na(loadingValues) | loadingValues != 0)
+    estimateAbilityCorr <- sdat$Nscales > 1L && !isMAP && !abilityCorrGiven && all(perItem <= 1L)
+  }
   if(isTRUE(estimateAbilityCorr) && sdat$Nscales <= 1L){
     warning("estimateAbilityCorr ignored for unidimensional fits.", call. = FALSE)
     estimateAbilityCorr <- FALSE
@@ -2785,6 +2810,16 @@ fitIRT <- function(dat, score = 'score', id = 'id', item = 'Item', scale = 'Scal
     precision = as.matrix(directFit$eval$prior_mats$precision),
     estimated_corr = estimateAbilityCorr
   )
+  ## A latent correlation the optimiser held at its bound (+-.999 as a partial
+  ## correlation; bigIRT_laplace_corr_bounds): the data do not tell those
+  ## dimensions apart.
+  if(isTRUE(estimateAbilityCorr) && length(state$AbilityCorrPars)){
+    cb <- bigIRT_laplace_corr_bounds(list(corr = seq_along(state$AbilityCorrPars)), laplaceCorrParam)
+    if(any(abs(state$AbilityCorrPars) >= cb$natural * (1 - 1e-6)))
+      warning("A latent correlation is at the bound the estimator holds it within (", getOption("bigIRT.corr_max", .999),
+        " as a partial correlation): the data do not tell those dimensions apart. Correlations:\n",
+        paste(utils::capture.output(print(round(fit$abilityPrior$corr, 3))), collapse = "\n"), call. = FALSE)
+  }
   if(isTRUE(collectDirectDiag)){
     if(length(directFit$history)){
       fit$laplaceDiagnostics <- directDiag

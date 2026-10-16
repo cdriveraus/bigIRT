@@ -42,7 +42,7 @@ fitIRT(
   logitDMeanSD = logitDSD,
   AbilityMeanSD = array(1, dim = c(length(unique(dat[[scale]])))),
   estMeans = c("A", "B", "C", "D"),
-  estimateAbilityCorr = FALSE,
+  estimateAbilityCorr = "auto",
   laplaceCorrParam = c("stan_corsqrt", "normalized_chol"),
   ebayes = FALSE,
   ebayesMethod = c("laplace", "moment"),
@@ -287,11 +287,24 @@ This matters when whole persons are held out of \code{trainingRows}: such a
 person has no likelihood, so their ability is the prior mean, which under
 the default is 0 plus whatever their \code{personPreds} imply.}
 
-\item{estimateAbilityCorr}{Logical. If \code{TRUE}, estimate the latent
+\item{estimateAbilityCorr}{\code{TRUE}, \code{FALSE} or \code{"auto"}
+(default). If \code{TRUE}, estimate the latent
 ability correlation matrix while keeping \code{AbilitySD} fixed, so that
 only the correlation is free (the latent scale is not identified
-separately from the loadings). The Laplace estimator optimises it as
-part of the parameter vector. Under \code{marginalApprox = "map"} it is an
+separately from the loadings). \code{"auto"} estimates it wherever it is
+identified and the estimator can: several dimensions, each item loading
+on one of them (the default \code{loadings}, or a matrix with one free
+or nonzero entry per item), \code{marginalApprox = "laplace"}, and no
+\code{AbilityCorr} supplied. Otherwise it is held at \code{AbilityCorr}:
+with cross-loadings, or group dimensions loading alongside a general one,
+a correlation trades off against the loadings and is not identified, and
+a correlation supplied is one to hold. Holding a correlation at zero that
+is not zero is a strong assumption -- it discards what one dimension says
+about another -- so a fixed identity should be a choice.
+The Laplace estimator optimises it as
+part of the parameter vector, each partial correlation within
+\eqn{\pm}0.999 (\code{options(bigIRT.corr_max)}), with a warning if one
+ends there. Under \code{marginalApprox = "map"} it is an
 error: as a parameter of the joint posterior the correlation runs to the
 boundary (the prior's normalising constant grows without bound as a
 correlation goes to one, while the likelihood need not fall), and set by
@@ -302,11 +315,11 @@ prior's. Ignored for unidimensional fits. It forces
 person posterior covariances are required: modes are shrunk towards zero
 by the prior, so their cross-product alone understates the correlation.
 The result is returned in \code{fit$abilityPrior$corr}, with
-\code{fit$abilityPrior$estimated} recording whether it was estimated or
+\code{fit$abilityPrior$estimated_corr} recording whether it was estimated or
 held fixed. This prior-level correlation is the quantity to report: the
 correlation among fitted ability point estimates is biased, downwards
 under an independent prior and upwards under a correlated one.
-Default is FALSE.}
+Default is \code{"auto"} (\code{FALSE} until October 2026).}
 
 \item{laplaceCorrParam}{Character. Parameterisation used for the latent
 correlation when \code{estimateAbilityCorr = TRUE}.}
