@@ -309,12 +309,13 @@ bigIRT_laplace_factor_metric <- function(H){
   NULL
 }
 
-## Fisher information of the latent correlation parameters, in closed form,
-## optimiser coordinates.
+## Curvature of the objective in the latent correlation parameters, in closed
+## form, optimiser coordinates.
 ##
 ## Person i's Laplace posterior is N(m_i, V_i) with precision H_i = P0 + D_i,
 ## D_i the information from the data. Read the mode as a measurement of theta_i
 ## with error covariance D_i^-1; its marginal is then N(mu, Sigma + D_i^-1), so
+## its Fisher information is
 ##
 ##   F_jl = 1/2 sum_i tr(W_i dSigma_j W_i dSigma_l),
 ##   W_i  = (Sigma + D_i^-1)^-1 = D_i - D_i V_i D_i,
@@ -325,16 +326,54 @@ bigIRT_laplace_factor_metric <- function(H){
 ## objective evaluation each, 36 per metric build at nine dimensions.
 ## dSigma is differenced through the correlation constructor, a K x K
 ## closed form.
-bigIRT_laplace_corr_fisher <- function(ev, sdat, layout, paramization, h = 1e-6){
+##
+## Fisher alone is not enough. It is the curvature where the modes scatter as
+## the model says they should, and at a cold start they do not: the modes of a
+## person's dimensions are strongly correlated while Sigma is still the
+## identity. The actual curvature is then several times larger -- 8 to 9
+## times on a Mindsteps subsample, three subdomains, 1,447 students -- and a
+## Fisher step overshoots by as much. Under rho = tanh(par) the overshoot
+## lands in the flat tail: the first step put every parameter near 40, every
+## correlation at 1.000, where the gradient is numerically zero; the line
+## search accepted it because the items improved at the same time, and the
+## fit reported convergence 154 nats short of the optimum (persons' modes on
+## the merged dimensions then also look unresolved). So the block is Fisher
+## plus the positive part of (observed - Fisher), with the observed
+## information of the same Gaussian model,
+##
+##   O_jl = sum_i [u_i' dSigma_l W_i dSigma_j u_i - 1/2 tr(W_i dSigma_j W_i dSigma_l)
+##                 + 1/2 tr((W_i - u_i u_i') d2Sigma_jl)],   u_i = W_i mhat_i = P0 (m_i - mu),
+##
+## which there matched finite differences of the objective's own gradient to
+## about 1 per cent, off-diagonals included. It is never less curved than
+## Fisher, so near the optimum, where the two agree in expectation, the step
+## is the Fisher step; far from it, the step is no longer than Newton's on
+## the actual curvature.
+##
+## bigIRT_laplace_corr_curvature returns both, in natural coordinates (each
+## one testable against its definition and against differences of the
+## objective); bigIRT_laplace_corr_metric combines them in optimiser
+## coordinates.
+bigIRT_laplace_corr_metric <- function(ev, sdat, layout, paramization){
   idx <- layout$corr
   if(!length(idx)) return(NULL)
+  cc <- bigIRT_laplace_corr_curvature(ev, sdat, paramization)
+  dec <- eigen(cc$observed - cc$fisher, symmetric = TRUE)
+  M <- cc$fisher + dec$vectors %*% (pmax(dec$values, 0) * t(dec$vectors))
+  ps <- attr(layout, "par_scale")
+  s <- if(length(ps) >= max(idx)) ps[idx] else rep(1, length(idx))
+  (M + t(M)) / 2 * outer(s, s)
+}
+
+bigIRT_laplace_corr_curvature <- function(ev, sdat, paramization, h = 1e-6, h2 = 1e-4){
   K <- as.integer(sdat$Nscales); N <- as.integer(sdat$Nsubs)
   Hp <- array(as.numeric(ev$posterior$precision), c(K, K, N))
   P0 <- as.matrix(ev$prior_mats$precision)
   sdv <- pmax(as.numeric(sdat$AbilitySD), 1e-8)
   cp <- ev$state$AbilityCorrPars
+  nc <- length(cp)
   Sig <- function(p) diag(sdv, K) %*% bigIRT_laplace_corr_from_packed(p, K, paramization = paramization) %*% diag(sdv, K)
-  J <- vapply(seq_along(cp), function(j){
+  J <- vapply(seq_len(nc), function(j){
     pp <- cp; pm <- cp; pp[j] <- pp[j] + h; pm[j] <- pm[j] - h
     as.numeric(Sig(pp) - Sig(pm)) / (2 * h)
   }, numeric(K * K))
@@ -351,9 +390,48 @@ bigIRT_laplace_corr_fisher <- function(ev, sdat, layout, paramization, h = 1e-6)
   M <- matrix(C[cbind((ix[, "c"] - 1L) * K + ix[, "a"], (ix[, "d"] - 1L) * K + ix[, "b"])], K * K, K * K)
   ## Rows of M: (a,b) with a fastest; columns (c,d). vec(dSigma) indexes (row, col), row fastest.
   F <- 0.5 * crossprod(J, M %*% J)
+  F <- (F + t(F)) / 2
+  ## The observed information. W_i mhat_i = P0 (m_i - mu), so the persons'
+  ## modes enter through u_i alone. T[(a,b),(c,d)] = sum_i W_i[a,b] u_ic u_id
+  ## gives sum_i u_i' dS_l W_i dS_j u_i = J_j' M3 J_l with
+  ## M3[(r,s),(p,q)] = T[(q,r),(p,s)].
+  m <- matrix(as.numeric(ev$posterior$theta_mode), N, K)
+  mu <- rep_len(as.numeric(if(length(ev$state$AbilityMean)) ev$state$AbilityMean else 0), K)
+  U <- sweep(m, 2L, mu) %*% P0
+  Uv <- U[, rep(seq_len(K), times = K), drop = FALSE] * U[, rep(seq_len(K), each = K), drop = FALSE]
+  Tm <- crossprod(Wv, Uv)
+  M3 <- matrix(Tm[cbind((ix[, "a"] - 1L) * K + ix[, "d"], (ix[, "b"] - 1L) * K + ix[, "c"])], K * K, K * K)
+  A <- crossprod(J, M3 %*% J)
+  ## The second derivative of Sigma (zero at rho = 0 under tanh, not elsewhere).
+  Wsum <- matrix(colSums(Wv), K, K); Usum <- crossprod(U)
+  d2 <- matrix(0, nc, nc)
+  for(j in seq_len(nc)) for(l in j:nc){
+    e <- function(dj, dl){ p <- cp; p[j] <- p[j] + dj; p[l] <- p[l] + dl; Sig(p) }
+    S2 <- (e(h2, h2) - e(h2, -h2) - e(-h2, h2) + e(-h2, -h2)) / (4 * h2^2)
+    d2[j, l] <- d2[l, j] <- 0.5 * sum((Wsum - Usum) * S2)
+  }
+  list(fisher = F, observed = (A + t(A)) / 2 - F + d2)
+}
+
+## Box for the latent correlation parameters, optimiser coordinates: each
+## canonical partial correlation within +-rmax (stan_corsqrt: rho =
+## tanh(par); normalized_chol: the Cholesky entry whose first-row
+## correlation is rmax). Past about .9999 tanh's derivative is numerically
+## zero, so a parameter that gets there never comes back: a correlation of
+## exactly 1.000, no gradient, and a fit that reports convergence short of
+## its optimum. The curvature above keeps the first steps short, but on
+## twelve threads a later step still reached the tail in one Mindsteps run
+## of two (113 nats short). Inside .999 the derivative is still 2e-3, so the
+## data can always pull a correlation back; a correlation that ends on the
+## bound means dimensions the data do not tell apart, and fitIRT says so.
+bigIRT_laplace_corr_bounds <- function(layout, paramization,
+  rmax = getOption("bigIRT.corr_max", .999)){
+  idx <- layout$corr
+  if(!length(idx)) return(NULL)
+  L <- if(identical(paramization, "stan_corsqrt")) atanh(rmax) else rmax / sqrt(1 - rmax^2)
   ps <- attr(layout, "par_scale")
   s <- if(length(ps) >= max(idx)) ps[idx] else rep(1, length(idx))
-  (F + t(F)) / 2 * outer(s, s)
+  list(idx = idx, lo = -L / s, hi = L / s, natural = L)
 }
 
 ## Write the closed-form correlation block into a metric matrix M, whose rows
@@ -364,7 +442,7 @@ bigIRT_laplace_corr_fisher <- function(ev, sdat, layout, paramization, h = 1e-6)
 bigIRT_laplace_use_corr_block <- function(M, pos, ev, sdat, context, layout){
   if(!length(pos) || identical(getOption("bigIRT.corr_metric", "analytic"), "fd"))
     return(list(M = M, done = integer(0)))
-  Fc <- tryCatch(bigIRT_laplace_corr_fisher(ev, sdat, layout,
+  Fc <- tryCatch(bigIRT_laplace_corr_metric(ev, sdat, layout,
     paramization = context$corr_paramization %||% "normalized_chol"), error = function(e) NULL)
   if(is.null(Fc) || any(!is.finite(Fc))) return(list(M = M, done = integer(0)))
   M[pos, ] <- 0; M[, pos] <- 0
@@ -724,11 +802,28 @@ bigIRT_laplace_metric_solver <- function(e, sdat, context, layout, gfun,
 ## noise happened to stop it at iteration 31. `refresh(e)` may return a new
 ## minv every `refresh_every` iterations, or list(stop = TRUE) to end the
 ## search there (terminate "refresh_stop").
+##
+## `bounds`, list(idx, lo, hi), holds those coordinates in a box: every trial
+## point is clamped into it, the Armijo test uses the step actually taken, and
+## a coordinate at its bound that the step would push further out stays put
+## for that iteration (so the predicted gain is what the free coordinates can
+## still gain). It is for the latent correlations (bigIRT_laplace_corr_bounds).
 bigIRT_laplace_lbfgs <- function(x0, fg, minv = NULL, memory = 30L, maxit = 500L,
-  gain_tol = 1e-3, c1 = 1e-4, maxback = 30L, refresh = NULL, refresh_every = 10L, stall = 10L){
+  gain_tol = 1e-3, c1 = 1e-4, maxback = 30L, refresh = NULL, refresh_every = 10L, stall = 10L,
+  bounds = NULL){
   S <- list(); Y <- list(); rho <- numeric(0)
   mv <- if(is.null(minv)) function(v) v else minv
-  x <- x0; e <- fg(x); f <- e$f; g <- e$g
+  clamp <- if(is.null(bounds) || !length(bounds$idx)) function(z) z else function(z){
+    z[bounds$idx] <- pmin(pmax(z[bounds$idx], bounds$lo), bounds$hi); z
+  }
+  held <- function(d){
+    if(is.null(bounds) || !length(bounds$idx)) return(d)
+    xb <- x[bounds$idx]; db <- d[bounds$idx]
+    out <- (xb >= bounds$hi & db > 0) | (xb <= bounds$lo & db < 0)
+    d[bounds$idx[out]] <- 0
+    d
+  }
+  x <- clamp(x0); e <- fg(x); f <- e$f; g <- e$g
   h0 <- if(is.null(minv)) 1 / max(sum(abs(g)), 1e-300) else 1
   hmul <- function(q){
     k <- length(S)
@@ -745,7 +840,7 @@ bigIRT_laplace_lbfgs <- function(x0, fg, minv = NULL, memory = 30L, maxit = 500L
   ## a refresh, for the stall rule.
   fh <- f
   while(it < maxit){
-    d <- -hmul(g)
+    d <- held(-hmul(g))
     dphi <- sum(g * d)
     if(!is.finite(dphi) || dphi >= 0){
       if(!length(S)){ term <- "not_descent"; break }
@@ -754,16 +849,18 @@ bigIRT_laplace_lbfgs <- function(x0, fg, minv = NULL, memory = 30L, maxit = 500L
     gain <- -0.5 * dphi
     if(gain < gain_tol){ term <- "gain"; break }
     alpha <- 1
-    en <- fg(x + d); fn <- en$f
-    ok <- is.finite(fn) && fn <= f + c1 * alpha * dphi
+    xt <- clamp(x + d); dphi_t <- sum(g * (xt - x))
+    en <- fg(xt); fn <- en$f
+    ok <- is.finite(fn) && dphi_t < 0 && fn <= f + c1 * dphi_t
     k <- 0L
     while(!ok && k < maxback){
       k <- k + 1L
       den <- 2 * (fn - f - dphi * alpha)
       tr <- if(is.finite(fn) && den > 0) -dphi * alpha^2 / den else 0.5 * alpha
       alpha <- min(max(tr, 0.1 * alpha), 0.5 * alpha)
-      en <- fg(x + alpha * d); fn <- en$f
-      ok <- is.finite(fn) && fn <= f + c1 * alpha * dphi
+      xt <- clamp(x + alpha * d); dphi_t <- sum(g * (xt - x))
+      en <- fg(xt); fn <- en$f
+      ok <- is.finite(fn) && dphi_t < 0 && fn <= f + c1 * dphi_t
     }
     nback <- nback + k
     if(!ok){
@@ -773,7 +870,7 @@ bigIRT_laplace_lbfgs <- function(x0, fg, minv = NULL, memory = 30L, maxit = 500L
     }
     retried <- FALSE
     it <- it + 1L
-    s <- alpha * d; yv <- en$g - g
+    s <- xt - x; yv <- en$g - g
     sy <- sum(s * yv)
     if(sy > 1e-12 * sqrt(sum(s^2) * sum(yv^2))){
       S[[length(S) + 1L]] <- s; Y[[length(Y) + 1L]] <- yv; rho <- c(rho, 1 / sy)

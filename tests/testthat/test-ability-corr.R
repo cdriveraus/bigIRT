@@ -76,3 +76,45 @@ test_that("the correlation estimate corrects the bias in the person modes", {
   expect_lt(abs(est - trueR[1, 2]), abs(modes_only - trueR[1, 2]))
   expect_lt(abs(est - trueR[1, 2]), .15)
 })
+
+test_that("the default estimates the correlation wherever it is identified, and only there", {
+  ## estimateAbilityCorr = "auto" (the default since October 2026; FALSE
+  ## before): estimated with several dimensions, each item on one of them,
+  ## the Laplace estimator and no correlation supplied; held otherwise.
+  skip_on_cran()
+  set.seed(5)
+  sim <- simIRT(Nsubs = 800, Nitems = 20, Nscales = 2, NitemsAnswered = c(10, 10),
+    AMean = 1.2, ASD = .2, BSD = 1, logitCMean = -20, logitCSD = 0,
+    AbilityCorr = matrix(c(1, .7, .7, 1), 2, 2))
+  fa <- list(dat = sim$dat, pl = 2, cores = 1, verbose = 0, laplaceRefine = "none", dropPerfectScores = FALSE)
+  one <- function(...){
+    w <- character()
+    f <- withCallingHandlers(do.call(fitIRT, utils::modifyList(fa, list(...))),
+      warning = function(m){ w <<- c(w, conditionMessage(m)); invokeRestart("muffleWarning") })
+    list(est = isTRUE(f$abilityPrior$estimated_corr), r = f$abilityPrior$corr[1, 2], w = w)
+  }
+  simple <- one()
+  expect_true(simple$est)
+  expect_lt(abs(simple$r - .7), .15)
+  ## A correlation supplied is held.
+  held <- one(AbilityCorr = diag(2))
+  expect_false(held$est); expect_equal(held$r, 0)
+  ## Cross-loadings: every loading free, so the correlation trades off
+  ## against them and is not identified.
+  L <- matrix(NA_real_, 40, 2, dimnames = list(as.character(sort(unique(sim$dat$Item))), NULL))
+  cross <- one(loadings = L)
+  expect_false(cross$est)
+  ## Joint MAP cannot estimate it: held, without the error TRUE gives.
+  map <- one(marginalApprox = "map")
+  expect_false(map$est)
+  expect_error(do.call(fitIRT, utils::modifyList(fa, list(marginalApprox = "map", estimateAbilityCorr = TRUE))),
+    "needs marginalApprox")
+  ## One dimension: nothing to estimate and nothing to warn about.
+  one_d <- sim$dat[sim$dat$Scale == sim$dat$Scale[1], ]
+  u <- withCallingHandlers(fitIRT(one_d, pl = 2, cores = 1, verbose = 0, laplaceRefine = "none",
+    dropPerfectScores = FALSE), warning = function(m){
+      if(grepl("estimateAbilityCorr", conditionMessage(m))) stop("warned: ", conditionMessage(m))
+      invokeRestart("muffleWarning") })
+  expect_false(isTRUE(u$abilityPrior$estimated_corr))
+  expect_error(fitIRT(sim$dat, pl = 2, cores = 1, verbose = 0, estimateAbilityCorr = "yes"), "TRUE, FALSE or")
+})
