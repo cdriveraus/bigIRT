@@ -142,11 +142,18 @@ bigIRT_score_setup <- function(fit, cores = 1L, jitter = 1e-6, person_tol = 1e-1
   ## with normalise = TRUE moved those (and the person side) onto another
   ## metric while the raw item parameters stayed put, so the two no longer
   ## describe one model and nothing computed from them would mean anything.
+  ## Checked on each item's first response and 20,000 others: a fit on
+  ## another metric is off on every row, and every row of the check cost a
+  ## response-level copy of each row parameter, on every purification pass.
   if(is.null(int$state) && !is.null(fit$pars$b_row)){
-    eff <- bigIRT_laplace_row_effective(state, sdat,
-      thetaBase = matrix(0, N, K), rows = rc$rows, context = rc)
-    b_fit <- as.numeric(fit$pars$b_row)[rc$rows]
-    l_fit <- matrix(as.numeric(fit$pars$row_loadings), ncol = K)[rc$rows, , drop = FALSE]
+    it_r <- sdat$item[rc$rows]
+    pick <- sort(unique(c(match(unique(it_r), it_r),
+      round(seq(1, length(it_r), length.out = min(length(it_r), 2e4L))))))
+    chk <- rc$rows[pick]
+    eff <- bigIRT_laplace_row_effective(state, sdat, thetaBase = matrix(0, N, K), rows = chk)
+    b_fit <- as.numeric(fit$pars$b_row[chk])
+    rl <- fit$pars$row_loadings
+    l_fit <- if(is.matrix(rl)) rl[chk, , drop = FALSE] else matrix(as.numeric(rl), ncol = K)[chk, , drop = FALSE]
     gap <- max(abs(as.numeric(eff$b_row) - b_fit) / (1 + abs(b_fit)),
       abs(as.matrix(eff$loadings) - l_fit) / (1 + abs(l_fit)))
     if(!is.finite(gap) || gap > 1e-6)
@@ -792,7 +799,11 @@ bigIRT_score_compute <- function(fit, nodes = NULL, information = TRUE, cores = 
   Pr <- as.integer(st$P_real %||% 0L)
   xb <- matrix(0, N, K)
   if(Pr > 0L){
-    Xr <- as.matrix(st$args$person_pred)[, seq_len(Pr), drop = FALSE]
+    ## (The matrix itself when these are all its columns: the column subset
+    ## copied every predictor of every response.)
+    Xr <- st$args$person_pred
+    if(!is.matrix(Xr)) Xr <- as.matrix(Xr)
+    if(ncol(Xr) != Pr) Xr <- Xr[, seq_len(Pr), drop = FALSE]
     smx <- rowsum(Xr, st$args$id, reorder = TRUE); ix <- as.integer(rownames(smx))
     Xbar <- matrix(0, N, Pr); Xbar[ix, ] <- smx / tabulate(st$args$id, N)[ix]
     xb <- Xbar %*% t(matrix(st$args$Abilitybeta[, seq_len(Pr)], K, Pr))
@@ -1741,7 +1752,8 @@ bigIRT_score_test_items <- function(sc, zall, zlevel, parameters, form, by, item
     opg = info_opg,
     expected = {
       if(is.null(R$ppred)) stop("These score contributions predate `ppred`; recompute them.")
-      bigIRT_score_expected_info(S, R$y, R$ppred)
+      ## (bigIRT_score_expected_info, on the outer product already formed.)
+      info_opg * (R$ppred * (1 - R$ppred) / (R$y - R$ppred)^2)
     },
     as.matrix(R[, info_cols, with = FALSE]))
   G <- if(form == "fluctuation") NULL else bigIRT_score_basis(z, form, df)
