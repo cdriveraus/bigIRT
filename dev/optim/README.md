@@ -147,6 +147,18 @@ seed per cell.
   per-person error at the Laplace optimum 0.0005 against plain QMC's 0.003,
   but no better than plain QMC at the runaway and reference points, which is
   where exploitation happens.
+- **The quadrature finish's own curvature as its metric** (2026-10-17;
+  branch `agq-finish-metric`, unmerged; `model-building/debug/
+  agq_metric_bench.R`). The finish optimises the quadrature marginal with
+  the Laplace-based Fisher blocks. Swapping in the quadrature objective's
+  exact item blocks (Louis identity, as the certificate uses; equal to
+  finite differences to 1e-11), or per-person score outer products (OPG,
+  plain or centred), made no wall-time difference. The finish took 7-34
+  evaluations either way. The exact blocks saved 6 of 34 on the Mindsteps 5%
+  case but cost an extra quadrature pass per refresh. The OPG took 46-51
+  there. The finish starts near the optimum, where the Fisher blocks are
+  already close and the secant updates fix the rest. An OPG metric for the
+  Laplace stage was not tried: it already has the analytic Fisher one.
 
 ## Performance (dev2 uncontended, `main` before this work -> now)
 
