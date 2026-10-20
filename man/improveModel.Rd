@@ -39,7 +39,8 @@ improveModel(
   order = c("ability", "dimensions", "asymptotes", "dif"),
   commonEffects = TRUE,
   abilityTerms = list(),
-  trainLogLik = FALSE
+  trainLogLik = FALSE,
+  combineBydim = FALSE
 )
 }
 \arguments{
@@ -112,6 +113,14 @@ parameters, as \code{path} columns \code{train_loglik_before},
 \code{train_loglik_after}, \code{df_before}, \code{df_after} and \code{train_persons}: what
 a likelihood ratio, AIC or BIC would judge the batch by. One extra
 quadrature pass over the training responses per fit.}
+
+\item{combineBydim}{Where a covariate's effect by dimension and its item
+DIF both pass their screens, offer a third alternative besides the two:
+the effect by dimension together with item DIF screened again at the
+model that has the effect. Item DIF flagged against a common effect
+covers a dimension's items wholesale where the gap differs by
+dimension, so without this a gap specific to one dimension with true
+DIF inside it can be described only as one or the other.}
 }
 \value{
 A \code{bigIRT_improved} object: \code{fit} (final model, all persons),
