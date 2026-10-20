@@ -1030,7 +1030,17 @@ bigIRT_score_kron_s <- function(X, S, sx)
 ## sum of its entries', and one held at zero is none
 ## (bigIRT_score_nuis_map). Projecting each entry out separately would remove
 ## exactly what a test of an effect differing by dimension is after.
-bigIRT_score_lm_pieces <- function(G, Nb, S, info, test, nuis, ntrans = NULL){
+##
+## `persons` (one label per unit): units are responses, and some persons gave
+## more than one response to the item (a repeated attempt). Each response's
+## score is exact, and their sum is the person's score, but the information
+## is a sum over responses and leaves out the covariance between one person's
+## responses. That covariance is added, estimated from the projected scores:
+## sum over persons of (sum u_r)(sum u_r)' minus sum over responses of u_r u_r'.
+## It is exactly zero for a person with one response. On Mindsteps (12 per cent
+## of responses in a repeated pair) leaving it out had DIF along a repeat
+## attempt flag 916 items where 742 survive with it.
+bigIRT_score_lm_pieces <- function(G, Nb, S, info, test, nuis, ntrans = NULL, persons = NULL){
   Sg <- bigIRT_score_kron_s(G, S, test)
   Sn <- bigIRT_score_kron_s(Nb, S, nuis)
   Igg <- bigIRT_score_kron(G, G, info, test, test)
@@ -1042,7 +1052,19 @@ bigIRT_score_lm_pieces <- function(G, Nb, S, info, test, nuis, ntrans = NULL){
   }
   pin <- bigIRT_score_pinv(Inn)
   Bt <- Ign %*% pin$inv
-  list(U = Sg, Ustar = as.numeric(Sg - Bt %*% Sn), V = Igg - Bt %*% t(Ign))
+  V <- Igg - Bt %*% t(Ign)
+  ## (Option bigIRT.score_repeat_cov = FALSE leaves the covariance out, for
+  ## comparison only.)
+  if(!is.null(persons) && anyDuplicated(persons) && isTRUE(getOption("bigIRT.score_repeat_cov", TRUE))){
+    rep_p <- persons %in% persons[duplicated(persons)]
+    unit <- function(X, sl) do.call(cbind, lapply(sl, function(f) X[rep_p, , drop = FALSE] * S[rep_p, f]))
+    Rg <- unit(G, test); Rn <- unit(Nb, nuis)
+    if(!is.null(ntrans)) Rn <- Rn %*% ntrans
+    Ru <- Rg - Rn %*% t(Bt)
+    Rp <- rowsum(Ru, persons[rep_p], reorder = FALSE)
+    V <- V + crossprod(Rp) - crossprod(Ru)
+  }
+  list(U = Sg, Ustar = as.numeric(Sg - Bt %*% Sn), V = V)
 }
 
 ## The person-side nuisance as the model has it, for bigIRT_score_lm_pieces'
@@ -1833,10 +1855,10 @@ bigIRT_score_test_items <- function(sc, zall, zlevel, parameters, form, by, item
       if(!is.null(test_used) && !identical(test_used, test)){ tests_ok <- FALSE; break }
       test_used <- test
       pc <- bigIRT_score_lm_pieces(G[uj, , drop = FALSE], matrix(1, length(uj), 1),
-        S[uj, , drop = FALSE], info[uj, , drop = FALSE], test, nuis)
+        S[uj, , drop = FALSE], info[uj, , drop = FALSE], test, nuis, persons = R$person[uj])
       Us <- Us + pc$Ustar; V <- V + pc$V
       Vo <- Vo + bigIRT_score_lm_pieces(G[uj, , drop = FALSE], matrix(1, length(uj), 1),
-        S[uj, , drop = FALSE], info_opg[uj, , drop = FALSE], test, nuis)$V
+        S[uj, , drop = FALSE], info_opg[uj, , drop = FALSE], test, nuis, persons = R$person[uj])$V
     }
     if(!tests_ok || is.null(test_used)) next
     pv <- bigIRT_score_pinv(V)

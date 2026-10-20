@@ -39,8 +39,8 @@ improveModel(
   order = c("ability", "dimensions", "asymptotes", "dif"),
   commonEffects = TRUE,
   abilityTerms = list(),
-  trainLogLik = FALSE,
-  combineBydim = FALSE
+  combineBydim = TRUE,
+  gateCluster = NULL
 )
 }
 \arguments{
@@ -106,29 +106,35 @@ gives every dimension its own effects as soon as it is added.}
 carry its effect on ability under other names (an age covariate entering
 as a person mean and a deviation, say), freed with it by dimension.}
 
-\item{trainLogLik}{Also record, for the current model and each batch, the
-training persons' marginal log-likelihood (by the quadrature and prior
-constant of \code{\link[=heldoutLogLik]{heldoutLogLik()}}) and the nominal number of free
-parameters, as \code{path} columns \code{train_loglik_before},
-\code{train_loglik_after}, \code{df_before}, \code{df_after} and \code{train_persons}: what
-a likelihood ratio, AIC or BIC would judge the batch by. One extra
-quadrature pass over the training responses per fit.}
-
 \item{combineBydim}{Where a covariate's effect by dimension and its item
 DIF both pass their screens, offer a third alternative besides the two:
 the effect by dimension together with item DIF screened again at the
 model that has the effect. Item DIF flagged against a common effect
 covers a dimension's items wholesale where the gap differs by
 dimension, so without this a gap specific to one dimension with true
-DIF inside it can be described only as one or the other.}
+DIF inside it can be described only as one or the other: on simulated
+data the item DIF won, took in the gap on many of the dimension's items,
+and the next round could not undo it.}
+
+\item{gateCluster}{Optional: a column of \code{dat}, constant within person,
+naming the cluster each person belongs to (a school, say). The gate's z
+(and the comparison between alternatives) then uses a cluster-robust
+(CR1) standard error of the summed per-person gain, for held-out persons
+who are not independent. With every person their own cluster it equals
+the default.}
 }
 \value{
 A \code{bigIRT_improved} object: \code{fit} (final model, all persons),
 \code{spec} (the terms added), \code{path} (each batch tried: round, kind, terms,
 held-out log-likelihood before and after, gain and its z, accepted,
 seconds to fit and evaluate, for a larger alternative its gain and z
-over the smaller, and the batch fit's warnings, such as a fit that
-stopped on unresolved person modes), \code{screens} (each kind's tests, from the
+over the smaller, the batch fit's warnings, such as a fit that stopped
+on unresolved person modes, and the training log-likelihood and free
+parameters before and after, \code{train_loglik_before},
+\code{train_loglik_after}, \code{df_before}, \code{df_after}, \code{train_persons}: what a
+likelihood ratio, AIC or BIC would judge the batch by; the free
+parameters leave out item-specific coefficients whose covariate is zero
+on all of the item's training responses), \code{screens} (each kind's tests, from the
 screen it was last judged on), \code{screens_all} (every screen made, named by
 step: a round's first screen \code{round1_screens}, then
 \verb{round1_screens-<kind>}), \code{base_fit} (the base model on the training persons),
