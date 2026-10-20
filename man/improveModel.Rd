@@ -38,7 +38,8 @@ improveModel(
   partitions = TRUE,
   order = c("ability", "dimensions", "asymptotes", "dif"),
   commonEffects = TRUE,
-  abilityTerms = list()
+  abilityTerms = list(),
+  trainLogLik = FALSE
 )
 }
 \arguments{
@@ -103,6 +104,14 @@ gives every dimension its own effects as soon as it is added.}
 \item{abilityTerms}{A named list: for a covariate, the \code{personPreds} that
 carry its effect on ability under other names (an age covariate entering
 as a person mean and a deviation, say), freed with it by dimension.}
+
+\item{trainLogLik}{Also record, for the current model and each batch, the
+training persons' marginal log-likelihood (by the quadrature and prior
+constant of \code{\link[=heldoutLogLik]{heldoutLogLik()}}) and the nominal number of free
+parameters, as \code{path} columns \code{train_loglik_before},
+\code{train_loglik_after}, \code{df_before}, \code{df_after} and \code{train_persons}: what
+a likelihood ratio, AIC or BIC would judge the batch by. One extra
+quadrature pass over the training responses per fit.}
 }
 \value{
 A \code{bigIRT_improved} object: \code{fit} (final model, all persons),

@@ -379,7 +379,25 @@ bigIRT_score_refit_ability <- function(st, rule, maxit = 50L, tol = 1e-7, jitter
       mm[, off + seq_len(pk)] <- ifelse(mf > 0L, mf + nf, 0L)
       nf <- nf + max(c(0L, mf))
     }
-    if(P > Pfit) for(p in (Pfit + 1L):P){ nf <- nf + 1L; mm[, off + p] <- nf }
+    ## A predictor added here takes the pattern most of the fit's own
+    ## predictors have: under improveModel's commonEffects, one effect shared
+    ## by a partition's dimensions, or each general dimension's own and none
+    ## on a group dimension. Shared across every dimension instead, a
+    ## covariate added after a fit with a group dimension took an effect on
+    ## the group dimension that the model does not have: on a simulated
+    ## testlet, 0.61 on both dimensions where a refit puts 0.91 on the
+    ## general one and none on the group, and the DIF tests under it
+    ## correlated .31 with a refit's on the items without DIF (1.000 in one
+    ## dimension). test-score-adjust-map.R.
+    if(P > Pfit){
+      key <- apply(m0, 2L, function(v){ z <- v > 0L
+        paste(c(as.integer(z), if(sum(z) > 1L && length(unique(v[z])) == 1L) "shared" else "own"), collapse = "") })
+      pat <- m0[, match(names(which.max(table(key))), key)]
+      z <- pat > 0L; shared <- sum(z) > 1L && length(unique(pat[z])) == 1L
+      for(p in (Pfit + 1L):P){
+        if(shared){ nf <- nf + 1L; mm[z, off + p] <- nf } else { mm[z, off + p] <- nf + seq_len(sum(z)); nf <- nf + sum(z) }
+      }
+    }
     mvec <- as.integer(t(mm))
     Tm <- matrix(0, K * nc, nf); Tm[cbind(which(mvec > 0L), mvec[mvec > 0L])] <- 1
     first <- match(seq_len(nf), mvec)

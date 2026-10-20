@@ -45,7 +45,43 @@ heldoutLogLik <- function(fit, cores = 1L, nodes = NULL){
   id <- as.integer(sdat$id)
   ho_persons <- setdiff(unique(id[!trn]), unique(id[trn]))
   if(!length(ho_persons)) return(NULL)
-  ho <- which(id %in% ho_persons)
+  bigIRT_modify_marginal(fit, which(id %in% ho_persons), cores = cores, nodes = nodes)
+}
+
+## The training persons' marginal log-likelihood, by the same quadrature and
+## prior constant as heldoutLogLik(), and the fit's nominal number of free
+## parameters: what an in-sample criterion (likelihood ratio, AIC, BIC) would
+## judge a batch by. improveModel(trainLogLik = TRUE) records both for every
+## batch, so that the held-out gate can be set against those criteria on the
+## same batches.
+bigIRT_modify_train_loglik <- function(fit, cores = 1L){
+  sdat <- fit$prepared
+  trn <- which(as.integer(sdat$trainingLogical) == 1L)
+  m <- bigIRT_modify_marginal(fit, trn, cores = cores)
+  ## The nominal count includes item-specific coefficients whose covariate is
+  ## zero on every one of the item's training responses: they have no data
+  ## and stay at their prior's centre. A DIF batch's column is zero for every
+  ## item outside the batch, so two items with DIF counted as a coefficient
+  ## for every item in the bank. A criterion should not count those.
+  nominal <- attr(logLik(fit, effective = FALSE), "nominal_df")
+  inert <- 0
+  if(isTRUE(as.integer(sdat$itemSpecificBetas) == 1L) && isTRUE(as.integer(sdat$NitemPreds) > 0L)){
+    it <- as.integer(sdat$item)[trn]
+    X <- as.matrix(sdat$itemPreds)[trn, , drop = FALSE]
+    nz <- matrix(FALSE, as.integer(sdat$Nitems), ncol(X))
+    s <- rowsum((X != 0) * 1, it, reorder = TRUE)
+    nz[as.integer(rownames(s)), ] <- s > 0
+    for(cols in list(sdat$AitemPreds, sdat$BitemPreds, sdat$CitemPreds, sdat$DitemPreds))
+      if(length(cols)) inert <- inert + sum(!nz[, as.integer(cols), drop = FALSE])
+  }
+  list(loglik = m$loglik, persons = m$persons, df = nominal - inert, nominal_df = nominal)
+}
+
+## A fit's marginal log-likelihood per person over the given rows of its
+## prepared data (whole persons), integrating each person's ability by the
+## fit's quadrature rule around their posterior mode from those rows.
+bigIRT_modify_marginal <- function(fit, rows, cores = 1L, nodes = NULL){
+  ho <- rows
   st <- bigIRT_score_setup(fit, cores = cores, rows = ho)
   rule <- bigIRT_score_rule(fit, st$K, nodes)
   aq <- do.call(bigIRT_agq_fg_cpp_impl, c(st$args, list(
@@ -961,6 +997,13 @@ modificationTests <- function(fit, dat, personCovariates = character(), response
 #' @param abilityTerms A named list: for a covariate, the `personPreds` that
 #'   carry its effect on ability under other names (an age covariate entering
 #'   as a person mean and a deviation, say), freed with it by dimension.
+#' @param trainLogLik Also record, for the current model and each batch, the
+#'   training persons' marginal log-likelihood (by the quadrature and prior
+#'   constant of [heldoutLogLik()]) and the nominal number of free
+#'   parameters, as `path` columns `train_loglik_before`,
+#'   `train_loglik_after`, `df_before`, `df_after` and `train_persons`: what
+#'   a likelihood ratio, AIC or BIC would judge the batch by. One extra
+#'   quadrature pass over the training responses per fit.
 #' @return A `bigIRT_improved` object: `fit` (final model, all persons),
 #'   `spec` (the terms added), `path` (each batch tried: round, kind, terms,
 #'   held-out log-likelihood before and after, gain and its z, accepted,
@@ -983,7 +1026,8 @@ improveModel <- function(dat, score = "score", id = "id", item = "Item", scale =
   minZ = stats::qnorm(.95), minGain = 0, nsimDim = 19L, maxRounds = 3L, maxGroups = 2L, seed = 1L, cores = 1L,
   verbose = TRUE, fitArgs = list(laplaceRefine = "agq"), checkpoint = NULL,
   difImpact = TRUE, asymptotePooled = TRUE, partitions = TRUE,
-  order = c("ability", "dimensions", "asymptotes", "dif"), commonEffects = TRUE, abilityTerms = list()){
+  order = c("ability", "dimensions", "asymptotes", "dif"), commonEffects = TRUE, abilityTerms = list(),
+  trainLogLik = FALSE){
   kinds_all <- c("ability", "dimensions", "asymptotes", "dif")
   order <- match.arg(order, kinds_all, several.ok = TRUE)
   if(length(order) != length(kinds_all) || anyDuplicated(order))
@@ -1035,6 +1079,11 @@ improveModel <- function(dat, score = "score", id = "id", item = "Item", scale =
     tests = list(personCovariates, responseCovariates, itemSets, dif, difCovariates, asymptotes, alpha, minEffect,
       minAsymptote, minGroupSD, minZ, minGain, nsimDim, maxGroups, difImpact, asymptotePooled, partitions,
       order))
+  ## (Only when asked: a checkpoint made without it stays valid.)
+  if(isTRUE(trainLogLik)) fp$trainLogLik <- TRUE
+  ## Each fit's training log-likelihood and parameter count, when asked.
+  train_ll <- function(f) if(isTRUE(trainLogLik) && !is.null(f))
+    tryCatch(bigIRT_modify_train_loglik(f, cores = cores), error = function(e) NULL) else NULL
   step <- bigIRT_modify_checkpoint(checkpoint, fp)
   secs <- function(t0) proc.time()[[3]] - t0
   timing <- list()
@@ -1043,9 +1092,9 @@ improveModel <- function(dat, score = "score", id = "id", item = "Item", scale =
   base_spec <- spec
   b <- step("base", spec, function(){
     t0 <- proc.time()[[3]]; f <- fit_spec(spec, train)
-    list(fit = f, h = heldoutLogLik(f, cores = cores), seconds = secs(t0), warnings = fit_warns(f))
+    list(fit = f, h = heldoutLogLik(f, cores = cores), tl = train_ll(f), seconds = secs(t0), warnings = fit_warns(f))
   })
-  cur <- b$fit; cur_ho <- b$h; timing$base <- b$seconds; b_warnings <- b$warnings %||% character()
+  cur <- b$fit; cur_ho <- b$h; cur_tl <- b$tl; timing$base <- b$seconds; b_warnings <- b$warnings %||% character()
   ## With a checkpoint the base fit is read back at the end rather than held
   ## through the rounds: on large data each fit is many GB, and a refit holds
   ## the current fit and the new one besides.
@@ -1307,8 +1356,8 @@ improveModel <- function(dat, score = "score", id = "id", item = "Item", scale =
             gm <- if(is.null(h)) list(gain = NA_real_, z = NA_real_) else bigIRT_modify_gain(cur_ho, h)
             ok <- isTRUE(gm$gain >= minGain && gm$z >= minZ)
             ## Only a fit that passes is needed again.
-            list(fit = if(ok) f else NULL, h = h, gain = gm$gain, z = gm$z, ok = ok, seconds = secs(t0), error = err,
-              warnings = fit_warns(f))
+            list(fit = if(ok) f else NULL, h = h, tl = train_ll(f), gain = gm$gain, z = gm$z, ok = ok,
+              seconds = secs(t0), error = err, warnings = fit_warns(f))
           })
           path[[length(path) + 1L]] <- data.table::data.table(round = round, kind = sg$kind, batch = a$label,
             terms = a$terms, heldout_before = cur_ho$loglik, heldout_after = if(is.null(tr$h)) NA_real_ else tr$h$loglik,
@@ -1316,6 +1365,10 @@ improveModel <- function(dat, score = "score", id = "id", item = "Item", scale =
             error = if(is.null(tr$error)) NA_character_ else tr$error,
             vs_smaller_gain = NA_real_, vs_smaller_z = NA_real_,
             fit_warnings = if(length(tr$warnings)) paste(tr$warnings, collapse = " | ") else NA_character_)
+          if(isTRUE(trainLogLik)) path[[length(path)]][, `:=`(
+            train_loglik_before = cur_tl$loglik %||% NA_real_, train_loglik_after = tr$tl$loglik %||% NA_real_,
+            df_before = cur_tl$df %||% NA_real_, df_after = tr$tl$df %||% NA_real_,
+            train_persons = cur_tl$persons %||% NA_real_)]
           if(!is.null(tr$error)) say("round %d, %s: %d terms, failed (%s)", round, a$label, a$terms, tr$error)
           else say("round %d, %s: %d terms, held-out gain %.1f (z %.1f)%s", round, a$label, a$terms,
             tr$gain, tr$z, if(tr$ok) " (passes)" else "")
@@ -1347,7 +1400,7 @@ improveModel <- function(dat, score = "score", id = "id", item = "Item", scale =
           ## (On a resumed run the chosen alternative's fit may not be in the
           ## checkpoint, if it lost under the rule the run was made with:
           ## ensure_cur refits it when it is next needed.)
-          spec <- best$s; cur <- best$tr$fit; cur_ho <- best$tr$h; kept <- c(kept, sg$kind)
+          spec <- best$s; cur <- best$tr$fit; cur_ho <- best$tr$h; cur_tl <- best$tr$tl; kept <- c(kept, sg$kind)
           path[[best$at]]$accepted <- TRUE
           ## Only the latest accepted fit is needed again (a resumed run takes
           ## its model from it), so the checkpoint keeps every other step's
