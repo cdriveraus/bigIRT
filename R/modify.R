@@ -48,22 +48,23 @@ heldoutLogLik <- function(fit, cores = 1L, nodes = NULL){
   bigIRT_modify_marginal(fit, which(id %in% ho_persons), cores = cores, nodes = nodes)
 }
 
-## The training persons' marginal log-likelihood, by the same quadrature and
-## prior constant as heldoutLogLik(), and the fit's nominal number of free
-## parameters: what an in-sample criterion (likelihood ratio, AIC, BIC) would
-## judge a batch by. improveModel(trainLogLik = TRUE) records both for every
+## The training persons' marginal log-likelihood -- the fit's own logLik(),
+## which over the training persons is the quadrature marginal heldoutLogLik()
+## computes for the held-out ones (test-modify-trainloglik.R) -- and the fit's
+## number of free parameters: what an in-sample criterion (likelihood ratio,
+## AIC, BIC) would judge a batch by. improveModel records both for every
 ## batch, so that the held-out gate can be set against those criteria on the
 ## same batches.
-bigIRT_modify_train_loglik <- function(fit, cores = 1L){
+bigIRT_modify_train_loglik <- function(fit){
   sdat <- fit$prepared
   trn <- which(as.integer(sdat$trainingLogical) == 1L)
-  m <- bigIRT_modify_marginal(fit, trn, cores = cores)
+  ll <- logLik(fit, effective = FALSE)
   ## The nominal count includes item-specific coefficients whose covariate is
   ## zero on every one of the item's training responses: they have no data
   ## and stay at their prior's centre. A DIF batch's column is zero for every
   ## item outside the batch, so two items with DIF counted as a coefficient
   ## for every item in the bank. A criterion should not count those.
-  nominal <- attr(logLik(fit, effective = FALSE), "nominal_df")
+  nominal <- attr(ll, "nominal_df")
   inert <- 0
   if(isTRUE(as.integer(sdat$itemSpecificBetas) == 1L) && isTRUE(as.integer(sdat$NitemPreds) > 0L)){
     it <- as.integer(sdat$item)[trn]
@@ -74,7 +75,8 @@ bigIRT_modify_train_loglik <- function(fit, cores = 1L){
     for(cols in list(sdat$AitemPreds, sdat$BitemPreds, sdat$CitemPreds, sdat$DitemPreds))
       if(length(cols)) inert <- inert + sum(!nz[, as.integer(cols), drop = FALSE])
   }
-  list(loglik = m$loglik, persons = m$persons, df = nominal - inert, nominal_df = nominal)
+  list(loglik = as.numeric(ll), persons = length(unique(as.integer(sdat$id)[trn])), df = nominal - inert,
+    nominal_df = nominal)
 }
 
 ## A fit's marginal log-likelihood per person over the given rows of its
@@ -117,21 +119,30 @@ bigIRT_modify_marginal <- function(fit, rows, cores = 1L, nodes = NULL){
 ## dimension in 9 of 50 runs, by 0.02 to 2.7 nats out of about 100. Returns
 ## whether `cand` replaces `best`, and the larger's gain and z over the
 ## smaller.
-bigIRT_modify_prefer <- function(best, cand, minGain, minZ){
+bigIRT_modify_prefer <- function(best, cand, minGain, minZ, clusters = NULL){
   if(isTRUE(all.equal(cand$terms, best$terms)))
     return(list(cand = isTRUE(cand$tr$gain > best$tr$gain), gain = NA_real_, z = NA_real_))
   cand_small <- cand$terms < best$terms
   small <- if(cand_small) cand else best
   large <- if(cand_small) best else cand
-  gm <- bigIRT_modify_gain(small$tr$h, large$tr$h)
+  gm <- bigIRT_modify_gain(small$tr$h, large$tr$h, clusters = clusters)
   large_wins <- isTRUE(gm$gain >= minGain && gm$z >= minZ)
   list(cand = if(cand_small) !large_wins else large_wins, gain = gm$gain, z = gm$z)
 }
 
-bigIRT_modify_gain <- function(a, b){
+## With `clusters` (cluster labels named by person), the standard error is
+## cluster-robust (CR1): the summed gain's variance from the cluster totals of
+## the centred per-person gains, times G/(G - 1). With every person in a
+## cluster of their own it is exactly the default.
+bigIRT_modify_gain <- function(a, b, clusters = NULL){
   p <- intersect(names(a$by_person), names(b$by_person))
   dlt <- b$by_person[p] - a$by_person[p]
-  se <- stats::sd(dlt) * sqrt(length(dlt))
+  se <- if(is.null(clusters)) stats::sd(dlt) * sqrt(length(dlt)) else {
+    cl <- clusters[p]
+    if(anyNA(cl)) stop("gateCluster has no cluster for some held-out persons.")
+    u <- rowsum(dlt - mean(dlt), cl)[, 1]; G <- length(u)
+    if(G > 1L) sqrt(G / (G - 1) * sum(u^2)) else NA_real_
+  }
   list(gain = sum(dlt), z = if(is.finite(se) && se > 0) sum(dlt) / se else NA_real_)
 }
 
@@ -182,7 +193,7 @@ bigIRT_modify_asymptotes <- function(fit, sc, sides = c("lower", "upper"), minN 
       info <- bigIRT_score_expected_info(Sa, y, pp)
       tst <- ncol(Sa)
       pc <- bigIRT_score_lm_pieces(matrix(1, length(u), 1), matrix(1, length(u), 1), Sa, info,
-        tst, seq_len(tst - 1L))
+        tst, seq_len(tst - 1L), persons = R$person[u])
       V <- as.numeric(pc$V)
       ## `info` is per response; the asymptote's own information is its sum.
       Itt <- as.numeric(bigIRT_score_kron(matrix(1, length(u), 1), matrix(1, length(u), 1), info, tst, tst))
@@ -243,7 +254,7 @@ bigIRT_modify_shape <- function(fit, cores = 1L, nodes = NULL, minN = 50L){
     info <- bigIRT_score_expected_info(Sa, y[u], pp[u])
     m <- ncol(Sa)
     pc <- tryCatch(bigIRT_score_lm_pieces(matrix(1, length(u), 1), matrix(1, length(u), 1), Sa, info,
-      c(m - 1L, m), seq_len(m - 2L)), error = function(e) NULL)
+      c(m - 1L, m), seq_len(m - 2L), persons = rc$ids[u]), error = function(e) NULL)
     if(is.null(pc)) next
     V <- as.matrix(pc$V); U <- pc$Ustar
     pv <- bigIRT_score_pinv(V)
@@ -1003,20 +1014,26 @@ modificationTests <- function(fit, dat, personCovariates = character(), response
 #'   model that has the effect. Item DIF flagged against a common effect
 #'   covers a dimension's items wholesale where the gap differs by
 #'   dimension, so without this a gap specific to one dimension with true
-#'   DIF inside it can be described only as one or the other.
-#' @param trainLogLik Also record, for the current model and each batch, the
-#'   training persons' marginal log-likelihood (by the quadrature and prior
-#'   constant of [heldoutLogLik()]) and the nominal number of free
-#'   parameters, as `path` columns `train_loglik_before`,
-#'   `train_loglik_after`, `df_before`, `df_after` and `train_persons`: what
-#'   a likelihood ratio, AIC or BIC would judge the batch by. One extra
-#'   quadrature pass over the training responses per fit.
+#'   DIF inside it can be described only as one or the other: on simulated
+#'   data the item DIF won, took in the gap on many of the dimension's items,
+#'   and the next round could not undo it.
+#' @param gateCluster Optional: a column of `dat`, constant within person,
+#'   naming the cluster each person belongs to (a school, say). The gate's z
+#'   (and the comparison between alternatives) then uses a cluster-robust
+#'   (CR1) standard error of the summed per-person gain, for held-out persons
+#'   who are not independent. With every person their own cluster it equals
+#'   the default.
 #' @return A `bigIRT_improved` object: `fit` (final model, all persons),
 #'   `spec` (the terms added), `path` (each batch tried: round, kind, terms,
 #'   held-out log-likelihood before and after, gain and its z, accepted,
 #'   seconds to fit and evaluate, for a larger alternative its gain and z
-#'   over the smaller, and the batch fit's warnings, such as a fit that
-#'   stopped on unresolved person modes), `screens` (each kind's tests, from the
+#'   over the smaller, the batch fit's warnings, such as a fit that stopped
+#'   on unresolved person modes, and the training log-likelihood and free
+#'   parameters before and after, `train_loglik_before`,
+#'   `train_loglik_after`, `df_before`, `df_after`, `train_persons`: what a
+#'   likelihood ratio, AIC or BIC would judge the batch by; the free
+#'   parameters leave out item-specific coefficients whose covariate is zero
+#'   on all of the item's training responses), `screens` (each kind's tests, from the
 #'   screen it was last judged on), `screens_all` (every screen made, named by
 #'   step: a round's first screen `round1_screens`, then
 #'   `round1_screens-<kind>`), `base_fit` (the base model on the training persons),
@@ -1034,7 +1051,7 @@ improveModel <- function(dat, score = "score", id = "id", item = "Item", scale =
   verbose = TRUE, fitArgs = list(laplaceRefine = "agq"), checkpoint = NULL,
   difImpact = TRUE, asymptotePooled = TRUE, partitions = TRUE,
   order = c("ability", "dimensions", "asymptotes", "dif"), commonEffects = TRUE, abilityTerms = list(),
-  trainLogLik = FALSE, combineBydim = FALSE){
+  combineBydim = TRUE, gateCluster = NULL){
   kinds_all <- c("ability", "dimensions", "asymptotes", "dif")
   order <- match.arg(order, kinds_all, several.ok = TRUE)
   if(length(order) != length(kinds_all) || anyDuplicated(order))
@@ -1046,6 +1063,14 @@ improveModel <- function(dat, score = "score", id = "id", item = "Item", scale =
   dat <- data.table::as.data.table(dat)
   if(!scale %in% names(dat)) { dat <- data.table::copy(dat); data.table::set(dat, j = scale, value = 1L) }
   persons <- unique(dat[[id]])
+  ## The gate's clusters, by person (gateCluster), if any.
+  clus <- NULL
+  if(!is.null(gateCluster)){
+    if(!gateCluster %in% names(dat)) stop("gateCluster names no column of dat.", call. = FALSE)
+    cl <- dat[, list(n = data.table::uniqueN(get(gateCluster)), c = get(gateCluster)[1]), by = c(id)]
+    if(any(cl$n != 1L) || anyNA(cl$c)) stop("gateCluster must be one non-missing value per person.", call. = FALSE)
+    clus <- stats::setNames(as.character(cl$c), as.character(cl[[id]]))
+  }
   ho <- local({ if(!is.null(seed)) { old <- if(exists(".Random.seed", globalenv())) get(".Random.seed", globalenv()) else NULL
     on.exit(if(!is.null(old)) assign(".Random.seed", old, globalenv())); set.seed(seed) }
     sample(persons, round(holdout * length(persons))) })
@@ -1086,12 +1111,11 @@ improveModel <- function(dat, score = "score", id = "id", item = "Item", scale =
     tests = list(personCovariates, responseCovariates, itemSets, dif, difCovariates, asymptotes, alpha, minEffect,
       minAsymptote, minGroupSD, minZ, minGain, nsimDim, maxGroups, difImpact, asymptotePooled, partitions,
       order))
-  ## (Only when asked: a checkpoint made without them stays valid.)
-  if(isTRUE(trainLogLik)) fp$trainLogLik <- TRUE
+  ## (Only when set: a checkpoint made without them stays valid.)
   if(isTRUE(combineBydim)) fp$combineBydim <- TRUE
-  ## Each fit's training log-likelihood and parameter count, when asked.
-  train_ll <- function(f) if(isTRUE(trainLogLik) && !is.null(f))
-    tryCatch(bigIRT_modify_train_loglik(f, cores = cores), error = function(e) NULL) else NULL
+  if(!is.null(gateCluster)) fp$gateCluster <- gateCluster
+  ## Each fit's training log-likelihood and parameter count (from the fit).
+  train_ll <- function(f) if(!is.null(f)) tryCatch(bigIRT_modify_train_loglik(f), error = function(e) NULL) else NULL
   step <- bigIRT_modify_checkpoint(checkpoint, fp)
   secs <- function(t0) proc.time()[[3]] - t0
   timing <- list()
@@ -1410,7 +1434,7 @@ improveModel <- function(dat, score = "score", id = "id", item = "Item", scale =
               error = function(e){ err <<- conditionMessage(e); NULL })
             h <- if(is.null(f)) NULL else tryCatch(heldoutLogLik(f, cores = cores),
               error = function(e){ err <<- paste("heldoutLogLik:", conditionMessage(e)); NULL })
-            gm <- if(is.null(h)) list(gain = NA_real_, z = NA_real_) else bigIRT_modify_gain(cur_ho, h)
+            gm <- if(is.null(h)) list(gain = NA_real_, z = NA_real_) else bigIRT_modify_gain(cur_ho, h, clusters = clus)
             ok <- isTRUE(gm$gain >= minGain && gm$z >= minZ)
             ## Only a fit that passes is needed again, or one a later
             ## alternative starts from.
@@ -1425,7 +1449,7 @@ improveModel <- function(dat, score = "score", id = "id", item = "Item", scale =
             error = if(is.null(tr$error)) NA_character_ else tr$error,
             vs_smaller_gain = NA_real_, vs_smaller_z = NA_real_,
             fit_warnings = if(length(tr$warnings)) paste(tr$warnings, collapse = " | ") else NA_character_)
-          if(isTRUE(trainLogLik)) path[[length(path)]][, `:=`(
+          path[[length(path)]][, `:=`(
             train_loglik_before = cur_tl$loglik %||% NA_real_, train_loglik_after = tr$tl$loglik %||% NA_real_,
             df_before = cur_tl$df %||% NA_real_, df_after = tr$tl$df %||% NA_real_,
             train_persons = cur_tl$persons %||% NA_real_)]
@@ -1438,7 +1462,7 @@ improveModel <- function(dat, score = "score", id = "id", item = "Item", scale =
             ## their verdicts.
             cand <- list(tr = tr, s = s, at = length(path), terms = a$terms)
             is_best <- is.null(best) || {
-              pr <- bigIRT_modify_prefer(best, cand, minGain, minZ)
+              pr <- bigIRT_modify_prefer(best, cand, minGain, minZ, clusters = clus)
               ## The comparison, recorded on the larger alternative's row.
               li <- if(isTRUE(all.equal(cand$terms, best$terms))) NA_integer_ else
                 if(cand$terms > best$terms) cand$at else best$at
