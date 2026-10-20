@@ -997,6 +997,13 @@ modificationTests <- function(fit, dat, personCovariates = character(), response
 #' @param abilityTerms A named list: for a covariate, the `personPreds` that
 #'   carry its effect on ability under other names (an age covariate entering
 #'   as a person mean and a deviation, say), freed with it by dimension.
+#' @param combineBydim Where a covariate's effect by dimension and its item
+#'   DIF both pass their screens, offer a third alternative besides the two:
+#'   the effect by dimension together with item DIF screened again at the
+#'   model that has the effect. Item DIF flagged against a common effect
+#'   covers a dimension's items wholesale where the gap differs by
+#'   dimension, so without this a gap specific to one dimension with true
+#'   DIF inside it can be described only as one or the other.
 #' @param trainLogLik Also record, for the current model and each batch, the
 #'   training persons' marginal log-likelihood (by the quadrature and prior
 #'   constant of [heldoutLogLik()]) and the nominal number of free
@@ -1027,7 +1034,7 @@ improveModel <- function(dat, score = "score", id = "id", item = "Item", scale =
   verbose = TRUE, fitArgs = list(laplaceRefine = "agq"), checkpoint = NULL,
   difImpact = TRUE, asymptotePooled = TRUE, partitions = TRUE,
   order = c("ability", "dimensions", "asymptotes", "dif"), commonEffects = TRUE, abilityTerms = list(),
-  trainLogLik = FALSE){
+  trainLogLik = FALSE, combineBydim = FALSE){
   kinds_all <- c("ability", "dimensions", "asymptotes", "dif")
   order <- match.arg(order, kinds_all, several.ok = TRUE)
   if(length(order) != length(kinds_all) || anyDuplicated(order))
@@ -1079,8 +1086,9 @@ improveModel <- function(dat, score = "score", id = "id", item = "Item", scale =
     tests = list(personCovariates, responseCovariates, itemSets, dif, difCovariates, asymptotes, alpha, minEffect,
       minAsymptote, minGroupSD, minZ, minGain, nsimDim, maxGroups, difImpact, asymptotePooled, partitions,
       order))
-  ## (Only when asked: a checkpoint made without it stays valid.)
+  ## (Only when asked: a checkpoint made without them stays valid.)
   if(isTRUE(trainLogLik)) fp$trainLogLik <- TRUE
+  if(isTRUE(combineBydim)) fp$combineBydim <- TRUE
   ## Each fit's training log-likelihood and parameter count, when asked.
   train_ll <- function(f) if(isTRUE(trainLogLik) && !is.null(f))
     tryCatch(bigIRT_modify_train_loglik(f, cores = cores), error = function(e) NULL) else NULL
@@ -1258,7 +1266,26 @@ improveModel <- function(dat, score = "score", id = "id", item = "Item", scale =
         alts <- list(alt(paste("dif", make.names(xx$covariate), xx$parameter, sep = "-"),
           function(s){ s$dif <- bigIRT_modify_merge_dif(c(s$dif, list(xx))); s }, length(xx$items)))
         if(!is.null(bd_ok) && xx$covariate %in% bd_ok$covariate && !xx$covariate %in% offered){
-          alts <- c(alts, list(bydim_alt(xx$covariate))); offered <<- c(offered, xx$covariate)
+          b_alt <- bydim_alt(xx$covariate); offered <<- c(offered, xx$covariate)
+          if(isTRUE(combineBydim)){
+            ## A third alternative: the effect by dimension AND item DIF,
+            ## screened again at the model that has the effect (the DIF the
+            ## current screen flags is measured against a common effect, so
+            ## where the gap differs by dimension it covers the dimension's
+            ## items wholesale). Without it, a gap specific to one subdomain
+            ## with true DIF inside it had to be either one or the other: on
+            ## simulated data the item DIF won, took in the gap on half the
+            ## subdomain's items, and could not be undone by the next round
+            ## (false DIF on 9 to 11 items a run). The effect by dimension is
+            ## tried first and keeps its fit, which the combination is
+            ## screened at and starts from; then the combination; then item
+            ## DIF alone.
+            b_alt$keep_fit <- TRUE
+            combo <- list(label = paste0(b_alt$label, "+dif"), terms = NA_integer_,
+              combo = list(after = b_alt$label, base_terms = b_alt$terms, covariate = xx$covariate,
+                parameter = xx$parameter, kind = xx$kind))
+            alts <- c(list(b_alt, combo), alts)
+          } else alts <- c(alts, list(b_alt))
         }
         stages[[length(stages) + 1L]] <<- do.call(stage, c(list("dif"), alts))
       })
@@ -1340,7 +1367,36 @@ improveModel <- function(dat, score = "score", id = "id", item = "Item", scale =
         ## pass the gate, the one with fewer terms is kept unless a larger one
         ## beats it by the gate as well (bigIRT_modify_prefer).
         best <- NULL
+        ## Fits an alternative keeps for a later one of the same stage (the
+        ## effect by dimension, for its combination with item DIF).
+        stage_fits <- list()
         for(a in sg$alts){
+          if(!is.null(a$combo)){
+            ## Item DIF screened again at the model with the covariate's effect
+            ## by dimension, and that model plus the items flagged there.
+            pr <- stage_fits[[a$combo$after]]
+            if(is.null(pr)){ say("round %d, %s: the effect by dimension has no fit to screen at", round, a$label); next }
+            sname <- sprintf("round%d_%s-screen", round, a$label)
+            rs <- step(sname, pr$s, function(){
+              t0 <- proc.time()[[3]]
+              a_b <- bigIRT_modify_build(dat, pr$s, base)
+              sc <- tryCatch(suppressWarnings(modificationTests(pr$fit, a_b$dat, personCovariates = personCovariates,
+                responseCovariates = responseCovariates, itemSets = character(), dif = a$combo$parameter,
+                difCovariates = a$combo$covariate, asymptotes = character(), exploratory = FALSE, cores = cores)),
+                error = function(e) NULL)
+              d <- if(is.null(sc)) NULL else sc$dif
+              items <- if(!is.null(d) && nrow(d)) as.character(d[!is.na(p_fdr) & p_fdr < alpha & !is.na(dP_abs) &
+                dP_abs >= minEffect, item]) else character()
+              list(items = items, seconds = secs(t0))
+            })
+            timing[[sname]] <- rs$seconds
+            if(!length(rs$items)){ say("round %d, %s: screened at the effect by dimension, no item has DIF", round, a$label); next }
+            local({ xx <- list(covariate = a$combo$covariate, parameter = a$combo$parameter, kind = a$combo$kind,
+              items = rs$items); s_b <- pr$s
+              a$apply <<- function(s0){ s <- s_b; s$dif <- bigIRT_modify_merge_dif(c(s$dif, list(xx))); s } })
+            a$terms <- a$combo$base_terms + length(rs$items)
+            a$start <- pr$fit
+          }
           if(is.function(a$terms)) a$terms <- a$terms(spec)
           s <- a$apply(spec)
           ## Nothing left to add once the batches before it are in: no refit.
@@ -1350,15 +1406,19 @@ improveModel <- function(dat, score = "score", id = "id", item = "Item", scale =
             ## A batch whose fit or held-out evaluation fails is rejected, and
             ## the reason kept: a failure is not evidence against the change.
             err <- NULL
-            f <- tryCatch(fit_spec(s, train, start = ensure_cur()), error = function(e){ err <<- conditionMessage(e); NULL })
+            f <- tryCatch(fit_spec(s, train, start = if(!is.null(a$start)) a$start else ensure_cur()),
+              error = function(e){ err <<- conditionMessage(e); NULL })
             h <- if(is.null(f)) NULL else tryCatch(heldoutLogLik(f, cores = cores),
               error = function(e){ err <<- paste("heldoutLogLik:", conditionMessage(e)); NULL })
             gm <- if(is.null(h)) list(gain = NA_real_, z = NA_real_) else bigIRT_modify_gain(cur_ho, h)
             ok <- isTRUE(gm$gain >= minGain && gm$z >= minZ)
-            ## Only a fit that passes is needed again.
-            list(fit = if(ok) f else NULL, h = h, tl = train_ll(f), gain = gm$gain, z = gm$z, ok = ok,
+            ## Only a fit that passes is needed again, or one a later
+            ## alternative starts from.
+            list(fit = if(ok || isTRUE(a$keep_fit)) f else NULL, h = h, tl = train_ll(f), gain = gm$gain, z = gm$z, ok = ok,
               seconds = secs(t0), error = err, warnings = fit_warns(f))
           })
+          if(isTRUE(a$keep_fit) && !is.null(tr$fit))
+            stage_fits[[a$label]] <- list(fit = tr$fit, s = s, name = sprintf("round%d_%s", round, a$label), tr = tr)
           path[[length(path) + 1L]] <- data.table::data.table(round = round, kind = sg$kind, batch = a$label,
             terms = a$terms, heldout_before = cur_ho$loglik, heldout_after = if(is.null(tr$h)) NA_real_ else tr$h$loglik,
             gain = tr$gain, z = tr$z, accepted = FALSE, seconds = tr$seconds,
@@ -1413,6 +1473,13 @@ improveModel <- function(dat, score = "score", id = "id", item = "Item", scale =
           }
           holder <- passed[[best$slot]]
         }
+        ## A fit kept for the combination and not chosen stays in the
+        ## checkpoint only as a verdict, like any other step.
+        if(!is.null(checkpoint) && length(stage_fits)){
+          bn <- if(!is.null(best)) passed[[best$slot]]$name else ""
+          for(x in stage_fits) if(!identical(x$name, bn)){ v <- x$tr; v$fit <- NULL; bigIRT_modify_store(checkpoint, x$name, fp, x$s, v) }
+        }
+        stage_fits <- NULL
         passed <- list()
       }
     }
