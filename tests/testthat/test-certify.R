@@ -591,8 +591,8 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
 
   test_that("a fast-route rejection on negative curvature is re-tested by the exact route", {
     ## Unregularised 2PL, 150 persons answering 10 of 20 items: fits the fast
-    ## route calls "notmaximum" on a negative eigenvalue the exact curvature
-    ## does not have (two of them certify, one is a boundary maximum).
+    ## route calls "notmaximum" on a negative eigenvalue. In two of them the
+    ## exact curvature has none and they certify; the third has no maximum.
     fit_seed <- function(seed, ...){
       set.seed(seed)
       sim <- simIRT(Nsubs = 150, Nitems = 20, Nscales = 1L, NitemsAnswered = 20, AMean = 1,
@@ -640,14 +640,17 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
       expect_identical(f$laplaceStatus$converged, fx$laplaceStatus$converged)
       verdicts <- c(verdicts, ce$status)
     }
-    ## Seed 3 used to end with A[19] parked on the flat tail of its softplus
-    ## (2.4e-11) and was called a boundary estimate, "saturated". Once the
-    ## metric stopped throwing flat coordinates (test-agq-runoff.R) the
-    ## optimiser leaves it (A[19] = 0.055, 0.008 nats higher) and stops 0.0011
-    ## nats short by the exact gap: "suboptimal". What this test is about holds
-    ## either way -- no fast-route false alarm survives, and each verdict is
-    ## the exact route's (above).
+    ## Seeds 18 and 35 are the false alarms: the exact route certifies them,
+    ## with the same numbers under every summation order tried (cores 1-8, 22
+    ## fits each). Seed 3 is only an escalation, and nothing is asserted about
+    ## its verdict beyond its being the exact route's (above). It has no
+    ## maximum -- one loading runs to 150-380, one or two sit on the flat tail
+    ## of the softplus -- so where the optimiser stops is set by rounding. Over
+    ## the same 22 fits it was saturated 9 times, notmaximum 8 (mostly the
+    ## pull-back test, once an exact negative eigenvalue), suboptimal 4 and
+    ## notstationary once, with gaps from 2e-4 to 1.5 nats. This line used to
+    ## require it not to be notmaximum, which held on Windows and x86 Linux and
+    ## failed on macOS arm64.
     expect_equal(verdicts[1:2], c("certified", "certified"))
-    expect_false(any(verdicts == "notmaximum"))
   })
 }
