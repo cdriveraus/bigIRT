@@ -625,7 +625,9 @@ if(identical(Sys.getenv("NOT_CRAN"), "true") & .Machine$sizeof.pointer != 4){
     z <- stats::runif(nrow(E))
     gp <- strucchange::gefp(sc, fit = NULL, order.by = z,
       scores = function(x, ...) sandwich::estfun(x, items = "3"))
-    p <- strucchange::sctest(gp, functional = "DM")$p.value
+    ## The double max. sctest's names "DM", "CvM" belong to its model
+    ## interface; on a gefp it takes the functional itself.
+    p <- strucchange::sctest(gp, functional = strucchange::maxBB)$p.value
     expect_true(p >= 0 && p <= 1)
   })
 }
